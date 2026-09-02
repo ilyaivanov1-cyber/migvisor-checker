@@ -1,0 +1,89 @@
+# MigVisor As-Is Checker
+
+A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliverables against reference files. Each skill covers one task type, detects sections dynamically, applies an adaptive rubric, and writes a structured check report to `checks/`.
+
+---
+
+## Skills
+
+| # | Skill | Trigger | Evaluates |
+|---|---|---|---|
+| 15 | `task-checker-as-is` | "check my as-is" | As-is analysis document vs reference |
+| 16 | `task-checker-scope` | "check my scope" | Product scope document vs reference |
+| 17 | `task-checker-to-be` | "check my to-be" | To-be design document vs reference (SQL + Mermaid + Python) |
+| 18 | `task-checker-transformation-rules` | "check my transformation rules" | Product-level transformation rules vs reference |
+| 19 | `task-checker-project-rules` | "check my project rules" | Project-level transformation rules vs reference |
+| 20 | `task-checker-validation-report` | "check my validation report" | SmartBuilder validation report vs reference |
+| 21 | `task-checker-design` | "check my design" | Technical design document vs reference (DDL + MERGE + Python + diagrams) |
+
+Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
+
+---
+
+## Workspace Files
+
+| File | Role |
+|---|---|
+| `as-is-reference.md` | As-is analysis reference (final) |
+| `as-is-task2.md` | As-is task 2 reference |
+| `product-scope.md` | Product scope participant submission |
+| `0 product-scope.md` | Product scope reference (final) |
+| `to-be my.md` | To-be design participant submission |
+| `to-be.md` | To-be design reference (final) |
+| `product-transformation-rules.md` | Product transformation rules participant |
+| `product-transformation-rules final.md` | Product transformation rules reference |
+| `project-transformation-rules.md` | Project transformation rules participant |
+| `project-transformation-rules final.md` | Project transformation rules reference |
+| `validation-report.md` | Validation report participant submission |
+| `report_final.md` | Validation report reference (final) |
+| `design.md` | Technical design participant submission |
+| `design_final.md` | Technical design reference (final) |
+
+---
+
+## Check Reports
+
+All reports are written to `checks/` as `TASK-<ID>-001_check_report.md`. If a report already exists the skill increments the suffix (`_v2`, `_v3`, …) and never overwrites.
+
+| Report | Skill | Product | Score | Grade |
+|---|---|---|---|---|
+| `TASK-AS-IS-001_check_report.md` (+ v2–v8) | 15 | — | — | — |
+| `TASK-SCOPE-001_check_report.md` (+ v2–v3) | 16 | — | — | — |
+| `TASK-TO-BE-001_check_report.md` (+ v2) | 17 | — | — | — |
+| `TASK-TR-001_check_report.md` | 18 | — | — | — |
+| `TASK-TR-002_check_report.md` | 19 | — | — | — |
+| `TASK-VAL-001_check_report.md` | 20 | Sales_Orders | 80/100 | Good |
+| `TASK-DESIGN-001_check_report.md` | 21 | Sales_Orders | 52/100 | Needs work |
+
+---
+
+## Grading Scale
+
+| Score | Grade | Recommended action |
+|---|---|---|
+| 90–100 | Excellent | Proceed to the next task |
+| 75–89 | Good | Minor gaps; proceeding is acceptable |
+| 60–74 | Acceptable | Several gaps; revise before proceeding |
+| 45–59 | Needs work | Missing tables, incorrect SQL, or diagrams absent |
+| 0–44 | Incomplete | Major sections missing or SQL systematically wrong |
+
+---
+
+## How Skills Work
+
+Every skill follows the same workflow:
+
+1. **Resolve files** — auto-detects participant and reference files from the workspace, or accepts explicit paths.
+2. **Detect sections** — builds a scored section list from the reference: Header Metadata + all `##` H2 headings.
+3. **Classify code blocks** — tags each block as `SQL_DDL`, `SQL_DML`, `SQL_GRANT`, `SQL_QUERY`, `PYTHON`, `DIAGRAM`, or `OTHER`.
+4. **Calculate weights** — N sections, `floor(100/N)` base weight, remainder distributed to highest-complexity sections.
+5. **Adaptive rubric** — criterion weights shift per section based on which block types are present (SQL 30%, Python 20%, Diagram 15%, Structure 10%, Content remainder ≥ 25%).
+6. **Apply auto-deducts** — global penalties for systematic omissions (missing `IF NOT EXISTS`, absent SK resolver, hardcoded credentials, etc.).
+7. **Write report** — `checks/TASK-*_check_report.md` with score table, per-section feedback, improvement items, and priority actions.
+8. **Surface summary** — score block + 5–6 sentence plain-English verdict in the conversation.
+
+---
+
+## Repository
+
+[https://github.com/ilyaivanov1-cyber/migvisor-checker](https://github.com/ilyaivanov1-cyber/migvisor-checker)
