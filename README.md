@@ -64,7 +64,8 @@ migvisor-as-is-checker/
 │       └── data_dictionary.md
 ├── checks/                             # One subfolder per trainee
 │   └── <trainee_name>/
-│       └── TASK-*_check_report.md
+│       └── <task-group>/               # e.g. as-is, scope, tasks, design …
+│           └── TASK-*_check_report.md
 └── skills/
     └── <skill-number>-<skill-name>/
         └── SKILL.md
