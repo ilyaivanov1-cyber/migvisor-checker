@@ -22,14 +22,15 @@ description: Evaluates a participant's design.md against a reference design_fina
 ## Invocation Syntax
 
 ```
-/task-checker-design [participant_file] [reference_file] [--product <name>]
+/task-checker-design [participant_file] [reference_file] [--product <name>] [trainee=<name>]
 ```
 
 All arguments are optional. Examples:
 - `/task-checker-design my-design.md` — participant file supplied; reference auto-resolved
-- `/task-checker-design design.md design_final.md` — both supplied
+- `/task-checker-design design.md reference/design.md` — both supplied
 - `/task-checker-design --product Purchase` — both files auto-resolved; product name overridden
-- `/task-checker-design` — everything auto-resolved from workspace
+- `/task-checker-design trainee=alice` — auto-resolve participant from trainees/alice/
+- `/task-checker-design` — everything auto-resolved (single trainee folder)
 
 ---
 
@@ -60,21 +61,20 @@ All arguments are optional. Examples:
 
 **1A — Participant file**
 
-If a path was supplied as argument 1, use it. Otherwise search the workspace for files matching (in priority order):
-1. `design.md`
-2. `design-draft.md`
-3. Any `*design*.md` NOT containing "final" in the name
+If a path was supplied as argument 1, use it. Otherwise apply trainee-aware auto-detection:
 
-If multiple candidates exist at the same level: ask the user which to use. Always exclude files containing "final" from participant candidates.
+1. If `trainee=<name>` flag is provided: look for `trainees/<name>/design.md`. If not found, abort: *"No participant file at trainees/<name>/design.md. Verify the trainee name and file."*
+2. Otherwise: scan `trainees/` for immediate subdirectories.
+   - Exactly 1 found: use `trainees/<that-name>/design.md`; record `<that-name>` as the trainee name.
+   - 0 found: abort with *"No trainees/ subdirectories found. Provide an explicit path."*
+   - 2 or more found: abort with *"Multiple trainee folders found: [list]. Specify with `trainee=<name>`."*
+3. Fallback: if `trainees/` does not exist, search workspace root for `design.md`.
+
+Record the resolved trainee name from the participant file path for output path construction in Step 9.
 
 **1B — Reference file**
 
-If a path was supplied as argument 2, use it. Otherwise search the workspace for files matching (in priority order):
-1. `design_final.md`
-2. `design-final.md`
-3. Any `*design*final*.md` or `*final*design*.md`
-
-If exactly one candidate found: use it. If multiple: ask the user. Exclude the participant file.
+If a path was supplied as argument 2, use it. Otherwise look for `reference/design.md`. If found: use it. If not found: abort with *"No reference file found at reference/design.md. Supply an explicit reference path."*
 
 **1C — Product name**
 
@@ -359,12 +359,13 @@ Deduct only for **missing tables, missing columns, wrong SQL syntax patterns, mi
 ### Step 9 — Assemble the check report
 
 Determine the output file path:
-1. Base name: `TASK-DESIGN-001_check_report.md`
-2. If it does not exist: write it.
-3. If it exists: increment suffix (`_v2`, `_v3`, …) until a free path is found.
-4. **Never overwrite an existing report file.**
+1. Extract the trainee name from the resolved participant file path: `trainees/<name>/...` → `<name>`. If participant was not under `trainees/`, use `unknown_trainee`.
+2. Base name: `checks/<trainee_name>/TASK-DESIGN-001_check_report.md`
+3. If it does not exist: write it.
+4. If it exists: increment suffix (`_v2`, `_v3`, …) until a free path is found.
+5. **Never overwrite an existing report file.**
 
-Create the `checks/` directory if it does not exist.
+Create the `checks/<trainee_name>/` directory if it does not exist.
 
 ---
 
@@ -414,7 +415,7 @@ Then immediately output a **plain-English summary** of 5–6 sentences. Rules:
 
 ## Check Report Template
 
-Written to `checks/TASK-DESIGN-001_check_report.md` (or `_v2`, `_v3` … if prior reports exist):
+Written to `checks/<trainee_name>/TASK-DESIGN-001_check_report.md` (or `_v2`, `_v3` … if prior reports exist):
 
 ```markdown
 ---

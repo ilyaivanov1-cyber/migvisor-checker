@@ -7,7 +7,7 @@
 | Skill number | 22 |
 | Skill name | task-checker-requirements |
 | Task ID | TASK-REQ-001 |
-| Output file | `checks/TASK-REQ-001_check_report.md` |
+| Output file | `checks/<trainee_name>/TASK-REQ-001_check_report.md` |
 
 ---
 
@@ -29,7 +29,7 @@ This skill activates on any of:
 
 ```
 /task-checker-requirements
-/task-checker-requirements participant=<path> reference=<path>
+/task-checker-requirements participant=<path> reference=<path> trainee=<name>
 run task-checker-requirements
 run 22-migvisor-task-checker-requirements
 ```
@@ -38,9 +38,9 @@ run 22-migvisor-task-checker-requirements
 
 ## Preconditions
 
-- A participant requirements file must exist in the workspace (default: `requirements.md`)
-- A reference requirements file must exist in the workspace (default: `requirements_final.md`)
-- The `checks/` directory must exist (create it if absent)
+- A participant requirements file must exist (default: `trainees/<trainee_name>/requirements.md`)
+- A reference requirements file must exist (default: `reference/requirements.md`)
+- The `checks/<trainee_name>/` directory must exist (create it if absent)
 
 ---
 
@@ -48,18 +48,18 @@ run 22-migvisor-task-checker-requirements
 
 | Role | Default path | Override key |
 |---|---|---|
-| Participant | `requirements.md` | `participant=` |
-| Reference (final) | `requirements_final.md` | `reference=` |
+| Participant | `trainees/<trainee_name>/requirements.md` | `participant=` |
+| Reference (final) | `reference/requirements.md` | `reference=` |
 
 Auto-detection fallback order for participant:
-1. `requirements.md`
-2. `requirements my.md`
-3. Any `*requirements*.md` not containing `final` or `_final`
+1. If `trainee=<name>` provided: `trainees/<name>/requirements.md`
+2. Scan `trainees/` for subdirectories:
+   - Exactly 1: use `trainees/<that-name>/requirements.md`; record `<that-name>` as the trainee name
+   - 0 or 2+: abort with appropriate error (see Step 1)
+3. Fallback: `requirements.md` in workspace root
 
 Auto-detection fallback order for reference:
-1. `requirements_final.md`
-2. `requirements final.md`
-3. Any `*requirements*final*.md` or `*requirements*_final*.md`
+1. `reference/requirements.md`
 
 ---
 
@@ -67,14 +67,15 @@ Auto-detection fallback order for reference:
 
 ### Step 1 — Resolve Files
 
-1. Apply override paths if provided via `participant=` / `reference=` flags.
-2. Otherwise run auto-detection sequences above.
-3. If either file cannot be resolved, abort with:
+1. Apply override paths if provided via `participant=` / `reference=` flags. If `trainee=<name>` is provided and `participant=` is not, resolve participant as `trainees/<name>/requirements.md`.
+2. Otherwise run auto-detection sequences above. If multiple `trainees/` subdirectories are found and no `trainee=` flag is given, abort with: *"Multiple trainee folders found: [list]. Specify with `trainee=<name>`."*
+3. Record the resolved trainee name from the participant path (`trainees/<name>/...` → `<name>`; use `unknown_trainee` if not under `trainees/`).
+4. If either file cannot be resolved, abort with:
    ```
    ERROR: Could not locate [participant|reference] requirements file.
    Provide an explicit path: /task-checker-requirements participant=<path>
    ```
-4. Read both files in full.
+5. Read both files in full.
 5. Extract metadata from each file header (lines before the first `##`):
    - `product:` or `# <Product Name>` — product name
    - `project:` — project name
@@ -290,10 +291,13 @@ total_score  = max(subtotal + auto_deducts, 0)
 
 ### Step 8 — Resolve Output Path
 
-1. Base path: `checks/TASK-REQ-001_check_report.md`
-2. If `checks/TASK-REQ-001_check_report.md` does not exist → use base path.
-3. If it exists → increment suffix: `_v2`, `_v3`, … until a free path is found.
-4. Never overwrite an existing report.
+1. Extract the trainee name from the participant file path: `trainees/<name>/...` → `<name>`. If not under `trainees/`, use `unknown_trainee`.
+2. Base path: `checks/<trainee_name>/TASK-REQ-001_check_report.md`
+3. If the path does not exist → use it.
+4. If it exists → increment suffix: `_v2`, `_v3`, … until a free path is found.
+5. Never overwrite an existing report.
+
+Create `checks/<trainee_name>/` directory if it does not exist.
 
 ---
 
@@ -442,7 +446,7 @@ After writing the report, output to the conversation:
 ║  TASK-REQ-001  Requirements Check                        ║
 ║  Product : <participant product>                         ║
 ║  Score   : <total>/100   Grade: <grade>                  ║
-║  Report  : checks/TASK-REQ-<NNN>_check_report<suffix>.md ║
+║  Report  : checks/<trainee_name>/TASK-REQ-<NNN>_check_report<suffix>.md ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 

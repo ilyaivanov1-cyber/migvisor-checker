@@ -22,14 +22,15 @@ description: Evaluates a participant's product-scope file against a reference sc
 ## Invocation Syntax
 
 ```
-/task-checker-scope [participant_file] [reference_file] [--product <name>]
+/task-checker-scope [participant_file] [reference_file] [--product <name>] [trainee=<name>]
 ```
 
 All arguments are optional. Examples:
 - `/task-checker-scope my-scope.md` — participant file supplied; reference auto-resolved
-- `/task-checker-scope submissions/alice-scope.md reference/0 product-scope.md` — both supplied
+- `/task-checker-scope submissions/alice-scope.md reference/product-scope.md` — both supplied
 - `/task-checker-scope --product Purchase` — both files auto-resolved; product name overridden
-- `/task-checker-scope` — everything auto-resolved from workspace
+- `/task-checker-scope trainee=alice` — auto-resolve participant from trainees/alice/
+- `/task-checker-scope` — everything auto-resolved (single trainee folder)
 
 ---
 
@@ -60,17 +61,20 @@ All arguments are optional. Examples:
 
 **1A — Participant file**
 
-If a path was supplied as argument 1, use it. Otherwise prompt: *"Provide the path to your product-scope file, e.g. `/task-checker-scope my-scope.md`"*. Do not guess from filename patterns — require an explicit path when not supplied.
+If a path was supplied as argument 1, use it. Otherwise apply trainee-aware auto-detection:
+
+1. If `trainee=<name>` flag is provided: look for `trainees/<name>/product-scope.md`. If not found, abort: *"No participant file at trainees/<name>/product-scope.md. Verify the trainee name and file."*
+2. Otherwise: scan `trainees/` for immediate subdirectories.
+   - Exactly 1 found: use `trainees/<that-name>/product-scope.md`; record `<that-name>` as the trainee name.
+   - 0 found: abort with *"No trainees/ subdirectories found. Provide an explicit path or create trainees/<name>/."*
+   - 2 or more found: abort with *"Multiple trainee folders found: [list]. Specify with `trainee=<name>`."*
+3. Fallback: if `trainees/` does not exist, search the workspace root for `product-scope.md`.
+
+Record the resolved trainee name from the participant file path for output path construction in Step 8.
 
 **1B — Reference file**
 
-If a path was supplied as argument 2, use it. Otherwise search the workspace for files matching (in priority order):
-1. `0 product-scope.md` (space in name is intentional — matches the template convention)
-2. `0-product-scope.md`
-3. `product-scope-reference.md`
-4. `scope-reference.md`
-
-If exactly one candidate is found at the highest-priority level: use it. If multiple candidates exist: ask the user which to use. Exclude the participant file from reference candidates.
+If a path was supplied as argument 2, use it. Otherwise look for `reference/product-scope.md`. If found: use it. If not found: abort with *"No reference file found at reference/product-scope.md. Supply an explicit reference path."*
 
 **1C — Product name**
 
@@ -187,12 +191,13 @@ Deduct only for **missing information**, not for **different presentation**.
 ### Step 8 — Assemble the check report
 
 Determine the output file path:
-1. Base name: `TASK-SCOPE-001_check_report.md`
-2. If it does not exist: write it.
-3. If it exists: increment suffix (`_v2`, `_v3`, …) until a free path is found.
-4. **Never overwrite an existing report file.**
+1. Extract the trainee name from the resolved participant file path: `trainees/<name>/...` → `<name>`. If participant was not under `trainees/`, use `unknown_trainee`.
+2. Base name: `checks/<trainee_name>/TASK-SCOPE-001_check_report.md`
+3. If it does not exist: write it.
+4. If it exists: increment suffix (`_v2`, `_v3`, …) until a free path is found.
+5. **Never overwrite an existing report file.**
 
-Create the `checks/` directory if it does not exist.
+Create the `checks/<trainee_name>/` directory if it does not exist.
 
 ---
 
@@ -274,7 +279,7 @@ A section is identified as "scope-type", "out-of-scope-type", or "risks-type" by
 
 ## Check Report Template
 
-Written to `checks/TASK-SCOPE-001_check_report.md` (or `_v2`, `_v3` … if prior reports exist):
+Written to `checks/<trainee_name>/TASK-SCOPE-001_check_report.md` (or `_v2`, `_v3` … if prior reports exist):
 
 ```markdown
 ---

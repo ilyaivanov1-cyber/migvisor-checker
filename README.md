@@ -22,34 +22,63 @@ Each skill also accepts `run <skill-name>` or the full skill number as a trigger
 
 ---
 
-## Workspace Files
+## Folder Structure
 
-| File | Role |
+```
+migvisor-as-is-checker/
+├── reference/                          # Authoritative reference files (read-only)
+│   ├── as-is.md
+│   ├── as-is-task2.md
+│   ├── product-scope.md
+│   ├── to-be.md
+│   ├── product-transformation-rules.md
+│   ├── project-transformation-rules.md
+│   ├── validation-report.md
+│   ├── design.md
+│   ├── requirements.md
+│   └── tasks.md
+├── trainees/                           # One subfolder per trainee
+│   └── <trainee_name>/                 # e.g. trainee_1, alice, bob
+│       ├── product-scope.md
+│       ├── to-be.md
+│       ├── product-transformation-rules.md
+│       ├── project-transformation-rules.md
+│       ├── validation-report.md
+│       ├── design.md
+│       ├── requirements.md
+│       └── tasks.md
+├── checks/                             # One subfolder per trainee
+│   └── <trainee_name>/
+│       └── TASK-*_check_report.md
+└── skills/
+    └── <skill-number>-<skill-name>/
+        └── SKILL.md
+```
+
+Skills auto-detect the trainee name from `trainees/` subdirectories. If a single subfolder exists it is used automatically; if multiple exist, pass `trainee=<name>` at invocation.
+
+## Reference Files
+
+| File | Task |
 |---|---|
-| `as-is-reference.md` | As-is analysis reference (final) |
-| `as-is-task2.md` | As-is task 2 reference |
-| `product-scope.md` | Product scope participant submission |
-| `0 product-scope.md` | Product scope reference (final) |
-| `to-be my.md` | To-be design participant submission |
-| `to-be.md` | To-be design reference (final) |
-| `product-transformation-rules.md` | Product transformation rules participant |
-| `product-transformation-rules final.md` | Product transformation rules reference |
-| `project-transformation-rules.md` | Project transformation rules participant |
-| `project-transformation-rules final.md` | Project transformation rules reference |
-| `validation-report.md` | Validation report participant submission |
-| `report_final.md` | Validation report reference (final) |
-| `design.md` | Technical design participant submission |
-| `design_final.md` | Technical design reference (final) |
-| `requirements.md` | Requirements participant submission |
-| `requirements_final.md` | Requirements reference (final) |
-| `tasks.md` | Task list participant submission |
-| `tasks_final.md` | Task list reference (final) |
+| `reference/as-is.md` | As-is analysis |
+| `reference/as-is-task2.md` | As-is task 2 |
+| `reference/product-scope.md` | Product scope |
+| `reference/to-be.md` | To-be design |
+| `reference/product-transformation-rules.md` | Product transformation rules |
+| `reference/project-transformation-rules.md` | Project transformation rules |
+| `reference/validation-report.md` | Validation report |
+| `reference/design.md` | Technical design |
+| `reference/requirements.md` | Requirements |
+| `reference/tasks.md` | Task list |
 
 ---
 
 ## Check Reports
 
-All reports are written to `checks/` as `TASK-<ID>-001_check_report.md`. If a report already exists the skill increments the suffix (`_v2`, `_v3`, …) and never overwrites.
+All reports are written to `checks/<trainee_name>/` as `TASK-<ID>-001_check_report.md`. If a report already exists the skill increments the suffix (`_v2`, `_v3`, …) and never overwrites.
+
+Existing reports are under `checks/trainee_1/`:
 
 | Report | Skill | Product | Score | Grade |
 |---|---|---|---|---|
@@ -61,7 +90,7 @@ All reports are written to `checks/` as `TASK-<ID>-001_check_report.md`. If a re
 | `TASK-VAL-001_check_report.md` | 20 | Sales_Orders | 80/100 | Good |
 | `TASK-DESIGN-001_check_report.md` | 21 | Sales_Orders | 52/100 | Needs work |
 | `TASK-REQ-001_check_report.md` | 22 | — | — | — |
-| `TASK-TSK-001_check_report.md` | 23 | — | — | — |
+| `TASK-TSK-001_check_report.md` | 23 | Sales_Orders | 63/100 | Acceptable |
 
 ---
 

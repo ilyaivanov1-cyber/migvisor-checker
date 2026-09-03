@@ -22,14 +22,15 @@ description: Evaluates a participant's transformation rules document against a r
 ## Invocation Syntax
 
 ```
-/task-checker-transformation-rules [participant_file] [reference_file] [--product <name>]
+/task-checker-transformation-rules [participant_file] [reference_file] [--product <name>] [trainee=<name>]
 ```
 
 All arguments are optional. Examples:
 - `/task-checker-transformation-rules my-rules.md` — participant file supplied; reference auto-resolved
-- `/task-checker-transformation-rules draft-rules.md "project-transformation-rules final.md"` — both supplied
+- `/task-checker-transformation-rules draft-rules.md reference/product-transformation-rules.md` — both supplied
 - `/task-checker-transformation-rules --product Sales_Orders` — both files auto-resolved; product name overridden
-- `/task-checker-transformation-rules` — everything auto-resolved from workspace
+- `/task-checker-transformation-rules trainee=alice` — auto-resolve participant from trainees/alice/
+- `/task-checker-transformation-rules` — everything auto-resolved (single trainee folder)
 
 ---
 
@@ -60,21 +61,20 @@ All arguments are optional. Examples:
 
 **1A — Participant file**
 
-If a path was supplied as argument 1, use it. Otherwise search the workspace for files matching (in priority order):
-1. `project-transformation-rules.md`
-2. `product-transformation-rules.md`
-3. Any `*transformation-rules*.md` file NOT containing "final" in the name
+If a path was supplied as argument 1, use it. Otherwise apply trainee-aware auto-detection:
 
-If multiple candidates exist at the same level: ask the user which to use. Always exclude any file containing "final" in its name from participant candidates.
+1. If `trainee=<name>` flag is provided: look for `trainees/<name>/product-transformation-rules.md`, then `trainees/<name>/project-transformation-rules.md`. Use first found; if neither exists, abort: *"No participant transformation rules file found in trainees/<name>/."*
+2. Otherwise: scan `trainees/` for immediate subdirectories.
+   - Exactly 1 found: search `trainees/<that-name>/` for `product-transformation-rules.md` then `project-transformation-rules.md`; use first found; record `<that-name>` as the trainee name.
+   - 0 found: abort with *"No trainees/ subdirectories found. Provide an explicit path."*
+   - 2 or more found: abort with *"Multiple trainee folders found: [list]. Specify with `trainee=<name>`."*
+3. Fallback: if `trainees/` does not exist, search workspace root for `project-transformation-rules.md` then `product-transformation-rules.md`.
+
+Record the resolved trainee name from the participant file path for output path construction in Step 8.
 
 **1B — Reference file**
 
-If a path was supplied as argument 2, use it. Otherwise search the workspace for files matching (in priority order):
-1. `project-transformation-rules final.md`
-2. `product-transformation-rules final.md`
-3. Any `*transformation-rules*final*.md`
-
-If exactly one candidate found: use it. If multiple: ask the user which to use. Exclude the participant file.
+If a path was supplied as argument 2, use it. Otherwise look for `reference/product-transformation-rules.md`, then `reference/project-transformation-rules.md`. Use first found. If neither exists: abort with *"No reference file found at reference/product-transformation-rules.md. Supply an explicit reference path."*
 
 **1C — Product/Project name**
 
@@ -193,12 +193,13 @@ Deduct only for **missing or incorrect rules and intents**, not for **different 
 ### Step 8 — Assemble the check report
 
 Determine the output file path:
-1. Base name: `TASK-TR-001_check_report.md`
-2. If it does not exist: write it.
-3. If it exists: increment suffix (`_v2`, `_v3`, …) until a free path is found.
-4. **Never overwrite an existing report file.**
+1. Extract the trainee name from the resolved participant file path: `trainees/<name>/...` → `<name>`. If participant was not under `trainees/`, use `unknown_trainee`.
+2. Base name: `checks/<trainee_name>/TASK-TR-001_check_report.md`
+3. If it does not exist: write it.
+4. If it exists: increment suffix (`_v2`, `_v3`, …) until a free path is found.
+5. **Never overwrite an existing report file.**
 
-Create the `checks/` directory if it does not exist.
+Create the `checks/<trainee_name>/` directory if it does not exist.
 
 ---
 
@@ -288,7 +289,7 @@ Points expressed as **percentages of that section's weight**.
 
 ## Check Report Template
 
-Written to `checks/TASK-TR-001_check_report.md` (or `_v2`, `_v3` … if prior reports exist):
+Written to `checks/<trainee_name>/TASK-TR-001_check_report.md` (or `_v2`, `_v3` … if prior reports exist):
 
 ```markdown
 ---
