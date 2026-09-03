@@ -24,6 +24,7 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 | 28 | `task-checker-data-dictionary` | "check data dictionary" | Data dictionary Markdown vs reference (N-section per table, column completeness, nullability, FK notation, SCD-2 check) |
 | 29 | `task-checker-pipeline-runbook` | "check pipeline runbook" | Pipeline runbook vs reference (N-section, monitoring checklist, failure response, SQL queries, escalation path) |
 | 30 | `task-checker-bi-connections` | "check bi connections" | BI connections document vs reference (N-section, per-view attribute tables, connection string, BI tool steps, known issues) |
+| 31 | `task-checker-secrets-setup` | "check secrets setup" | Secrets setup runbook vs reference (N-section, scope creation, key registration, verification step, dev/prod separation) |
 
 Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
 
@@ -50,7 +51,8 @@ migvisor-as-is-checker/
 │   ├── go_live_checklist.md
 │   ├── data_dictionary.md
 │   ├── pipeline_runbook.md
-│   └── bi_connections.md
+│   ├── bi_connections.md
+│   └── secrets_setup.md
 ├── trainees/                           # One subfolder per trainee
 │   └── <trainee_name>/                 # e.g. trainee_1, alice, bob
 │       ├── product-scope.md
@@ -67,7 +69,8 @@ migvisor-as-is-checker/
 │       ├── go_live_checklist.md
 │       ├── data_dictionary.md
 │       ├── pipeline_runbook.md
-│       └── bi_connections.md
+│       ├── bi_connections.md
+│       └── secrets_setup.md
 ├── checks/                             # One subfolder per trainee
 │   └── <trainee_name>/
 │       └── <task-group>/               # e.g. as-is, scope, tasks, design …
@@ -100,6 +103,7 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 | `reference/data_dictionary.md` | Data dictionary (8 table definitions + SCD-2 glossary) |
 | `reference/pipeline_runbook.md` | Pipeline runbook (monitoring checklist, failure response, reprocessing guide, DQ investigation, escalation) |
 | `reference/bi_connections.md` | BI connections (per-view attribute tables, SQL Warehouse endpoint, BI tool steps, known issues, access provisioning) |
+| `reference/secrets_setup.md` | Secrets setup runbook (scope creation, key registration, verification, dev/prod separation, credential rotation) |
 
 ---
 
@@ -127,6 +131,7 @@ Existing reports are under `checks/trainee_1/`:
 | `TASK-DD-001_check_report.md` | 28 | Sales_Orders | 45/100 | Needs Work |
 | `TASK-RB-001_check_report.md` | 29 | Sales_Orders | 32/100 | Incomplete |
 | `TASK-BI-001_check_report.md` | 30 | — | — | — |
+| `TASK-SEC-001_check_report.md` | 31 | — | — | — |
 
 ---
 
