@@ -25,6 +25,7 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 | 29 | `task-checker-pipeline-runbook` | "check pipeline runbook" | Pipeline runbook vs reference (N-section, monitoring checklist, failure response, SQL queries, escalation path) |
 | 30 | `task-checker-bi-connections` | "check bi connections" | BI connections document vs reference (N-section, per-view attribute tables, connection string, BI tool steps, known issues) |
 | 31 | `task-checker-secrets-setup` | "check secrets setup" | Secrets setup runbook vs reference (N-section, scope creation, key registration, verification step, dev/prod separation) |
+| 32 | `task-checker-secrets-rotation-runbook` | "check secrets rotation runbook" | Secrets rotation runbook vs reference (N-section, trigger conditions, rotation procedure, verification, rollback, notification checklist, rotation log) |
 
 Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
 
@@ -52,7 +53,8 @@ migvisor-as-is-checker/
 │   ├── data_dictionary.md
 │   ├── pipeline_runbook.md
 │   ├── bi_connections.md
-│   └── secrets_setup.md
+│   ├── secrets_setup.md
+│   └── secrets_rotation_runbook.md
 ├── trainees/                           # One subfolder per trainee
 │   └── <trainee_name>/                 # e.g. trainee_1, alice, bob
 │       ├── product-scope.md
@@ -70,7 +72,8 @@ migvisor-as-is-checker/
 │       ├── data_dictionary.md
 │       ├── pipeline_runbook.md
 │       ├── bi_connections.md
-│       └── secrets_setup.md
+│       ├── secrets_setup.md
+│       └── secrets_rotation_runbook.md
 ├── checks/                             # One subfolder per trainee
 │   └── <trainee_name>/
 │       └── <task-group>/               # e.g. as-is, scope, tasks, design …
@@ -104,6 +107,7 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 | `reference/pipeline_runbook.md` | Pipeline runbook (monitoring checklist, failure response, reprocessing guide, DQ investigation, escalation) |
 | `reference/bi_connections.md` | BI connections (per-view attribute tables, SQL Warehouse endpoint, BI tool steps, known issues, access provisioning) |
 | `reference/secrets_setup.md` | Secrets setup runbook (scope creation, key registration, verification, dev/prod separation, credential rotation) |
+| `reference/secrets_rotation_runbook.md` | Secrets rotation runbook (trigger conditions, rotation procedure, verification steps, rollback, notification checklist, rotation log) |
 
 ---
 
@@ -132,6 +136,7 @@ Existing reports are under `checks/trainee_1/`:
 | `TASK-RB-001_check_report.md` | 29 | Sales_Orders | 32/100 | Incomplete |
 | `TASK-BI-001_check_report.md` | 30 | — | — | — |
 | `TASK-SEC-001_check_report.md` | 31 | — | — | — |
+| `TASK-SEC-002_check_report.md` | 32 | — | — | — |
 
 ---
 
