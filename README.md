@@ -23,6 +23,7 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 | 27 | `task-checker-go-live-checklist` | "check go live checklist" | Go-live checklist vs reference (N-section, checkbox format, task refs, verification steps, principal checks) |
 | 28 | `task-checker-data-dictionary` | "check data dictionary" | Data dictionary Markdown vs reference (N-section per table, column completeness, nullability, FK notation, SCD-2 check) |
 | 29 | `task-checker-pipeline-runbook` | "check pipeline runbook" | Pipeline runbook vs reference (N-section, monitoring checklist, failure response, SQL queries, escalation path) |
+| 30 | `task-checker-bi-connections` | "check bi connections" | BI connections document vs reference (N-section, per-view attribute tables, connection string, BI tool steps, known issues) |
 
 Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
 
@@ -48,7 +49,8 @@ migvisor-as-is-checker/
 │   ├── architecture_diagram.md
 │   ├── go_live_checklist.md
 │   ├── data_dictionary.md
-│   └── pipeline_runbook.md
+│   ├── pipeline_runbook.md
+│   └── bi_connections.md
 ├── trainees/                           # One subfolder per trainee
 │   └── <trainee_name>/                 # e.g. trainee_1, alice, bob
 │       ├── product-scope.md
@@ -64,7 +66,8 @@ migvisor-as-is-checker/
 │       ├── architecture_diagram.md
 │       ├── go_live_checklist.md
 │       ├── data_dictionary.md
-│       └── pipeline_runbook.md
+│       ├── pipeline_runbook.md
+│       └── bi_connections.md
 ├── checks/                             # One subfolder per trainee
 │   └── <trainee_name>/
 │       └── <task-group>/               # e.g. as-is, scope, tasks, design …
@@ -96,6 +99,7 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 | `reference/go_live_checklist.md` | Go-live checklist (infrastructure, data, security, pipeline, DQ, BI, docs) |
 | `reference/data_dictionary.md` | Data dictionary (8 table definitions + SCD-2 glossary) |
 | `reference/pipeline_runbook.md` | Pipeline runbook (monitoring checklist, failure response, reprocessing guide, DQ investigation, escalation) |
+| `reference/bi_connections.md` | BI connections (per-view attribute tables, SQL Warehouse endpoint, BI tool steps, known issues, access provisioning) |
 
 ---
 
@@ -122,6 +126,7 @@ Existing reports are under `checks/trainee_1/`:
 | `TASK-GL-001_check_report.md` | 27 | Sales_Orders | 40/100 | Incomplete |
 | `TASK-DD-001_check_report.md` | 28 | Sales_Orders | 45/100 | Needs Work |
 | `TASK-RB-001_check_report.md` | 29 | Sales_Orders | 32/100 | Incomplete |
+| `TASK-BI-001_check_report.md` | 30 | — | — | — |
 
 ---
 
