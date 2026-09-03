@@ -313,6 +313,8 @@ Score reflects content quality; no deduction applied for identity.]
 
 ## Score Summary
 
+**The as-is document Score: [N]**
+
 | Section | Weight | Score | Status |
 |---|---|---|---|
 | [heading text] | [N] | [N] | ✓ / ⚠ / ✗ |

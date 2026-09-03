@@ -447,6 +447,8 @@ _[Product name] | [timestamp]_
 
 ## Score Summary
 
+**The design document Score: [N]**
+
 | Section | Matched to | Weight | Score | Status |
 |---|---|---|---|---|
 | Header Metadata | [participant heading] | [N] | [N] | ✓/⚠/✗ |

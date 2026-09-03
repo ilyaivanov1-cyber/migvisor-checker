@@ -361,6 +361,8 @@ grade: <grade label>
 
 ## Score Summary
 
+**The task plan Score: <total>/100**
+
 | Section | Weight | Raw Score | Weighted | Status |
 |---|---|---|---|---|
 | Header Metadata | <W> | <S>/100 | <pts> | ✓/⚠/✗ |

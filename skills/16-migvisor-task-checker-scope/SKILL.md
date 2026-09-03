@@ -310,6 +310,8 @@ _[Product name] | [timestamp]_
 
 ## Score Summary
 
+**The product scope Score: [N]**
+
 | Section | Weight | Score | Status |
 |---|---|---|---|
 | [heading text] | [N] | [N] | ✓ / ⚠ / ✗ |

@@ -354,6 +354,8 @@ _[Product name] | [timestamp]_
 
 ## Score Summary
 
+**The validation report Score: [N]**
+
 | Section | Matched to | Weight | Score | Status |
 |---|---|---|---|---|
 | Header Metadata | [participant heading] | [N] | [N] | ✓/⚠/✗ |

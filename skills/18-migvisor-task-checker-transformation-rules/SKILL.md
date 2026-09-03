@@ -320,6 +320,8 @@ _[Project name] | [timestamp]_
 
 ## Score Summary
 
+**The transformation rules Score: [N]**
+
 | Section | Matched to | Weight | Score | Status |
 |---|---|---|---|---|
 | [heading] | [participant heading] | [N] | [N] | ✓/⚠/✗ |

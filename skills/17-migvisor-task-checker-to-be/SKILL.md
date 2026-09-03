@@ -342,6 +342,8 @@ _[Product name] | [timestamp]_
 
 ## Score Summary
 
+**The to-be document Score: [N]**
+
 | Section | Matched to | Weight | Score | Status |
 |---|---|---|---|---|
 | [heading] | [participant heading] | [N] | [N] | ✓/⚠/✗ |
