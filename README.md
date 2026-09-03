@@ -22,6 +22,7 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 | 26 | `task-checker-architecture-diagram` | "check architecture diagram" | Architecture diagram Markdown vs reference (N-section, pipeline DAG, table properties, lineage chain) |
 | 27 | `task-checker-go-live-checklist` | "check go live checklist" | Go-live checklist vs reference (N-section, checkbox format, task refs, verification steps, principal checks) |
 | 28 | `task-checker-data-dictionary` | "check data dictionary" | Data dictionary Markdown vs reference (N-section per table, column completeness, nullability, FK notation, SCD-2 check) |
+| 29 | `task-checker-pipeline-runbook` | "check pipeline runbook" | Pipeline runbook vs reference (N-section, monitoring checklist, failure response, SQL queries, escalation path) |
 
 Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
 
@@ -46,7 +47,8 @@ migvisor-as-is-checker/
 │   ├── build-plan.md
 │   ├── architecture_diagram.md
 │   ├── go_live_checklist.md
-│   └── data_dictionary.md
+│   ├── data_dictionary.md
+│   └── pipeline_runbook.md
 ├── trainees/                           # One subfolder per trainee
 │   └── <trainee_name>/                 # e.g. trainee_1, alice, bob
 │       ├── product-scope.md
@@ -61,7 +63,8 @@ migvisor-as-is-checker/
 │       ├── build-plan.md
 │       ├── architecture_diagram.md
 │       ├── go_live_checklist.md
-│       └── data_dictionary.md
+│       ├── data_dictionary.md
+│       └── pipeline_runbook.md
 ├── checks/                             # One subfolder per trainee
 │   └── <trainee_name>/
 │       └── <task-group>/               # e.g. as-is, scope, tasks, design …
@@ -92,6 +95,7 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 | `reference/architecture_diagram.md` | Architecture diagram (pipeline DAG, Delta Lake properties, lineage chain) |
 | `reference/go_live_checklist.md` | Go-live checklist (infrastructure, data, security, pipeline, DQ, BI, docs) |
 | `reference/data_dictionary.md` | Data dictionary (8 table definitions + SCD-2 glossary) |
+| `reference/pipeline_runbook.md` | Pipeline runbook (monitoring checklist, failure response, reprocessing guide, DQ investigation, escalation) |
 
 ---
 
