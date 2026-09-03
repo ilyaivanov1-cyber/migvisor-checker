@@ -16,6 +16,7 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 | 20 | `task-checker-validation-report` | "check my validation report" | SmartBuilder validation report vs reference |
 | 21 | `task-checker-design` | "check my design" | Technical design document vs reference (DDL + MERGE + Python + diagrams) |
 | 22 | `task-checker-requirements` | "check my requirements" | Requirements document vs reference (FR + NFR + DQR + AC + source refs) |
+| 23 | `task-checker-tasks` | "check my tasks" | Task list vs reference (task fields, AC, deliverables, dependencies, traceability) |
 
 Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
 
@@ -41,6 +42,8 @@ Each skill also accepts `run <skill-name>` or the full skill number as a trigger
 | `design_final.md` | Technical design reference (final) |
 | `requirements.md` | Requirements participant submission |
 | `requirements_final.md` | Requirements reference (final) |
+| `tasks.md` | Task list participant submission |
+| `tasks_final.md` | Task list reference (final) |
 
 ---
 
@@ -58,6 +61,7 @@ All reports are written to `checks/` as `TASK-<ID>-001_check_report.md`. If a re
 | `TASK-VAL-001_check_report.md` | 20 | Sales_Orders | 80/100 | Good |
 | `TASK-DESIGN-001_check_report.md` | 21 | Sales_Orders | 52/100 | Needs work |
 | `TASK-REQ-001_check_report.md` | 22 | — | — | — |
+| `TASK-TSK-001_check_report.md` | 23 | — | — | — |
 
 ---
 
