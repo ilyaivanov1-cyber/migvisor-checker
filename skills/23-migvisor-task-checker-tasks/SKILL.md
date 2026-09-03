@@ -7,7 +7,7 @@
 | Skill number | 23 |
 | Skill name | task-checker-tasks |
 | Task ID | TASK-TSK-001 |
-| Output file | `checks/<trainee_name>/TASK-TSK-001_check_report.md` |
+| Output file | `checks/<trainee_name>/tasks/TASK-TSK-001_check_report.md` |
 
 ---
 
@@ -41,7 +41,7 @@ run 23-migvisor-task-checker-tasks
 
 - A participant tasks file must exist (default: `trainees/<trainee_name>/tasks.md`)
 - A reference tasks file must exist (default: `reference/tasks.md`)
-- The `checks/<trainee_name>/` directory must exist (create it if absent)
+- The `checks/<trainee_name>/tasks/` directory must exist (create it if absent)
 
 ---
 
@@ -324,12 +324,12 @@ total_score  = max(subtotal + auto_deducts, 0)
 ### Step 8 — Resolve Output Path
 
 1. Extract the trainee name from the participant file path: `trainees/<name>/...` → `<name>`. If not under `trainees/`, use `unknown_trainee`.
-2. Base path: `checks/<trainee_name>/TASK-TSK-001_check_report.md`
+2. Base path: `checks/<trainee_name>/tasks/TASK-TSK-001_check_report.md`
 3. If the path does not exist → use it.
 4. If it exists → increment suffix: `_v2`, `_v3`, … until a free path is found.
 5. Never overwrite an existing report.
 
-Create `checks/<trainee_name>/` directory if it does not exist.
+Create `checks/<trainee_name>/tasks/` directory if it does not exist.
 
 ---
 
@@ -486,7 +486,7 @@ After writing the report, output to the conversation:
 ║  TASK-TSK-001  Tasks Check                               ║
 ║  Product : <participant product>                         ║
 ║  Score   : <total>/100   Grade: <grade>                  ║
-║  Report  : checks/<trainee_name>/TASK-TSK-<NNN>_check_report<suffix>.md ║
+║  Report  : checks/<trainee_name>/tasks/TASK-TSK-<NNN>_check_report<suffix>.md ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 

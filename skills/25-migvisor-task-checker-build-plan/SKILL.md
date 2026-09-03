@@ -7,7 +7,7 @@
 | Skill number | 25 |
 | Skill name | task-checker-build-plan |
 | Task ID | TASK-BP-001 |
-| Output file | `checks/<trainee_name>/TASK-BP-001_check_report.md` |
+| Output file | `checks/<trainee_name>/build-plan/TASK-BP-001_check_report.md` |
 
 ---
 
@@ -41,7 +41,7 @@ run 25-migvisor-task-checker-build-plan
 
 - A participant `build-plan.md` file must exist (default: `trainees/<trainee_name>/build-plan.md`)
 - A reference `build-plan.md` file must exist (default: `reference/build-plan.md`)
-- The `checks/<trainee_name>/` directory must exist (create it if absent)
+- The `checks/<trainee_name>/build-plan/` directory must exist (create it if absent)
 
 ---
 
@@ -453,12 +453,12 @@ total_score  = max(subtotal + auto_deducts, 0)
 ### Step 8 — Resolve Output Path
 
 1. Extract the trainee name from the participant file path: `trainees/<name>/...` → `<name>`. If not under `trainees/`, use `unknown_trainee`.
-2. Base path: `checks/<trainee_name>/TASK-BP-001_check_report.md`
+2. Base path: `checks/<trainee_name>/build-plan/TASK-BP-001_check_report.md`
 3. If the path does not exist → use it.
 4. If it exists → increment suffix: `_v2`, `_v3`, … until a free path is found.
 5. Never overwrite an existing report.
 
-Create `checks/<trainee_name>/` directory if it does not exist.
+Create `checks/<trainee_name>/build-plan/` directory if it does not exist.
 
 ---
 
@@ -633,7 +633,7 @@ After writing the report, output to the conversation:
 ║  TASK-BP-001  Build Plan Check                           ║
 ║  Product : <participant product>                         ║
 ║  Score   : <total>/100   Grade: <grade>                  ║
-║  Report  : checks/<trainee_name>/TASK-BP-001_check_report<suffix>.md ║
+║  Report  : checks/<trainee_name>/build-plan/TASK-BP-001_check_report<suffix>.md ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 

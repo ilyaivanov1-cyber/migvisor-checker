@@ -7,7 +7,7 @@
 | Skill number | 28 |
 | Skill name | task-checker-data-dictionary |
 | Task ID | TASK-DD-001 |
-| Output file | `checks/<trainee_name>/TASK-DD-001_check_report.md` |
+| Output file | `checks/<trainee_name>/data-dictionary/TASK-DD-001_check_report.md` |
 
 ---
 
@@ -41,7 +41,7 @@ run 28-migvisor-task-checker-data-dictionary
 
 - A participant `data_dictionary.md` file must exist (default: `trainees/<trainee_name>/data_dictionary.md`)
 - A reference `data_dictionary.md` file must exist (default: `reference/data_dictionary.md`)
-- The `checks/<trainee_name>/` directory must exist (create it if absent)
+- The `checks/<trainee_name>/data-dictionary/` directory must exist (create it if absent)
 
 ---
 
@@ -348,12 +348,12 @@ total_score  = max(subtotal + auto_deducts, 0)
 ### Step 8 — Resolve Output Path
 
 1. Extract the trainee name from the participant file path: `trainees/<name>/...` → `<name>`. If not under `trainees/`, use `unknown_trainee`.
-2. Base path: `checks/<trainee_name>/TASK-DD-001_check_report.md`
+2. Base path: `checks/<trainee_name>/data-dictionary/TASK-DD-001_check_report.md`
 3. If the path does not exist → use it.
 4. If it exists → increment suffix: `_v2`, `_v3`, … until a free path is found.
 5. Never overwrite an existing report.
 
-Create `checks/<trainee_name>/` directory if it does not exist.
+Create `checks/<trainee_name>/data-dictionary/` directory if it does not exist.
 
 ---
 
@@ -529,7 +529,7 @@ After writing the report, output to the conversation:
 ║  TASK-DD-001  Data Dictionary Check                      ║
 ║  Product : <participant product>                         ║
 ║  Score   : <total>/100   Grade: <grade>                  ║
-║  Report  : checks/<trainee_name>/TASK-DD-001_check_report<suffix>.md ║
+║  Report  : checks/<trainee_name>/data-dictionary/TASK-DD-001_check_report<suffix>.md ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 

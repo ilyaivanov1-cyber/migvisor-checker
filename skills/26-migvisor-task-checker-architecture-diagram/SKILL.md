@@ -7,7 +7,7 @@
 | Skill number | 26 |
 | Skill name | task-checker-architecture-diagram |
 | Task ID | TASK-ARCH-001 |
-| Output file | `checks/<trainee_name>/TASK-ARCH-001_check_report.md` |
+| Output file | `checks/<trainee_name>/architecture/TASK-ARCH-001_check_report.md` |
 
 ---
 
@@ -42,7 +42,7 @@ run 26-migvisor-task-checker-architecture-diagram
 
 - A participant `architecture_diagram.md` file must exist (default: `trainees/<trainee_name>/architecture_diagram.md`)
 - A reference `architecture_diagram.md` file must exist (default: `reference/architecture_diagram.md`)
-- The `checks/<trainee_name>/` directory must exist (create it if absent)
+- The `checks/<trainee_name>/architecture/` directory must exist (create it if absent)
 
 ---
 
@@ -397,12 +397,12 @@ total_score  = max(subtotal + auto_deducts, 0)
 ### Step 8 — Resolve Output Path
 
 1. Extract the trainee name from the participant file path: `trainees/<name>/...` → `<name>`. If not under `trainees/`, use `unknown_trainee`.
-2. Base path: `checks/<trainee_name>/TASK-ARCH-001_check_report.md`
+2. Base path: `checks/<trainee_name>/architecture/TASK-ARCH-001_check_report.md`
 3. If the path does not exist → use it.
 4. If it exists → increment suffix: `_v2`, `_v3`, … until a free path is found.
 5. Never overwrite an existing report.
 
-Create `checks/<trainee_name>/` directory if it does not exist.
+Create `checks/<trainee_name>/architecture/` directory if it does not exist.
 
 ---
 
@@ -577,7 +577,7 @@ After writing the report, output to the conversation:
 ║  TASK-ARCH-001  Architecture Diagram Check               ║
 ║  Product : <participant product>                         ║
 ║  Score   : <total>/100   Grade: <grade>                  ║
-║  Report  : checks/<trainee_name>/TASK-ARCH-001_check_report<suffix>.md ║
+║  Report  : checks/<trainee_name>/architecture/TASK-ARCH-001_check_report<suffix>.md ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 

@@ -194,12 +194,12 @@ Deduct only for **missing or incorrect rules and intents**, not for **different 
 
 Determine the output file path:
 1. Extract the trainee name from the resolved participant file path: `trainees/<name>/...` → `<name>`. If participant was not under `trainees/`, use `unknown_trainee`.
-2. Base name: `checks/<trainee_name>/TASK-TR-001_check_report.md`
+2. Base name: `checks/<trainee_name>/transformation-rules/TASK-TR-001_check_report.md`
 3. If it does not exist: write it.
 4. If it exists: increment suffix (`_v2`, `_v3`, …) until a free path is found.
 5. **Never overwrite an existing report file.**
 
-Create the `checks/<trainee_name>/` directory if it does not exist.
+Create the `checks/<trainee_name>/transformation-rules/` directory if it does not exist.
 
 ---
 
@@ -289,7 +289,7 @@ Points expressed as **percentages of that section's weight**.
 
 ## Check Report Template
 
-Written to `checks/<trainee_name>/TASK-TR-001_check_report.md` (or `_v2`, `_v3` … if prior reports exist):
+Written to `checks/<trainee_name>/transformation-rules/TASK-TR-001_check_report.md` (or `_v2`, `_v3` … if prior reports exist):
 
 ```markdown
 ---

@@ -7,7 +7,7 @@
 | Skill number | 24 |
 | Skill name | task-checker-product-definition |
 | Task ID | TASK-DEF-001 |
-| Output file | `checks/<trainee_name>/TASK-DEF-001_check_report.md` |
+| Output file | `checks/<trainee_name>/definition/TASK-DEF-001_check_report.md` |
 
 ---
 
@@ -42,7 +42,7 @@ run 24-migvisor-task-checker-product-definition
 
 - A participant `product-definition.yaml` file must exist (default: `trainees/<trainee_name>/product-definition.yaml`)
 - A reference `product-definition.yaml` file must exist (default: `reference/product-definition.yaml`)
-- The `checks/<trainee_name>/` directory must exist (create it if absent)
+- The `checks/<trainee_name>/definition/` directory must exist (create it if absent)
 
 ---
 
@@ -444,12 +444,12 @@ total_score  = max(subtotal + auto_deducts, 0)
 ### Step 8 — Resolve Output Path
 
 1. Extract the trainee name from the participant file path: `trainees/<name>/...` → `<name>`. If not under `trainees/`, use `unknown_trainee`.
-2. Base path: `checks/<trainee_name>/TASK-DEF-001_check_report.md`
+2. Base path: `checks/<trainee_name>/definition/TASK-DEF-001_check_report.md`
 3. If the path does not exist → use it.
 4. If it exists → increment suffix: `_v2`, `_v3`, … until a free path is found.
 5. Never overwrite an existing report.
 
-Create `checks/<trainee_name>/` directory if it does not exist.
+Create `checks/<trainee_name>/definition/` directory if it does not exist.
 
 ---
 
@@ -624,7 +624,7 @@ After writing the report, output to the conversation:
 ║  TASK-DEF-001  Product Definition Check                  ║
 ║  Product : <participant product>                         ║
 ║  Score   : <total>/100   Grade: <grade>                  ║
-║  Report  : checks/<trainee_name>/TASK-DEF-001_check_report<suffix>.md ║
+║  Report  : checks/<trainee_name>/definition/TASK-DEF-001_check_report<suffix>.md ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 

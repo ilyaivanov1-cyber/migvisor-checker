@@ -7,7 +7,7 @@
 | Skill number | 27 |
 | Skill name | task-checker-go-live-checklist |
 | Task ID | TASK-GL-001 |
-| Output file | `checks/<trainee_name>/TASK-GL-001_check_report.md` |
+| Output file | `checks/<trainee_name>/go-live/TASK-GL-001_check_report.md` |
 
 ---
 
@@ -42,7 +42,7 @@ run 27-migvisor-task-checker-go-live-checklist
 
 - A participant `go_live_checklist.md` file must exist (default: `trainees/<trainee_name>/go_live_checklist.md`)
 - A reference `go_live_checklist.md` file must exist (default: `reference/go_live_checklist.md`)
-- The `checks/<trainee_name>/` directory must exist (create it if absent)
+- The `checks/<trainee_name>/go-live/` directory must exist (create it if absent)
 
 ---
 
@@ -353,12 +353,12 @@ total_score  = max(subtotal + auto_deducts, 0)
 ### Step 8 — Resolve Output Path
 
 1. Extract the trainee name from the participant file path: `trainees/<name>/...` → `<name>`. If not under `trainees/`, use `unknown_trainee`.
-2. Base path: `checks/<trainee_name>/TASK-GL-001_check_report.md`
+2. Base path: `checks/<trainee_name>/go-live/TASK-GL-001_check_report.md`
 3. If the path does not exist → use it.
 4. If it exists → increment suffix: `_v2`, `_v3`, … until a free path is found.
 5. Never overwrite an existing report.
 
-Create `checks/<trainee_name>/` directory if it does not exist.
+Create `checks/<trainee_name>/go-live/` directory if it does not exist.
 
 ---
 
@@ -526,7 +526,7 @@ After writing the report, output to the conversation:
 ║  TASK-GL-001  Go-Live Checklist Check                    ║
 ║  Product : <participant product>                         ║
 ║  Score   : <total>/100   Grade: <grade>                  ║
-║  Report  : checks/<trainee_name>/TASK-GL-001_check_report<suffix>.md ║
+║  Report  : checks/<trainee_name>/go-live/TASK-GL-001_check_report<suffix>.md ║
 ╚══════════════════════════════════════════════════════════╝
 ```
 
