@@ -121,6 +121,7 @@ Existing reports are under `checks/trainee_1/`:
 | `TASK-ARCH-001_check_report.md` | 26 | Sales_Orders | 46/100 | Needs Work |
 | `TASK-GL-001_check_report.md` | 27 | Sales_Orders | 40/100 | Incomplete |
 | `TASK-DD-001_check_report.md` | 28 | Sales_Orders | 45/100 | Needs Work |
+| `TASK-RB-001_check_report.md` | 29 | Sales_Orders | 32/100 | Incomplete |
 
 ---
 
