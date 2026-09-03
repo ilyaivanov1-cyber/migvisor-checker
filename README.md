@@ -21,6 +21,7 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 | 25 | `task-checker-build-plan` | "check build plan" | Build plan Markdown vs reference (N-section H2-heading adaptive scoring, SmartBuilder skills) |
 | 26 | `task-checker-architecture-diagram` | "check architecture diagram" | Architecture diagram Markdown vs reference (N-section, pipeline DAG, table properties, lineage chain) |
 | 27 | `task-checker-go-live-checklist` | "check go live checklist" | Go-live checklist vs reference (N-section, checkbox format, task refs, verification steps, principal checks) |
+| 28 | `task-checker-data-dictionary` | "check data dictionary" | Data dictionary Markdown vs reference (N-section per table, column completeness, nullability, FK notation, SCD-2 check) |
 
 Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
 
@@ -44,7 +45,8 @@ migvisor-as-is-checker/
 │   ├── product-definition.yaml
 │   ├── build-plan.md
 │   ├── architecture_diagram.md
-│   └── go_live_checklist.md
+│   ├── go_live_checklist.md
+│   └── data_dictionary.md
 ├── trainees/                           # One subfolder per trainee
 │   └── <trainee_name>/                 # e.g. trainee_1, alice, bob
 │       ├── product-scope.md
@@ -58,7 +60,8 @@ migvisor-as-is-checker/
 │       ├── product-definition.yaml
 │       ├── build-plan.md
 │       ├── architecture_diagram.md
-│       └── go_live_checklist.md
+│       ├── go_live_checklist.md
+│       └── data_dictionary.md
 ├── checks/                             # One subfolder per trainee
 │   └── <trainee_name>/
 │       └── TASK-*_check_report.md
@@ -87,6 +90,7 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 | `reference/build-plan.md` | SmartBuilder build plan |
 | `reference/architecture_diagram.md` | Architecture diagram (pipeline DAG, Delta Lake properties, lineage chain) |
 | `reference/go_live_checklist.md` | Go-live checklist (infrastructure, data, security, pipeline, DQ, BI, docs) |
+| `reference/data_dictionary.md` | Data dictionary (8 table definitions + SCD-2 glossary) |
 
 ---
 
