@@ -113,6 +113,9 @@ Existing reports are under `checks/trainee_1/`:
 | `TASK-TSK-001_check_report.md` (+ v2–v6) | 23 | Sales_Orders | 63/100 | Acceptable |
 | `TASK-DEF-001_check_report.md` | 24 | Sales_Orders | 63/100 | Acceptable |
 | `TASK-BP-001_check_report.md` | 25 | Sales_Orders | 82/100 | Good |
+| `TASK-ARCH-001_check_report.md` | 26 | Sales_Orders | 46/100 | Needs Work |
+| `TASK-GL-001_check_report.md` | 27 | Sales_Orders | 40/100 | Incomplete |
+| `TASK-DD-001_check_report.md` | 28 | Sales_Orders | 45/100 | Needs Work |
 
 ---
 
