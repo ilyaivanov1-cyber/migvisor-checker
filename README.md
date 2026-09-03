@@ -17,6 +17,8 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 | 21 | `task-checker-design` | "check my design" | Technical design document vs reference (DDL + MERGE + Python + diagrams) |
 | 22 | `task-checker-requirements` | "check my requirements" | Requirements document vs reference (FR + NFR + DQR + AC + source refs) |
 | 23 | `task-checker-tasks` | "check my tasks" | Task list vs reference (task fields, AC, deliverables, dependencies, traceability) |
+| 24 | `task-checker-product-definition` | "check product definition" | Product definition YAML vs reference (ODPS 4.1, N-section YAML-key adaptive scoring) |
+| 25 | `task-checker-build-plan` | "check build plan" | Build plan Markdown vs reference (N-section H2-heading adaptive scoring, SmartBuilder skills) |
 
 Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
 
@@ -36,7 +38,9 @@ migvisor-as-is-checker/
 │   ├── validation-report.md
 │   ├── design.md
 │   ├── requirements.md
-│   └── tasks.md
+│   ├── tasks.md
+│   ├── product-definition.yaml
+│   └── build-plan.md
 ├── trainees/                           # One subfolder per trainee
 │   └── <trainee_name>/                 # e.g. trainee_1, alice, bob
 │       ├── product-scope.md
@@ -46,7 +50,9 @@ migvisor-as-is-checker/
 │       ├── validation-report.md
 │       ├── design.md
 │       ├── requirements.md
-│       └── tasks.md
+│       ├── tasks.md
+│       ├── product-definition.yaml
+│       └── build-plan.md
 ├── checks/                             # One subfolder per trainee
 │   └── <trainee_name>/
 │       └── TASK-*_check_report.md
@@ -71,6 +77,8 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 | `reference/design.md` | Technical design |
 | `reference/requirements.md` | Requirements |
 | `reference/tasks.md` | Task list |
+| `reference/product-definition.yaml` | Product definition (ODPS 4.1) |
+| `reference/build-plan.md` | SmartBuilder build plan |
 
 ---
 
@@ -90,7 +98,9 @@ Existing reports are under `checks/trainee_1/`:
 | `TASK-VAL-001_check_report.md` | 20 | Sales_Orders | 80/100 | Good |
 | `TASK-DESIGN-001_check_report.md` | 21 | Sales_Orders | 52/100 | Needs work |
 | `TASK-REQ-001_check_report.md` | 22 | — | — | — |
-| `TASK-TSK-001_check_report.md` | 23 | Sales_Orders | 63/100 | Acceptable |
+| `TASK-TSK-001_check_report.md` (+ v2–v6) | 23 | Sales_Orders | 63/100 | Acceptable |
+| `TASK-DEF-001_check_report.md` | 24 | Sales_Orders | 63/100 | Acceptable |
+| `TASK-BP-001_check_report.md` | 25 | Sales_Orders | 82/100 | Good |
 
 ---
 
