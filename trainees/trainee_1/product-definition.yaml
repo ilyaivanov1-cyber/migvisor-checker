@@ -1,0 +1,706 @@
+# Sales_Orders — ODPS 4.1 Product Definition
+# Generated: 2026-06-05 | Stage: define
+
+schemaVersion: "4.1"
+
+# ─────────────────────────────────────────────
+# 1. PRODUCT IDENTITY
+# ─────────────────────────────────────────────
+productIdentity:
+  id: sales_orders
+  displayName: Sales_Orders
+  version: "1.0.0"
+  status: active
+  priority: primary
+  domain: Sales and Order Management
+  businessProcess: Order-to-Cash
+  owner: TBD
+  description: >
+    End-to-end Order-to-Cash data product covering sales invoices and order
+    fulfilment for GlobalSales_Project. Ingests transactional data from the
+    legacy OLTP source, applies medallion-layer transformations (bronze → silver
+    → gold), and exposes 9 Power BI reports via a Databricks SQL endpoint.
+    History starts 2013-01-01; estimated silver-layer volume ~12 M rows/year on
+    globalsales.fact.sale.
+
+# ─────────────────────────────────────────────
+# 2. PLATFORM
+# ─────────────────────────────────────────────
+platform:
+  targetCatalog: globalsales
+  targetPlatform: Databricks Lakehouse (Unity Catalog)
+  architecture: medallion
+  layers:
+    bronze: stg
+    silver: fact + dim
+    gold: mart
+  storageFormat: Delta
+  governancePlatform: Unity Catalog
+  computeEndpoint: Databricks SQL endpoint (serverless)
+
+# ─────────────────────────────────────────────
+# 3. DATASETS
+# ─────────────────────────────────────────────
+datasets:
+
+  # ── FACT TABLES (silver) ──────────────────
+  facts:
+    - name: globalsales.fact.sale
+      type: delta_table
+      layer: silver
+      description: >
+        Central grain: one row per sales invoice line. Liquid-clustered for
+        efficient date-range and customer/item slice queries.
+      primaryKey:
+        column: sale_key
+        generation: GENERATED ALWAYS AS IDENTITY
+        dataType: BIGINT
+      liquidClustering:
+        - invoice_date_key
+        - customer_key
+        - stock_item_key
+      estimatedRowsPerYear: 12_000_000
+      historyStart: "2013-01-01"
+      incrementalKey: invoice_date_key
+      foreignKeys:
+        - column: customer_key       references: globalsales.dim.customer.customer_key
+        - column: city_key           references: globalsales.dim.city.city_key
+        - column: stock_item_key     references: globalsales.dim.stock_item.stock_item_key
+        - column: salesperson_key    references: globalsales.dim.employee.employee_key
+        - column: invoice_date_key   references: globalsales.dim.date.date_key
+        - column: payment_method_key references: globalsales.dim.payment_method.payment_method_key
+        - column: transaction_type_key references: globalsales.dim.transaction_type.transaction_type_key
+        - column: lineage_key        references: globalsales.stg.lineage.lineage_key
+
+    - name: globalsales.fact.order
+      type: delta_table
+      layer: silver
+      description: >
+        Order fulfilment grain: one row per order line. Partitioned by
+        order_date_key; Z-ordered for customer and item slice performance.
+      primaryKey:
+        column: order_key
+        generation: GENERATED ALWAYS AS IDENTITY
+        dataType: BIGINT
+      partitionBy: [order_date_key]
+      zorderBy:
+        - customer_key
+        - stock_item_key
+      incrementalKey: order_date_key
+      foreignKeys:
+        - column: customer_key     references: globalsales.dim.customer.customer_key
+        - column: stock_item_key   references: globalsales.dim.stock_item.stock_item_key
+        - column: order_date_key   references: globalsales.dim.date.date_key
+        - column: lineage_key      references: globalsales.stg.lineage.lineage_key
+
+  # ── DIMENSION TABLES (silver, SCD2) ──────
+  dimensions:
+    - name: globalsales.dim.customer
+      type: delta_table
+      layer: silver
+      description: Customer dimension — SCD Type 2; PII columns masked via Unity Catalog column mask.
+      scdType: 2
+      piiMasking: true
+      piiColumns:
+        - customer_name
+        - phone_number
+        - fax_number
+        - buying_group
+
+    - name: globalsales.dim.city
+      type: delta_table
+      layer: silver
+      description: >
+        City/geography dimension — SCD Type 2. Legacy GEOGRAPHY column
+        decomposed to location_wkt (STRING), location_lat (DOUBLE),
+        location_lon (DOUBLE).
+      scdType: 2
+      legacyColumnTransformation:
+        sourceColumn: location
+        sourceType: GEOGRAPHY
+        targetColumns:
+          - name: location_wkt
+            type: STRING
+          - name: location_lat
+            type: DOUBLE
+          - name: location_lon
+            type: DOUBLE
+
+    - name: globalsales.dim.stock_item
+      type: delta_table
+      layer: silver
+      description: Stock item (product) dimension — SCD Type 2.
+      scdType: 2
+
+    - name: globalsales.dim.employee
+      type: delta_table
+      layer: silver
+      description: Employee / salesperson dimension — SCD Type 2.
+      scdType: 2
+
+    - name: globalsales.dim.date
+      type: delta_table
+      layer: silver
+      description: >
+        Static calendar dimension spanning 2013-01-01 through at least
+        2030-12-31. Loaded once; no SCD logic required.
+      scdType: 0
+      calendarStart: "2013-01-01"
+      calendarEnd: "2030-12-31"
+
+    - name: globalsales.dim.payment_method
+      type: delta_table
+      layer: silver
+      description: Payment method reference dimension — SCD Type 2.
+      scdType: 2
+
+    - name: globalsales.dim.transaction_type
+      type: delta_table
+      layer: silver
+      description: Transaction type reference dimension — SCD Type 2.
+      scdType: 2
+
+  # ── STAGING / CONTROL TABLES (bronze) ────
+  staging:
+    - name: globalsales.stg.sale_staging
+      type: delta_table
+      layer: bronze
+      description: >
+        Raw sales invoice lines landed from the OLTP source with minimal
+        transformation. Carries lineage_key BIGINT NOT NULL for full audit
+        traceability back to the ETL run that produced each batch.
+      technicalNotes:
+        - "lineage_key BIGINT NOT NULL — references globalsales.stg.lineage"
+        - "No business transformations applied at this layer"
+
+    - name: globalsales.stg.order_staging
+      type: delta_table
+      layer: bronze
+      description: Raw order lines landed from the OLTP source.
+
+    - name: globalsales.stg.lineage
+      type: delta_table
+      layer: bronze
+      description: >
+        ETL run lineage registry. Each nightly run inserts one row; the
+        IDENTITY-generated lineage_key propagates to all staging tables for
+        audit traceability.
+      primaryKey:
+        column: lineage_key
+        generation: GENERATED ALWAYS AS IDENTITY
+        dataType: BIGINT
+
+    - name: globalsales.stg.etl_cutoff
+      type: delta_table
+      layer: bronze
+      description: >
+        Watermark / cutoff control table. Records the high-water mark
+        (last_processed_timestamp) for each incremental source entity so
+        subsequent runs extract only new or changed rows.
+
+    - name: globalsales.stg.dq_rejections
+      type: delta_table
+      layer: bronze
+      description: >
+        Data quality rejection sink. Any row that fails a DQ assertion is
+        written here with the assertion_id, source table, and the original
+        payload for downstream investigation.
+
+  # ── MART OBJECTS (gold) ──────────────────
+  mart:
+    - name: globalsales.mart.v_customer_sales_summary
+      type: materialized_view
+      layer: gold
+      description: >
+        Materialized view aggregating total sales, units sold, profit, and
+        tax amounts per customer. Refreshed as part of the nightly ETL job
+        after silver-layer loads complete.
+      primaryDatasets:
+        - globalsales.fact.sale
+        - globalsales.dim.customer
+
+    - name: globalsales.mart.v_order_details
+      type: view
+      layer: gold
+      description: >
+        Parameterized order-detail view. Accepts :start_date to filter order
+        lines from a given date forward. Used by wwidw-orderdetails report.
+      parameters:
+        - name: start_date
+          type: DATE
+          required: true
+      primaryDatasets:
+        - globalsales.fact.order
+        - globalsales.dim.customer
+        - globalsales.dim.stock_item
+        - globalsales.dim.date
+
+    - name: globalsales.mart.v_order_to_supply_analytics
+      type: view
+      layer: gold
+      description: >
+        Order-to-supply analytics view. Legacy NOLOCK hint removed; isolation
+        managed by Delta transaction log. Joins order facts with supply-side
+        dimensions for procurement analysis.
+      technicalNotes:
+        - "NOLOCK hint from legacy SQL Server query removed — not applicable to Delta"
+      primaryDatasets:
+        - globalsales.fact.order
+        - globalsales.dim.stock_item
+        - globalsales.dim.employee
+
+    - name: globalsales.mart.v_order_to_year_analytics
+      type: view
+      layer: gold
+      description: >
+        Rolling-window order analytics view. Accepts :window_days (default 100)
+        to define the lookback period. Used by wwidw-total-orders-march-per-province.
+      parameters:
+        - name: window_days
+          type: INT
+          required: false
+          defaultValue: 100
+      primaryDatasets:
+        - globalsales.fact.order
+        - globalsales.dim.city
+        - globalsales.dim.date
+
+  # ── FUNCTIONS ────────────────────────────
+  functions:
+    - name: globalsales.fact.get_total_quantity_sold
+      type: sql_udf
+      layer: silver
+      description: >
+        SQL UDF consolidating two legacy UDFs into a single function.
+        Returns total quantity sold for a given stock_item_key and date range.
+        COALESCE NULL guard applied to handle missing order lines gracefully.
+      signature: >
+        get_total_quantity_sold(p_stock_item_key BIGINT, p_start_date DATE, p_end_date DATE)
+        RETURNS BIGINT
+      technicalNotes:
+        - "Consolidates: [legacy fn 1] + [legacy fn 2] — see sourceLineage block"
+        - "COALESCE(SUM(quantity), 0) NULL guard applied"
+
+# ─────────────────────────────────────────────
+# 4. ORCHESTRATION
+# ─────────────────────────────────────────────
+orchestration:
+  platform: Databricks Workflows
+  primaryJob: nightly_etl_main
+  schedule:
+    cron: "0 2 * * *"
+    timezone: UTC
+    description: Nightly incremental load — 02:00 UTC
+  strategy: incremental
+  incrementalKey: invoice_date_key   # fact.sale; order_date_key for fact.order
+  runOrder:
+    - stage: bronze
+      tasks:
+        - land_sale_staging
+        - land_order_staging
+        - update_lineage
+        - update_etl_cutoff
+    - stage: silver_dimensions
+      tasks:
+        - load_dim_date
+        - load_dim_customer
+        - load_dim_city
+        - load_dim_stock_item
+        - load_dim_employee
+        - load_dim_payment_method
+        - load_dim_transaction_type
+    - stage: silver_facts
+      tasks:
+        - load_fact_sale
+        - load_fact_order
+    - stage: gold
+      tasks:
+        - refresh_mart_v_customer_sales_summary
+  errorHandling:
+    onFailure: halt_and_alert
+    alertChannel: TBD
+    maxRetries: 2
+    retryDelayMinutes: 5
+
+# ─────────────────────────────────────────────
+# 5. CALCULATED FIELDS
+# ─────────────────────────────────────────────
+calculatedFields:
+
+  - name: total_excluding_tax
+    outputDataset: globalsales.fact.sale
+    calculationType: derived
+    dataType: DECIMAL(18,2)
+    formula: "quantity * unit_price"
+    description: Line total before tax.
+
+  - name: tax_amount
+    outputDataset: globalsales.fact.sale
+    calculationType: derived
+    dataType: DECIMAL(18,2)
+    formula: "quantity * unit_price * tax_rate"
+    description: Tax component of the line total.
+
+  - name: total_including_tax
+    outputDataset: globalsales.fact.sale
+    calculationType: derived
+    dataType: DECIMAL(18,2)
+    formula: "total_excluding_tax + tax_amount"
+    description: Line total inclusive of tax.
+
+  - name: profit
+    outputDataset: globalsales.fact.sale
+    calculationType: derived
+    dataType: DECIMAL(18,2)
+    formula: "total_excluding_tax - (quantity * unit_cost)"
+    description: Gross profit on the sale line.
+
+  - name: total_dry_items
+    outputDataset: globalsales.fact.sale
+    calculationType: derived
+    dataType: INT
+    formula: "CASE WHEN is_chiller_stock = false THEN quantity ELSE 0 END"
+    description: Count of non-chiller (dry) units on the invoice line.
+
+  - name: total_chiller_items
+    outputDataset: globalsales.fact.sale
+    calculationType: derived
+    dataType: INT
+    formula: "CASE WHEN is_chiller_stock = true THEN quantity ELSE 0 END"
+    description: Count of chiller (refrigerated) units on the invoice line.
+
+  - name: profit_margin_with_factor
+    outputDataset: globalsales.fact.sale
+    calculationType: business_metric
+    dataType: DECIMAL(10,4)
+    formula: "(profit / total_including_tax) * 100 * 1.05"
+    constants:
+      PROFIT_MARGIN_FACTOR: 1.05
+    description: >
+      Profit margin percentage adjusted by the business-defined
+      PROFIT_MARGIN_FACTOR constant (1.05). Used in executive dashboards.
+
+  - name: backorder_count
+    outputDataset: globalsales.fact.order
+    calculationType: derived
+    dataType: INT
+    formula: "CASE WHEN quantity_ordered > quantity_picked THEN 1 ELSE 0 END"
+    description: Flag (1/0) indicating whether the order line has outstanding backorder quantity.
+
+  - name: pick_time_sla_met
+    outputDataset: globalsales.fact.order
+    calculationType: business_metric
+    dataType: BOOLEAN
+    formula: "pick_duration_minutes <= sla_threshold_minutes"
+    description: Boolean indicator of whether the pick-time SLA was met for the order line.
+
+# ─────────────────────────────────────────────
+# 6. DATA QUALITY
+# ─────────────────────────────────────────────
+dataQuality:
+  assertions:
+    - id: DQ-SALE-001
+      target: globalsales.fact.sale
+      column: total_including_tax
+      expression: "total_including_tax IS NOT NULL AND total_including_tax >= 0"
+      severity: critical
+      description: >
+        Every sale line must carry a non-null, non-negative total_including_tax.
+        Violations indicate upstream pricing or transformation errors.
+
+    - id: DQ-SALE-002
+      target: globalsales.fact.sale
+      column: invoice_date_key
+      expression: "invoice_date_key IS NOT NULL"
+      severity: critical
+      description: Invoice date key must be present on every sale fact row.
+
+    - id: DQ-ORDER-001
+      target: globalsales.fact.order
+      column: order_date_key
+      expression: "order_date_key IS NOT NULL"
+      severity: critical
+      description: Order date key must be present on every order fact row.
+
+    - id: DQ-ORDER-RI-001
+      target: globalsales.fact.order
+      column: customer_key
+      expression: >
+        customer_key IN (SELECT customer_key FROM globalsales.dim.customer
+                         WHERE is_current = true)
+      severity: error
+      description: >
+        Referential integrity check — every order must reference an active
+        customer in globalsales.dim.customer.
+
+    - id: DQ-ORDER-RI-002
+      target: globalsales.fact.order
+      column: stock_item_key
+      expression: >
+        stock_item_key IN (SELECT stock_item_key FROM globalsales.dim.stock_item
+                           WHERE is_current = true)
+      severity: error
+      description: >
+        Referential integrity check — every order must reference an active
+        stock item in globalsales.dim.stock_item.
+
+  rejectionSink: globalsales.stg.dq_rejections
+  rejectionSchema:
+    - assertion_id: STRING
+    - source_table: STRING
+    - run_id: BIGINT
+    - rejected_at: TIMESTAMP
+    - payload: STRING   # JSON serialised original row
+
+  rowCountReconciliation:
+    enabled: true
+    tolerance: 0          # zero-tolerance — source count must equal target count
+    description: >
+      After each incremental load the ETL job compares the source extract row
+      count with the rows written to the target Delta table. Any discrepancy
+      causes the run to fail and triggers an alert.
+
+  pendingThresholds:
+    decisionRef: CX-DQ-01
+    description: >
+      Business-defined DQ thresholds (acceptable reject rates, specific column
+      null-rate limits) are pending confirmation. Assertions above use
+      zero-tolerance defaults until CX-DQ-01 is resolved.
+
+# ─────────────────────────────────────────────
+# 7. CONSUMERS
+# ─────────────────────────────────────────────
+consumers:
+  - name: wwidw-sales
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.fact.sale
+      - globalsales.dim.customer
+      - globalsales.dim.date
+      - globalsales.dim.stock_item
+    description: Primary sales performance dashboard.
+
+  - name: wwidw-sales-nofilter
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.fact.sale
+      - globalsales.dim.customer
+      - globalsales.dim.stock_item
+    description: Sales dashboard variant without date or region pre-filters.
+
+  - name: wwidw-dynamic-product-basket-current
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.fact.sale
+      - globalsales.dim.stock_item
+    description: Current-period product basket analysis (dynamic slicing).
+
+  - name: wwidw-dynamic-product-basket-prior
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.fact.sale
+      - globalsales.dim.stock_item
+      - globalsales.dim.date
+    description: Prior-period product basket analysis for YoY comparison.
+
+  - name: wwidw-purchase-sale-per-stockitem
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.fact.sale
+      - globalsales.fact.order
+      - globalsales.dim.stock_item
+    description: Purchase vs. sale volume comparison per stock item.
+
+  - name: wwidw-orderdetails
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.mart.v_order_details
+      - globalsales.dim.customer
+    description: Order detail drill-through report.
+
+  - name: wwidw-orderdetails-by-employee-2024
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.mart.v_order_details
+      - globalsales.dim.employee
+      - globalsales.dim.date
+    description: 2024 order details filtered and grouped by employee / salesperson.
+
+  - name: wwidw-orderitemsrankings
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.fact.order
+      - globalsales.dim.stock_item
+    description: Ranked order item volumes for inventory prioritisation.
+
+  - name: wwidw-total-orders-march-per-province
+    type: power_bi_report
+    accessEndpoint: Databricks SQL endpoint (serverless)
+    primaryDatasets:
+      - globalsales.mart.v_order_to_year_analytics
+      - globalsales.dim.city
+    description: >
+      Total orders for March broken down by province/state; uses rolling-window
+      view globalsales.mart.v_order_to_year_analytics.
+
+# ─────────────────────────────────────────────
+# 8. SLA
+# ─────────────────────────────────────────────
+sla:
+  dataFreshness: T+1   # previous day's data available by morning
+  expectedLoadCompletionUtc: "06:00"   # target: ETL complete before 06:00 UTC
+  retentionPolicy:
+    bronze: 90 days
+    silver: 7 years    # aligned with financial data retention requirements
+    gold: 3 years
+  pickTimeSla:
+    description: Pick-time SLA threshold for order fulfilment monitoring.
+    thresholdMinutes: TBD   # confirmed per CX-DQ-01
+
+# ─────────────────────────────────────────────
+# 9. GOVERNANCE
+# ─────────────────────────────────────────────
+governance:
+  platform: Unity Catalog
+
+  rowLevelSecurity:
+    enabled: true
+    description: >
+      Row-level security enforced via Unity Catalog row filters. Access to
+      sales and order data restricted based on the consumer's assigned role.
+      Role matrix pending — see pendingDecisions CX-P05.
+    affectedDatasets:
+      - globalsales.fact.sale
+      - globalsales.fact.order
+      - globalsales.mart.v_customer_sales_summary
+
+  columnLevelSecurity:
+    enabled: true
+    description: >
+      Column-level permissions enforced via Unity Catalog column masks and
+      DENY grants on sensitive columns.
+    affectedDatasets:
+      - globalsales.dim.customer
+
+  piiMasking:
+    enabled: true
+    description: >
+      PII columns on globalsales.dim.customer are masked using Unity Catalog
+      column mask functions. Unmasked access requires an elevated privilege role.
+    maskedColumns:
+      - dataset: globalsales.dim.customer
+        columns:
+          - customer_name
+          - phone_number
+          - fax_number
+          - buying_group
+    maskingRole: pii_unmasked_role   # role name TBD — pending CX-P05
+
+  auditLineage:
+    enabled: true
+    lineageTable: globalsales.stg.lineage
+    description: Every ETL batch writes a lineage record; lineage_key propagates to all staging tables.
+
+# ─────────────────────────────────────────────
+# 10. PENDING DECISIONS
+# ─────────────────────────────────────────────
+pendingDecisions:
+  - id: CX-P04
+    description: >
+      OLTP-direct connection strategy for the "dae – global – demos" Power BI
+      report. Decide whether to continue allowing direct OLTP connectivity or
+      route this report through the Databricks SQL endpoint like all other
+      consumers.
+    owner: TBD
+    dueDate: TBD
+    impactedArtifacts:
+      - orchestration.primaryJob
+      - consumers (dae-global-demos report)
+
+  - id: CX-P05
+    description: >
+      Access role matrix for Unity Catalog. Define the full set of roles,
+      their row-level and column-level privileges, and the mapping of
+      consumer teams to roles. Unblocks row-level security implementation
+      and PII masking role assignment.
+    owner: TBD
+    dueDate: TBD
+    impactedArtifacts:
+      - governance.rowLevelSecurity
+      - governance.piiMasking
+
+  - id: CX-DQ-01
+    description: >
+      Business-defined data quality thresholds — acceptable rejection rates,
+      null-rate limits per column, and pick-time SLA threshold in minutes.
+      Until resolved, ETL enforces zero-tolerance row count reconciliation and
+      the hard NOT NULL / non-negative assertions defined in dataQuality.assertions.
+    owner: TBD
+    dueDate: TBD
+    impactedArtifacts:
+      - dataQuality.assertions
+      - sla.pickTimeSla.thresholdMinutes
+
+# ─────────────────────────────────────────────
+# 11. TCP ARTIFACTS
+# ─────────────────────────────────────────────
+tcpArtifacts:
+  asIs: >
+    migVisor_workspace/GlobalSales_Project/products/Sales_Orders/current/specifications/as-is.md
+  toBe: >
+    migVisor_workspace/GlobalSales_Project/products/Sales_Orders/current/specifications/to-be.md
+  productTransformationRules: >
+    migVisor_workspace/GlobalSales_Project/products/Sales_Orders/current/specifications/product-transformation-rules/
+
+# ─────────────────────────────────────────────
+# 12. SOURCE LINEAGE  (legacy references — isolated here)
+# ─────────────────────────────────────────────
+sourceLineage:
+  legacySystem: WideWorldImportersDW (SQL Server)
+  legacySourceObjects:
+    - name: "[Integration].[Sale_Staging]"
+      targetDataset: globalsales.stg.sale_staging
+    - name: "[Integration].[Order_Staging]"
+      targetDataset: globalsales.stg.order_staging
+    - name: "[Dimension].[Customer]"
+      targetDataset: globalsales.dim.customer
+    - name: "[Dimension].[City]"
+      targetDataset: globalsales.dim.city
+      note: "GEOGRAPHY column decomposed to location_wkt / location_lat / location_lon"
+    - name: "[Dimension].[Stock Item]"
+      targetDataset: globalsales.dim.stock_item
+    - name: "[Dimension].[Employee]"
+      targetDataset: globalsales.dim.employee
+    - name: "[Dimension].[Date]"
+      targetDataset: globalsales.dim.date
+    - name: "[Dimension].[Payment Method]"
+      targetDataset: globalsales.dim.payment_method
+    - name: "[Dimension].[Transaction Type]"
+      targetDataset: globalsales.dim.transaction_type
+    - name: "[Fact].[Sale]"
+      targetDataset: globalsales.fact.sale
+    - name: "[Fact].[Order]"
+      targetDataset: globalsales.fact.order
+  legacyFunctionsConsolidated:
+    - legacyFn1: TBD   # to be confirmed from as-is analysis
+      legacyFn2: TBD   # to be confirmed from as-is analysis
+      targetFunction: globalsales.fact.get_total_quantity_sold
+      note: "Two legacy UDFs merged; COALESCE NULL guard applied"
+  legacyReportsMigrated:
+    - "[dbo].[wwidw-sales]"
+    - "[dbo].[wwidw-sales-nofilter]"
+    - "[dbo].[wwidw-dynamic-product-basket-current]"
+    - "[dbo].[wwidw-dynamic-product-basket-prior]"
+    - "[dbo].[wwidw-purchase-sale-per-stockitem]"
+    - "[dbo].[wwidw-orderdetails]"
+    - "[dbo].[wwidw-orderdetails-by-employee-2024]"
+    - "[dbo].[wwidw-orderitemsrankings]"
+    - "[dbo].[wwidw-total-orders-march-per-province]"
