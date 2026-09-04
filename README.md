@@ -145,7 +145,7 @@ Existing reports are under `checks/trainee_1/`:
 | `TASK-SEC-002_check_report.md` | 32 | Sales_Orders | 12/100 | Incomplete |
 | `TASK-UC-001_check_report.md` | 33 | Sales_Orders | 44/100 | Incomplete |
 | `TASK-UC-002_check_report.md` | 34 | Sales_Orders | 96/100 | Excellent |
-| `TASK-SC-001_check_report.md` | 35 | — | — | — |
+| `TASK-SC-001_check_report.md` | 35 | Sales_Orders | 3/100 | Incomplete |
 
 ---
 
