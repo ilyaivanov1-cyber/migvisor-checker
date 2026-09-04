@@ -28,6 +28,7 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 | 32 | `task-checker-secrets-rotation-runbook` | "check secrets rotation runbook" | Secrets rotation runbook vs reference (N-section, trigger conditions, rotation procedure, verification, rollback, notification checklist, rotation log) |
 | 33 | `task-checker-uc-permission-audit` | "check uc permission audit" | UC permission audit SQL vs reference (N-section, SHOW GRANTS vs information_schema, catalog/schema/table/view coverage, principal-to-privilege mapping) |
 | 34 | `task-checker-uc-setup` | "check uc setup" | UC bootstrap SQL vs reference (N-section, IF NOT EXISTS guards, catalog + 4 schemas, COMMENT strings, verification step) |
+| 35 | `task-checker-secrets-config` | "check secrets config" | Secrets config Python vs reference (N-section, CLI bootstrap vs accessor module detection, SCOPES dict, scope creation, key registration with getpass, argparse entry point) |
 
 Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
 
@@ -112,6 +113,7 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 | `reference/secrets_rotation_runbook.md` | Secrets rotation runbook (trigger conditions, rotation procedure, verification steps, rollback, notification checklist, rotation log) |
 | `reference/uc_permission_audit.sql` | UC permission audit (SHOW GRANTS per object, schema/table/view coverage, principal-to-privilege mapping) |
 | `reference/uc_setup.sql` | UC bootstrap (catalog creation, 4 medallion schemas, IF NOT EXISTS guards, COMMENT strings, verification) |
+| `reference/secrets_config.py` | Secrets bootstrap CLI (SCOPES dict, REQUIRED_KEYS, scope creation, getpass key registration, argparse --env) |
 
 ---
 
@@ -143,6 +145,7 @@ Existing reports are under `checks/trainee_1/`:
 | `TASK-SEC-002_check_report.md` | 32 | Sales_Orders | 12/100 | Incomplete |
 | `TASK-UC-001_check_report.md` | 33 | Sales_Orders | 44/100 | Incomplete |
 | `TASK-UC-002_check_report.md` | 34 | Sales_Orders | 96/100 | Excellent |
+| `TASK-SC-001_check_report.md` | 35 | — | — | — |
 
 ---
 
