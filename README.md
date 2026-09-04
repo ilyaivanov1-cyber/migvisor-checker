@@ -119,14 +119,14 @@ Existing reports are under `checks/trainee_1/`:
 
 | Report | Skill | Product | Score | Grade |
 |---|---|---|---|---|
-| `TASK-AS-IS-001_check_report.md` (+ v2–v8) | 15 | — | — | — |
-| `TASK-SCOPE-001_check_report.md` (+ v2–v3) | 16 | — | — | — |
-| `TASK-TO-BE-001_check_report.md` (+ v2) | 17 | — | — | — |
-| `TASK-TR-001_check_report.md` | 18 | — | — | — |
-| `TASK-TR-002_check_report.md` | 19 | — | — | — |
+| `TASK-AS-IS-001_check_report.md` (+ v2–v8) | 15 | Sales_Orders | 93/100 | Excellent |
+| `TASK-SCOPE-001_check_report.md` (+ v2–v3) | 16 | Sales_Orders | 100/100 | Excellent |
+| `TASK-TO-BE-001_check_report.md` (+ v2) | 17 | Sales_Orders | 76/100 | Good |
+| `TASK-TR-001_check_report.md` | 18 | Sales_Orders | 88/100 | Good |
+| `TASK-TR-002_check_report.md` | 19 | GlobalSales_Project | 74/100 | Acceptable |
 | `TASK-VAL-001_check_report.md` | 20 | Sales_Orders | 80/100 | Good |
-| `TASK-DESIGN-001_check_report.md` | 21 | Sales_Orders | 52/100 | Needs work |
-| `TASK-REQ-001_check_report.md` | 22 | — | — | — |
+| `TASK-DESIGN-001_check_report.md` | 21 | Sales_Orders | 52/100 | Needs Work |
+| `TASK-REQ-001_check_report.md` | 22 | Sales_Orders | 46/100 | Needs Work |
 | `TASK-TSK-001_check_report.md` (+ v2–v6) | 23 | Sales_Orders | 63/100 | Acceptable |
 | `TASK-DEF-001_check_report.md` | 24 | Sales_Orders | 63/100 | Acceptable |
 | `TASK-BP-001_check_report.md` | 25 | Sales_Orders | 82/100 | Good |
