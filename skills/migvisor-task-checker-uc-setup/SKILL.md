@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-uc-setup
+description: Evaluates a participant's Unity Catalog bootstrap SQL against the reference. Scores catalog creation, four medallion schema creation, IF NOT EXISTS guards, COMMENT strings, and verification step presence.
 ---
 
 # Skill 34 — task-checker-uc-setup

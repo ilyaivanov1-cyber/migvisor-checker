@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-tasks
+description: Evaluates a participant's task list against the reference. Scores task field completeness, acceptance criteria, deliverables, dependencies, and traceability links across all N task entries.
 ---
 
 # Skill: task-checker-tasks

@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-go-live-checklist
+description: Evaluates a participant's go-live checklist against the reference. Scores checkbox format, task references, verification steps, and principal checks across infrastructure, data, security, pipeline, DQ, BI, and docs sections.
 ---
 
 # Skill: task-checker-go-live-checklist

@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-secrets-setup
+description: Evaluates a participant's secrets setup runbook against the reference. Scores scope creation steps, key registration, verification step, dev/prod separation, and credential rotation guidance.
 ---
 
 # Skill: task-checker-secrets-setup

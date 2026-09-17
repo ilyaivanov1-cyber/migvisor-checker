@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-build-plan
+description: Evaluates a participant's SmartBuilder build plan against the reference. Scores all H2-section headings found in the reference using an adaptive N-section rubric, checking SmartBuilder skill names, step sequencing, and deliverable completeness.
 ---
 
 # Skill: task-checker-build-plan

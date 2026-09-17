@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-secrets-config
+description: Evaluates a participant's Databricks Secrets bootstrap Python script against the reference. Scores SCOPES dict, REQUIRED_KEYS, scope creation logic, getpass key registration, argparse --env entry point, and absence of hardcoded credentials.
 ---
 
 # Skill 35 — task-checker-secrets-config

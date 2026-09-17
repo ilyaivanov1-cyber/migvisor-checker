@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-uc-permission-audit
+description: Evaluates a participant's Unity Catalog permission audit SQL against the reference. Scores SHOW GRANTS or information_schema query coverage across catalog, schema, table, and view objects, and principal-to-privilege mapping completeness.
 ---
 
 # Skill 33 — task-checker-uc-permission-audit

@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-pipeline-runbook
+description: Evaluates a participant's pipeline runbook against the reference. Scores monitoring checklist, failure response procedures, reprocessing guide, DQ investigation steps, SQL queries, and escalation path completeness.
 ---
 
 # Skill: task-checker-pipeline-runbook

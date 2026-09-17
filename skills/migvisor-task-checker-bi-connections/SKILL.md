@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-bi-connections
+description: Evaluates a participant's BI connections document against the reference. Scores per-view attribute tables, SQL Warehouse connection string, BI tool steps, known issues section, and access provisioning instructions.
 ---
 
 # Skill: task-checker-bi-connections

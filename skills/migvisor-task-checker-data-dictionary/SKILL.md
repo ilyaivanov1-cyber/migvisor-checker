@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-data-dictionary
+description: Evaluates a participant's data dictionary against the reference. Scores per-table column completeness, nullability flags, FK notation, data types, and SCD-2 glossary presence across all N table sections.
 ---
 
 # Skill: task-checker-data-dictionary

@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-secrets-rotation-runbook
+description: Evaluates a participant's secrets rotation runbook against the reference. Scores trigger conditions, rotation procedure steps, verification, rollback instructions, notification checklist, and rotation log completeness.
 ---
 
 # Skill: task-checker-secrets-rotation-runbook

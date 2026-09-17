@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-requirements
+description: Evaluates a participant's requirements document against the reference. Scores functional requirements, non-functional requirements, data quality requirements, acceptance criteria, and source references across all N sections.
 ---
 
 # Skill: task-checker-requirements

@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-product-definition
+description: Evaluates a participant's product definition YAML against the reference (ODPS 4.1 schema). Scores all N YAML key sections found in the reference using an adaptive rubric, checking key presence, value types, and schema conformance.
 ---
 
 # Skill: task-checker-product-definition

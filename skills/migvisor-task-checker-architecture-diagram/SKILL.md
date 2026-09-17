@@ -1,5 +1,6 @@
 ---
 name: migvisor-task-checker-architecture-diagram
+description: Evaluates a participant's architecture diagram against the reference. Scores pipeline DAG structure, Delta Lake table properties, medallion layer labelling, and lineage chain completeness across all N sections found in the reference.
 ---
 
 # Skill: task-checker-architecture-diagram
