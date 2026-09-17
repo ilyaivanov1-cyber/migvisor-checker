@@ -40,7 +40,6 @@ Each skill also accepts `run <skill-name>` or the full skill number as a trigger
 migvisor-as-is-checker/
 ├── reference/                          # Authoritative reference files (read-only)
 │   ├── as-is.md
-│   ├── as-is-task2.md
 │   ├── product-scope.md
 │   ├── to-be.md
 │   ├── product-transformation-rules.md
@@ -82,7 +81,7 @@ migvisor-as-is-checker/
 │       └── <task-group>/               # e.g. as-is, scope, tasks, design …
 │           └── TASK-*_check_report.md
 └── skills/
-    └── <skill-number>-<skill-name>/
+    └── migvisor-<skill-name>/
         └── SKILL.md
 ```
 
@@ -93,7 +92,6 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 | File | Task |
 |---|---|
 | `reference/as-is.md` | As-is analysis |
-| `reference/as-is-task2.md` | As-is task 2 |
 | `reference/product-scope.md` | Product scope |
 | `reference/to-be.md` | To-be design |
 | `reference/product-transformation-rules.md` | Product transformation rules |
@@ -119,33 +117,9 @@ Skills auto-detect the trainee name from `trainees/` subdirectories. If a single
 
 ## Check Reports
 
-All reports are written to `checks/<trainee_name>/` as `TASK-<ID>-001_check_report.md`. If a report already exists the skill increments the suffix (`_v2`, `_v3`, …) and never overwrites.
+All reports are written to `checks/<trainee_name>/<task-group>/` as `TASK-<ID>-001_check_report.md`. If a report already exists the skill increments the suffix (`_v2`, `_v3`, …) and never overwrites.
 
-Existing reports are under `checks/trainee_1/`:
-
-| Report | Skill | Product | Score | Grade |
-|---|---|---|---|---|
-| `TASK-AS-IS-001_check_report.md` (+ v2–v8) | 15 | Sales_Orders | 93/100 | Excellent |
-| `TASK-SCOPE-001_check_report.md` (+ v2–v3) | 16 | Sales_Orders | 100/100 | Excellent |
-| `TASK-TO-BE-001_check_report.md` (+ v2) | 17 | Sales_Orders | 76/100 | Good |
-| `TASK-TR-001_check_report.md` | 18 | Sales_Orders | 88/100 | Good |
-| `TASK-TR-002_check_report.md` | 19 | GlobalSales_Project | 74/100 | Acceptable |
-| `TASK-VAL-001_check_report.md` | 20 | Sales_Orders | 80/100 | Good |
-| `TASK-DESIGN-001_check_report.md` | 21 | Sales_Orders | 52/100 | Needs Work |
-| `TASK-REQ-001_check_report.md` | 22 | Sales_Orders | 46/100 | Needs Work |
-| `TASK-TSK-001_check_report.md` (+ v2–v6) | 23 | Sales_Orders | 63/100 | Acceptable |
-| `TASK-DEF-001_check_report.md` | 24 | Sales_Orders | 63/100 | Acceptable |
-| `TASK-BP-001_check_report.md` | 25 | Sales_Orders | 82/100 | Good |
-| `TASK-ARCH-001_check_report.md` | 26 | Sales_Orders | 46/100 | Needs Work |
-| `TASK-GL-001_check_report.md` | 27 | Sales_Orders | 40/100 | Incomplete |
-| `TASK-DD-001_check_report.md` | 28 | Sales_Orders | 45/100 | Needs Work |
-| `TASK-RB-001_check_report.md` | 29 | Sales_Orders | 32/100 | Incomplete |
-| `TASK-BI-001_check_report.md` | 30 | Sales_Orders | 13/100 | Incomplete |
-| `TASK-SEC-001_check_report.md` | 31 | Sales_Orders | 24/100 | Incomplete |
-| `TASK-SEC-002_check_report.md` | 32 | Sales_Orders | 12/100 | Incomplete |
-| `TASK-UC-001_check_report.md` | 33 | Sales_Orders | 44/100 | Incomplete |
-| `TASK-UC-002_check_report.md` | 34 | Sales_Orders | 96/100 | Excellent |
-| `TASK-SC-001_check_report.md` | 35 | Sales_Orders | 3/100 | Incomplete |
+The `checks/trainee_1/` directory structure is preserved and ready for new submissions. No reports have been generated yet.
 
 ---
 
