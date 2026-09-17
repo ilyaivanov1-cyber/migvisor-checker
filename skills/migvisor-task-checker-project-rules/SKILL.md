@@ -1,5 +1,5 @@
 ---
-name: 19-migvisor-task-checker-project-rules
+name: migvisor-task-checker-project-rules
 description: Validates a participant's project-level transformation rules document against the authoritative final version. Works with any project, any number of dimensions/sections. Compares rule IDs, intents, platform targets, counts, and application order. Scores per dimension, flags missing or inaccurate rules, and produces a scored summary with 5–6 sentence prose.
 ---
 
@@ -15,7 +15,7 @@ description: Validates a participant's project-level transformation rules docume
   - "compare project transformation rules"
   - "score project rules"
   - "check task project rules"
-  - "run 19-migvisor-task-checker-project-rules"
+  - "run migvisor-task-checker-project-rules"
 
 ---
 

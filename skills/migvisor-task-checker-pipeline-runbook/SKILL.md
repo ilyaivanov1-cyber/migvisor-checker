@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-pipeline-runbook
+---
+
 # Skill: task-checker-pipeline-runbook
 
 ## Identity
@@ -21,7 +25,7 @@ This skill activates on any of:
 - "score pipeline runbook"
 - "compare pipeline runbook"
 - "run task-checker-pipeline-runbook"
-- "run 29-migvisor-task-checker-pipeline-runbook"
+- "run migvisor-task-checker-pipeline-runbook"
 - "29"
 
 ---
@@ -32,7 +36,7 @@ This skill activates on any of:
 /task-checker-pipeline-runbook
 /task-checker-pipeline-runbook participant=<path> reference=<path> trainee=<name>
 run task-checker-pipeline-runbook
-run 29-migvisor-task-checker-pipeline-runbook
+migvisor-task-checker-pipeline-runbook
 ```
 
 ---

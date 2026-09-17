@@ -1,5 +1,5 @@
 ---
-name: 16-migvisor-task-checker-scope
+name: migvisor-task-checker-scope
 description: Evaluates a participant's product-scope file against a reference scope file. Works with any product, any file names, any workspace structure, and any number of sections. Scores all sections found in the reference (0–100 total), provides per-section comments, flags improvement areas, and acknowledges valid alternative approaches.
 ---
 
@@ -15,7 +15,7 @@ description: Evaluates a participant's product-scope file against a reference sc
   - "score scope"
   - "review scope task"
   - "check task scope"
-  - "run 16-migvisor-task-checker-scope"
+  - "run migvisor-task-checker-scope"
 
 ---
 

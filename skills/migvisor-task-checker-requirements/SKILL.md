@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-requirements
+---
+
 # Skill: task-checker-requirements
 
 ## Identity
@@ -20,7 +24,7 @@ This skill activates on any of:
 - "compare requirements"
 - "score requirements"
 - "run task-checker-requirements"
-- "run 22-migvisor-task-checker-requirements"
+- "run migvisor-task-checker-requirements"
 - "22"
 
 ---
@@ -31,7 +35,7 @@ This skill activates on any of:
 /task-checker-requirements
 /task-checker-requirements participant=<path> reference=<path> trainee=<name>
 run task-checker-requirements
-run 22-migvisor-task-checker-requirements
+migvisor-task-checker-requirements
 ```
 
 ---

@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-tasks
+---
+
 # Skill: task-checker-tasks
 
 ## Identity
@@ -21,7 +25,7 @@ This skill activates on any of:
 - "score tasks"
 - "check my work plan"
 - "run task-checker-tasks"
-- "run 23-migvisor-task-checker-tasks"
+- "run migvisor-task-checker-tasks"
 - "23"
 
 ---
@@ -32,7 +36,7 @@ This skill activates on any of:
 /task-checker-tasks
 /task-checker-tasks participant=<path> reference=<path> trainee=<name>
 run task-checker-tasks
-run 23-migvisor-task-checker-tasks
+migvisor-task-checker-tasks
 ```
 
 ---

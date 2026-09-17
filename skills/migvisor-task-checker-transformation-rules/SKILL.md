@@ -1,5 +1,5 @@
 ---
-name: 18-migvisor-task-checker-transformation-rules
+name: migvisor-task-checker-transformation-rules
 description: Evaluates a participant's transformation rules document against a reference (final) version. Works with any project or product, any number of dimensions/sections. Scores rule coverage, intent accuracy, platform correctness, and structure. Provides per-dimension comments, flags missing or incorrect rules, and surfaces a scored summary.
 ---
 
@@ -15,7 +15,7 @@ description: Evaluates a participant's transformation rules document against a r
   - "score transformation rules"
   - "review transformation rules"
   - "check task transformation rules"
-  - "run 18-migvisor-task-checker-transformation-rules"
+  - "run migvisor-task-checker-transformation-rules"
 
 ---
 

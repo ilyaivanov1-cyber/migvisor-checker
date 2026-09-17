@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-bi-connections
+---
+
 # Skill: task-checker-bi-connections
 
 ## Identity
@@ -22,7 +26,7 @@ This skill activates on any of:
 - "compare bi connections"
 - "check bi_connections"
 - "run task-checker-bi-connections"
-- "run 30-migvisor-task-checker-bi-connections"
+- "run migvisor-task-checker-bi-connections"
 - "30"
 
 ---
@@ -33,7 +37,7 @@ This skill activates on any of:
 /task-checker-bi-connections
 /task-checker-bi-connections participant=<path> reference=<path> trainee=<name>
 run task-checker-bi-connections
-run 30-migvisor-task-checker-bi-connections
+migvisor-task-checker-bi-connections
 ```
 
 ---

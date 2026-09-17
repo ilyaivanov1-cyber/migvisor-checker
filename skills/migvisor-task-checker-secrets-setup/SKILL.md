@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-secrets-setup
+---
+
 # Skill: task-checker-secrets-setup
 
 ## Identity
@@ -22,7 +26,7 @@ This skill activates on any of:
 - "compare secrets setup"
 - "check secrets_setup"
 - "run task-checker-secrets-setup"
-- "run 31-migvisor-task-checker-secrets-setup"
+- "run migvisor-task-checker-secrets-setup"
 - "31"
 
 ---
@@ -33,7 +37,7 @@ This skill activates on any of:
 /task-checker-secrets-setup
 /task-checker-secrets-setup participant=<path> reference=<path> trainee=<name>
 run task-checker-secrets-setup
-run 31-migvisor-task-checker-secrets-setup
+migvisor-task-checker-secrets-setup
 ```
 
 ---

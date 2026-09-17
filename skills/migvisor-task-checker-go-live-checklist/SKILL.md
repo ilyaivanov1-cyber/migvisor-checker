@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-go-live-checklist
+---
+
 # Skill: task-checker-go-live-checklist
 
 ## Identity
@@ -22,7 +26,7 @@ This skill activates on any of:
 - "compare go live checklist"
 - "check my go live checklist"
 - "run task-checker-go-live-checklist"
-- "run 27-migvisor-task-checker-go-live-checklist"
+- "run migvisor-task-checker-go-live-checklist"
 - "27"
 
 ---
@@ -33,7 +37,7 @@ This skill activates on any of:
 /task-checker-go-live-checklist
 /task-checker-go-live-checklist participant=<path> reference=<path> trainee=<name>
 run task-checker-go-live-checklist
-run 27-migvisor-task-checker-go-live-checklist
+migvisor-task-checker-go-live-checklist
 ```
 
 ---

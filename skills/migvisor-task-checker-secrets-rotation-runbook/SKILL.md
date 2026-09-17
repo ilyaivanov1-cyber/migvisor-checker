@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-secrets-rotation-runbook
+---
+
 # Skill: task-checker-secrets-rotation-runbook
 
 ## Identity
@@ -22,7 +26,7 @@ This skill activates on any of:
 - "compare secrets rotation runbook"
 - "check secrets_rotation_runbook"
 - "run task-checker-secrets-rotation-runbook"
-- "run 32-migvisor-task-checker-secrets-rotation-runbook"
+- "run migvisor-task-checker-secrets-rotation-runbook"
 - "32"
 
 ---
@@ -33,7 +37,7 @@ This skill activates on any of:
 /task-checker-secrets-rotation-runbook
 /task-checker-secrets-rotation-runbook participant=<path> reference=<path> trainee=<name>
 run task-checker-secrets-rotation-runbook
-run 32-migvisor-task-checker-secrets-rotation-runbook
+migvisor-task-checker-secrets-rotation-runbook
 ```
 
 ---

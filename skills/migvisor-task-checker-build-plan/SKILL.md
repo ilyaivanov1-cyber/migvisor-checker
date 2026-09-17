@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-build-plan
+---
+
 # Skill: task-checker-build-plan
 
 ## Identity
@@ -21,7 +25,7 @@ This skill activates on any of:
 - "compare build plan"
 - "check my build plan"
 - "run task-checker-build-plan"
-- "run 25-migvisor-task-checker-build-plan"
+- "run migvisor-task-checker-build-plan"
 - "25"
 
 ---
@@ -32,7 +36,7 @@ This skill activates on any of:
 /task-checker-build-plan
 /task-checker-build-plan participant=<path> reference=<path> trainee=<name>
 run task-checker-build-plan
-run 25-migvisor-task-checker-build-plan
+migvisor-task-checker-build-plan
 ```
 
 ---

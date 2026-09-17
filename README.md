@@ -6,31 +6,31 @@ A set of Claude Code skills for evaluating and scoring MigVisor pipeline deliver
 
 ## Skills
 
-| # | Skill | Trigger | Evaluates |
-|---|---|---|---|
-| 15 | `task-checker-as-is` | "check my as-is" | As-is analysis document vs reference |
-| 16 | `task-checker-scope` | "check my scope" | Product scope document vs reference |
-| 17 | `task-checker-to-be` | "check my to-be" | To-be design document vs reference (SQL + Mermaid + Python) |
-| 18 | `task-checker-transformation-rules` | "check my transformation rules" | Product-level transformation rules vs reference |
-| 19 | `task-checker-project-rules` | "check my project rules" | Project-level transformation rules vs reference |
-| 20 | `task-checker-validation-report` | "check my validation report" | SmartBuilder validation report vs reference |
-| 21 | `task-checker-design` | "check my design" | Technical design document vs reference (DDL + MERGE + Python + diagrams) |
-| 22 | `task-checker-requirements` | "check my requirements" | Requirements document vs reference (FR + NFR + DQR + AC + source refs) |
-| 23 | `task-checker-tasks` | "check my tasks" | Task list vs reference (task fields, AC, deliverables, dependencies, traceability) |
-| 24 | `task-checker-product-definition` | "check product definition" | Product definition YAML vs reference (ODPS 4.1, N-section YAML-key adaptive scoring) |
-| 25 | `task-checker-build-plan` | "check build plan" | Build plan Markdown vs reference (N-section H2-heading adaptive scoring, SmartBuilder skills) |
-| 26 | `task-checker-architecture-diagram` | "check architecture diagram" | Architecture diagram Markdown vs reference (N-section, pipeline DAG, table properties, lineage chain) |
-| 27 | `task-checker-go-live-checklist` | "check go live checklist" | Go-live checklist vs reference (N-section, checkbox format, task refs, verification steps, principal checks) |
-| 28 | `task-checker-data-dictionary` | "check data dictionary" | Data dictionary Markdown vs reference (N-section per table, column completeness, nullability, FK notation, SCD-2 check) |
-| 29 | `task-checker-pipeline-runbook` | "check pipeline runbook" | Pipeline runbook vs reference (N-section, monitoring checklist, failure response, SQL queries, escalation path) |
-| 30 | `task-checker-bi-connections` | "check bi connections" | BI connections document vs reference (N-section, per-view attribute tables, connection string, BI tool steps, known issues) |
-| 31 | `task-checker-secrets-setup` | "check secrets setup" | Secrets setup runbook vs reference (N-section, scope creation, key registration, verification step, dev/prod separation) |
-| 32 | `task-checker-secrets-rotation-runbook` | "check secrets rotation runbook" | Secrets rotation runbook vs reference (N-section, trigger conditions, rotation procedure, verification, rollback, notification checklist, rotation log) |
-| 33 | `task-checker-uc-permission-audit` | "check uc permission audit" | UC permission audit SQL vs reference (N-section, SHOW GRANTS vs information_schema, catalog/schema/table/view coverage, principal-to-privilege mapping) |
-| 34 | `task-checker-uc-setup` | "check uc setup" | UC bootstrap SQL vs reference (N-section, IF NOT EXISTS guards, catalog + 4 schemas, COMMENT strings, verification step) |
-| 35 | `task-checker-secrets-config` | "check secrets config" | Secrets config Python vs reference (N-section, CLI bootstrap vs accessor module detection, SCOPES dict, scope creation, key registration with getpass, argparse entry point) |
+| Skill | Trigger | Evaluates |
+|---|---|---|
+| `migvisor-task-checker-as-is` | "check my as-is" | As-is analysis document vs reference |
+| `migvisor-task-checker-scope` | "check my scope" | Product scope document vs reference |
+| `migvisor-task-checker-to-be` | "check my to-be" | To-be design document vs reference (SQL + Mermaid + Python) |
+| `migvisor-task-checker-transformation-rules` | "check my transformation rules" | Product-level transformation rules vs reference |
+| `migvisor-task-checker-project-rules` | "check my project rules" | Project-level transformation rules vs reference |
+| `migvisor-task-checker-validation-report` | "check my validation report" | SmartBuilder validation report vs reference |
+| `migvisor-task-checker-design` | "check my design" | Technical design document vs reference (DDL + MERGE + Python + diagrams) |
+| `migvisor-task-checker-requirements` | "check my requirements" | Requirements document vs reference (FR + NFR + DQR + AC + source refs) |
+| `migvisor-task-checker-tasks` | "check my tasks" | Task list vs reference (task fields, AC, deliverables, dependencies, traceability) |
+| `migvisor-task-checker-product-definition` | "check product definition" | Product definition YAML vs reference (ODPS 4.1, N-section YAML-key adaptive scoring) |
+| `migvisor-task-checker-build-plan` | "check build plan" | Build plan Markdown vs reference (N-section H2-heading adaptive scoring, SmartBuilder skills) |
+| `migvisor-task-checker-architecture-diagram` | "check architecture diagram" | Architecture diagram Markdown vs reference (N-section, pipeline DAG, table properties, lineage chain) |
+| `migvisor-task-checker-go-live-checklist` | "check go live checklist" | Go-live checklist vs reference (N-section, checkbox format, task refs, verification steps, principal checks) |
+| `migvisor-task-checker-data-dictionary` | "check data dictionary" | Data dictionary Markdown vs reference (N-section per table, column completeness, nullability, FK notation, SCD-2 check) |
+| `migvisor-task-checker-pipeline-runbook` | "check pipeline runbook" | Pipeline runbook vs reference (N-section, monitoring checklist, failure response, SQL queries, escalation path) |
+| `migvisor-task-checker-bi-connections` | "check bi connections" | BI connections document vs reference (N-section, per-view attribute tables, connection string, BI tool steps, known issues) |
+| `migvisor-task-checker-secrets-setup` | "check secrets setup" | Secrets setup runbook vs reference (N-section, scope creation, key registration, verification step, dev/prod separation) |
+| `migvisor-task-checker-secrets-rotation-runbook` | "check secrets rotation runbook" | Secrets rotation runbook vs reference (N-section, trigger conditions, rotation procedure, verification, rollback, notification checklist, rotation log) |
+| `migvisor-task-checker-uc-permission-audit` | "check uc permission audit" | UC permission audit SQL vs reference (N-section, SHOW GRANTS vs information_schema, catalog/schema/table/view coverage, principal-to-privilege mapping) |
+| `migvisor-task-checker-uc-setup` | "check uc setup" | UC bootstrap SQL vs reference (N-section, IF NOT EXISTS guards, catalog + 4 schemas, COMMENT strings, verification step) |
+| `migvisor-task-checker-secrets-config` | "check secrets config" | Secrets config Python vs reference (N-section, CLI bootstrap vs accessor module detection, SCOPES dict, scope creation, key registration with getpass, argparse entry point) |
 
-Each skill also accepts `run <skill-name>` or the full skill number as a trigger.
+Each skill also accepts `run <skill-name>` as a trigger.
 
 ---
 

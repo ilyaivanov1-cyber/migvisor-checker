@@ -1,5 +1,5 @@
 ---
-name: 15-migvisor-task-checker-as-is
+name: migvisor-task-checker-as-is
 description: Evaluates a participant's as-is submission against a reference file. Works with any product, any file names, any workspace structure, and any number of sections. Scores all sections found in the reference (0–100 total), provides per-section comments, flags improvement areas, and acknowledges valid alternative approaches.
 ---
 
@@ -15,7 +15,7 @@ description: Evaluates a participant's as-is submission against a reference file
   - "score as-is"
   - "review as-is task"
   - "check task as-is"
-  - "run 15-migvisor-task-checker"
+  - "run migvisor-task-checker-as-is"
 
 ---
 

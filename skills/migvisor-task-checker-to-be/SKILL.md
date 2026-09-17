@@ -1,5 +1,5 @@
 ---
-name: 17-migvisor-task-checker-to-be
+name: migvisor-task-checker-to-be
 description: Evaluates a participant's to-be design document against a reference. Works with any product, any file names, any workspace structure, and any number of sections. Scores all sections found in the reference (0–100 total), with dedicated checks for SQL code blocks, Mermaid diagrams, and Python code. Provides per-section comments, flags improvement areas, and acknowledges valid alternative approaches.
 ---
 
@@ -15,7 +15,7 @@ description: Evaluates a participant's to-be design document against a reference
   - "score to-be"
   - "review to-be task"
   - "check task to-be"
-  - "run 17-migvisor-task-checker-to-be"
+  - "run migvisor-task-checker-to-be"
 
 ---
 

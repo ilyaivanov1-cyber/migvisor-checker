@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-architecture-diagram
+---
+
 # Skill: task-checker-architecture-diagram
 
 ## Identity
@@ -22,7 +26,7 @@ This skill activates on any of:
 - "check my architecture diagram"
 - "check arch diagram"
 - "run task-checker-architecture-diagram"
-- "run 26-migvisor-task-checker-architecture-diagram"
+- "run migvisor-task-checker-architecture-diagram"
 - "26"
 
 ---
@@ -33,7 +37,7 @@ This skill activates on any of:
 /task-checker-architecture-diagram
 /task-checker-architecture-diagram participant=<path> reference=<path> trainee=<name>
 run task-checker-architecture-diagram
-run 26-migvisor-task-checker-architecture-diagram
+migvisor-task-checker-architecture-diagram
 ```
 
 ---

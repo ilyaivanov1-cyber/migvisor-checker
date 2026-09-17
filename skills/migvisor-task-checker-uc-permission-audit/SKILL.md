@@ -1,10 +1,14 @@
+---
+name: migvisor-task-checker-uc-permission-audit
+---
+
 # Skill 33 — task-checker-uc-permission-audit
 
 ## Identity
 
 - **Skill number:** 33
 - **Skill name:** task-checker-uc-permission-audit
-- **Trigger phrases:** "check uc permission audit", "check my uc permission audit", "run 33", "run skill 33"
+- **Trigger phrases:** "check uc permission audit", "check my uc permission audit", "run 33", "run skill 33", "run migvisor-task-checker-uc-permission-audit"
 - **Participant file:** `trainees/<trainee_name>/uc_permission_audit.sql`
 - **Reference file:** `reference/uc_permission_audit.sql`
 - **Output path:** `checks/<trainee_name>/uc-permission-audit/TASK-UC-001_check_report.md`

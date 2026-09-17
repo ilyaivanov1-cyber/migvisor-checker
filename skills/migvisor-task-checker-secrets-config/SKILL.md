@@ -1,10 +1,14 @@
+---
+name: migvisor-task-checker-secrets-config
+---
+
 # Skill 35 — task-checker-secrets-config
 
 ## Identity
 
 - **Skill number:** 35
 - **Skill name:** task-checker-secrets-config
-- **Trigger phrases:** "check secrets config", "check my secrets config", "run 35", "run skill 35"
+- **Trigger phrases:** "check secrets config", "check my secrets config", "run 35", "run skill 35", "run migvisor-task-checker-secrets-config"
 - **Participant file:** `trainees/<trainee_name>/secrets_config.py`
 - **Reference file:** `reference/secrets_config.py`
 - **Output path:** `checks/<trainee_name>/secrets-config/TASK-SC-001_check_report.md`

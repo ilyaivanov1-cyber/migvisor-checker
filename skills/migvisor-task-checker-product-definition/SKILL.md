@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-product-definition
+---
+
 # Skill: task-checker-product-definition
 
 ## Identity
@@ -22,7 +26,7 @@ This skill activates on any of:
 - "check product-definition yaml"
 - "validate product-definition yaml"
 - "run task-checker-product-definition"
-- "run 24-migvisor-task-checker-product-definition"
+- "run migvisor-task-checker-product-definition"
 - "24"
 
 ---
@@ -33,7 +37,7 @@ This skill activates on any of:
 /task-checker-product-definition
 /task-checker-product-definition participant=<path> reference=<path> trainee=<name>
 run task-checker-product-definition
-run 24-migvisor-task-checker-product-definition
+migvisor-task-checker-product-definition
 ```
 
 ---

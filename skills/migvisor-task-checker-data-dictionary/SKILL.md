@@ -1,3 +1,7 @@
+---
+name: migvisor-task-checker-data-dictionary
+---
+
 # Skill: task-checker-data-dictionary
 
 ## Identity
@@ -21,7 +25,7 @@ This skill activates on any of:
 - "compare data dictionary"
 - "check my data dictionary"
 - "run task-checker-data-dictionary"
-- "run 28-migvisor-task-checker-data-dictionary"
+- "run migvisor-task-checker-data-dictionary"
 - "28"
 
 ---
@@ -32,7 +36,7 @@ This skill activates on any of:
 /task-checker-data-dictionary
 /task-checker-data-dictionary participant=<path> reference=<path> trainee=<name>
 run task-checker-data-dictionary
-run 28-migvisor-task-checker-data-dictionary
+migvisor-task-checker-data-dictionary
 ```
 
 ---

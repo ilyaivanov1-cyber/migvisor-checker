@@ -1,5 +1,5 @@
 ---
-name: 21-migvisor-task-checker-design
+name: migvisor-task-checker-design
 description: Evaluates a participant's design.md against a reference design_final.md. Works with any product, any number of top-level sections. Validates SQL DDL correctness (CREATE TABLE, MERGE, VIEW, GRANT), Python code patterns, and ASCII/Mermaid diagram completeness. Scores per section with adaptive criteria, applies auto-deducts, and produces a scored summary with 5–6 sentence prose.
 ---
 
@@ -15,7 +15,7 @@ description: Evaluates a participant's design.md against a reference design_fina
   - "compare design"
   - "score design"
   - "check task design"
-  - "run 21-migvisor-task-checker-design"
+  - "run migvisor-task-checker-design"
 
 ---
 

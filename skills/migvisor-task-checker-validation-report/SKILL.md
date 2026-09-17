@@ -1,5 +1,5 @@
 ---
-name: 20-migvisor-task-checker-validation-report
+name: migvisor-task-checker-validation-report
 description: Evaluates a participant's validation report against a reference final report. Works with any product, any number of artifact categories/sections. Scores completeness, verdict documentation, finding quality, metrics accuracy, and structure. Provides per-section comments and a scored summary with 5–6 sentence prose.
 ---
 
@@ -15,7 +15,7 @@ description: Evaluates a participant's validation report against a reference fin
   - "score validation report"
   - "review validation report"
   - "check task validation report"
-  - "run 20-migvisor-task-checker-validation-report"
+  - "run migvisor-task-checker-validation-report"
 
 ---
 

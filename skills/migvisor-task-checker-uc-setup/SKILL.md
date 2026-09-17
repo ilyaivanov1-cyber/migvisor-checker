@@ -1,10 +1,14 @@
+---
+name: migvisor-task-checker-uc-setup
+---
+
 # Skill 34 — task-checker-uc-setup
 
 ## Identity
 
 - **Skill number:** 34
 - **Skill name:** task-checker-uc-setup
-- **Trigger phrases:** "check uc setup", "check my uc setup", "run 34", "run skill 34"
+- **Trigger phrases:** "check uc setup", "check my uc setup", "run 34", "run skill 34", "run migvisor-task-checker-uc-setup"
 - **Participant file:** `trainees/<trainee_name>/uc_setup.sql`
 - **Reference file:** `reference/uc_setup.sql`
 - **Output path:** `checks/<trainee_name>/uc-setup/TASK-UC-002_check_report.md`
