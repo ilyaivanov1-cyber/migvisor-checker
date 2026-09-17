@@ -474,6 +474,21 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 ---
 
+### Domain evaluation notes
+
+**Three requirement categories** — the reference documents 32 requirements: FR (11 functional), NFR (12 non-functional), DQR (9 data quality). A submission covering only FR and NFR (no DQR) loses all DQR Coverage points.
+
+**Priority classification** — 26 must-have, 6 should-have: FR-008 (conditional OPTIMIZE), NFR-002 (uptime), NFR-012 (retention), DQR-005/006/007 (business-rule data conditions). A submission without priority classification scores 0 on the Issues/gaps criterion for the Priority section.
+
+**Known requirement errors to flag** — a well-researched submission calls out at least one:
+- FR-007: MERGE key specified as single-column (`wwi_purchase_order_id`) but fact grain is 4-column (order-line composite) — known defect
+- NFR-007: description says "9 columns" but lists 10 — count mismatch
+- NFR-004: references `fk_column` which does not exist in the schema (`violation_column` is correct)
+
+Submissions that reproduce these errors without flagging them score full Coverage but 0 on Issues/gaps. Submissions that call them out earn maximum Issues/gaps points.
+
+**Negative acceptance criteria** — well-written DQR ACs include rejection-path tests (e.g., "when row count delta exceeds threshold, pipeline halts and writes to dq_rejections"). Submissions with only positive ACs score ≤ 60% on Specificity per DQR requirement.
+
 ## Score Interpretation
 
 | Score | Grade | Recommended action |

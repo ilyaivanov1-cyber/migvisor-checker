@@ -650,6 +650,25 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 ---
 
+### Domain evaluation notes
+
+**ODPS 4.1 five-block structure** — a complete product-definition.yaml has 5 top-level blocks:
+1. `details` — product metadata (name, version, status, owner, description)
+2. `x-inputPorts` — ODPS extension (x- prefix marks it non-standard); lists 5 input ports; `purchase_staging` and `etl_cutoff` are owned by this product itself, not upstream products
+3. `dataAccess` — 2 access profiles (analyst read-only, ETL service account read-write)
+4. `dataQuality` — 5 dimensions: completeness (BLOCKING), uniqueness, validity, timeliness, accuracy
+5. `SLA` — 4 dimensions: freshness, availability, recovery time, retention
+
+A submission missing any block scores 0 on Coverage for that block.
+
+**x-inputPorts is an ODPS extension** — the `x-` prefix indicates this block is not part of standard ODPS 4.1. Submissions that treat all 5 input ports as external upstream dependencies are inaccurate: `purchase_staging` and `etl_cutoff` are this product's own tables.
+
+**dataQuality blocking dimension** — `completeness` is the only BLOCKING check, mapping to QA-P001 (row count reconciliation). The other 4 dimensions are non-blocking. A submission that marks multiple dimensions as blocking is inaccurate.
+
+**QA rule cross-references** — the dataQuality block should cite QA-P001 through QA-P005 by rule ID. Prose descriptions without rule ID citations score lower on Specificity.
+
+**uniqueness dimension** — in this product, the `uniqueness` dimension is used for orphan detection (orphan surrogate keys in the fact table), not for checking actual uniqueness constraints. Submissions that describe it as a primary-key uniqueness check are inaccurate.
+
 ## Score Interpretation
 
 | Score | Grade | Recommended action |
