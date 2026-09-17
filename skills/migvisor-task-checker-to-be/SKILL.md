@@ -294,6 +294,17 @@ For each SQL block in the participant section:
 | SQL block present in reference but completely absent in participant | −3 pts |
 | Python/PySpark block present in reference but completely absent in participant | −3 pts |
 | Calculations section: formulas present but no SQL or code implementation shown | −4 pts |
+| SCD-2 validity columns (valid_from / valid_to) typed as `TIMESTAMP` or `DATETIME` when reference uses `DATE` (TY-P001) | −4 pts |
+| Column-level Lineage section present but traces fewer than 10 distinct pipeline steps when reference has 22 | −4 pts |
+| Definition section present but lists fewer than 8 deliverables when reference has 16 | −3 pts |
+
+### Domain evaluation notes
+
+**Column-level Lineage section** — the reference traces a 22-step pipeline from source extraction through MERGE into the fact table. Submissions that describe the pipeline at a high level ("extract, transform, load") without naming individual notebook steps, transformation functions, or the sk_resolver.py surrogate-key lookup score low on Specificity (< 60%).
+
+**SCD-2 validity columns** — rule TY-P001 overrides the default type mapping: `valid_from` and `valid_to` columns must use `DATE`, not `TIMESTAMP` (the default for DATETIME2 sources). This is a deliberate project exception. Submissions that use `TIMESTAMP` for these columns should be flagged as a Technical accuracy deduction.
+
+**sk_resolver.py pattern** — well-researched submissions mention that surrogate-key resolution is implemented in a shared Python utility (`sk_resolver.py`) using a temporal range JOIN on validity dates with a ROW_NUMBER() tie-breaker and COALESCE(…, 0) fallback for unknown dimension members. Absence of any surrogate-key resolution detail scores 0 on the Issues/gaps criterion for the Lineage section.
 
 ---
 

@@ -318,6 +318,9 @@ Calculate global penalties after all section scores are summed:
 | Missing H2 section present in reference but absent in participant | −5 pts each | Max −15 pts total |
 | No notebook names or task names anywhere in document | −3 pts | Skip if `doc_has_notebook_refs` is true |
 | SQL present but uses wrong catalog (reference catalog instead of participant's) | −2 pts | Only if SQL blocks exist |
+| SK resolution failure recovery procedure absent when reference documents it as a distinct section | −4 pts |
+| Cutover checklist has fewer than 6 steps when reference has 9 | −3 pts |
+| Diagnostic queries section has fewer than 3 SQL queries when reference has 5 | −3 pts |
 
 Compute:
 ```
@@ -325,6 +328,18 @@ subtotal     = sum of all section weighted scores
 auto_deducts = sum of applicable penalties (negative)
 total_score  = max(subtotal + auto_deducts, 0)
 ```
+
+---
+
+### Domain evaluation notes
+
+**Three source notebooks** — the reference runbook covers 3 task notebooks: `nb_extract_watermark` (reads and advances the ETL watermark), `nb_extract_purchase` (extracts from SQL Server into staging), `migrate_staged_purchase_data` (transforms staging into fact via MERGE). Failure recovery procedures should be described per-notebook. A submission that describes only 1–2 notebooks is missing proportional Coverage.
+
+**SK resolution failure section** — the reference includes a dedicated section for surrogate-key resolution failures (when sk_resolver.py returns 0). Recovery steps: pause the pipeline, investigate the dimension table for the missing key, optionally insert a placeholder row, re-trigger the affected task. This is distinct from generic ETL failure recovery and should score as a separate Coverage criterion.
+
+**9-step cutover checklist** — covering: environment validation, final source extract, staging reconciliation, dimension pre-load verification, fact MERGE execution, QA rule execution, BI report smoke test, access grant confirmation, and go-live sign-off. A submission with fewer than 6 named steps scores proportionally on Coverage.
+
+**5 diagnostic queries** — watermark state, staging row count, fact row count, orphan SK detection, and dq_rejections summary. A submission with only 1–2 queries scores proportionally on Coverage for the diagnostics section.
 
 ---
 

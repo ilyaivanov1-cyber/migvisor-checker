@@ -436,6 +436,10 @@ Calculate global penalties after all section scores are summed:
 | Platform target inconsistent within document (e.g., Snowflake in one section, Databricks in another) | −3 pts | Internal contradiction |
 | Input port location uses hardcoded connection string (not secrets/config reference) | −2 pts | Security concern; secrets pattern expected |
 | More than 40% of output port fields missing type declarations | −2 pts | Schema incomplete |
+| x-inputPorts extension block absent when reference documents 5 input ports | −4 pts |
+| dataQuality block absent or has fewer than 3 dimensions when reference has 5 | −4 pts |
+| completeness dimension not marked as BLOCKING when it maps to the row-count reconciliation QA rule | −3 pts |
+| Product status field left as draft when the product build is complete | −2 pts |
 
 Compute:
 ```

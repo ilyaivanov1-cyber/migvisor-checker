@@ -445,6 +445,9 @@ Calculate global penalties after all section scores are summed:
 | No build phases defined anywhere | −3 pts | Skip if `doc_has_phases` is true |
 | Pending decisions referenced in phases but not documented anywhere | −2 pts | Check if PENDING items mentioned in phases have a documentation section |
 | Any task entry has no file path (ID only) | −2 pts per occurrence | Max −6 pts total |
+| Pending decisions section absent when reference documents 4 open decisions | −4 pts |
+| Pending decisions listed but not assigned to an owner or decision ID | −2 pts |
+| Prerequisite checklist absent when reference includes one before Phase 1 | −3 pts |
 
 Compute:
 ```
@@ -654,6 +657,14 @@ Then write exactly 5–6 sentences of plain-English verdict following these rule
 Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict. The final score **must appear as a number** in sentence 4.
 
 ---
+
+### Domain evaluation notes
+
+**Expected pending decisions** — the reference build plan documents 4 open decisions: PD-001 (JDBC connectivity for source extraction), PD-002 (reseed sign-off from data steward), PD-003 (Unity Catalog grants from platform team), QA-DQ-01 (data quality threshold values). A submission that omits the pending decisions section scores 0 on the Issues/gaps criterion.
+
+**Phase and batch structure** — the reference organizes work into 3 phases and 10 batches. A submission with only a flat task list and no phase/batch grouping scores ≤ 50% on Structure.
+
+**Prerequisite checks** — the reference includes a prerequisite checklist (environment, access, connectivity) that must be satisfied before Phase 1 begins. Submissions that start directly with execution steps score lower on Coverage.
 
 ## Score Interpretation
 

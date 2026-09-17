@@ -284,6 +284,10 @@ Calculate global penalties after all section scores are summed:
 | More than 30% of requirements lack individual acceptance criteria | −3 pts | Count AC-less reqs / total reqs |
 | Any requirement entry has no description (ID only, no text) | −2 pts | Per occurrence, max −6 pts |
 | Missing `[PENDING]` markers for open items that reference doc uses | −2 pts | Compare pending items in reference vs participant |
+| Fewer than 25 requirements documented when reference has 32 | −8 pts |
+| No must-have / should-have priority split when reference classifies all 32 requirements | −4 pts |
+| Acceptance criteria written only as positive assertions with no negative/rejection-path tests | −3 pts |
+| FR, NFR, and DQR categories not all present when reference has all three | −5 pts |
 
 Compute:
 ```

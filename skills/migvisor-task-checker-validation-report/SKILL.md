@@ -305,8 +305,21 @@ Points expressed as **percentages of that section's weight**.
 | Summary metrics are internally inconsistent (PASS + FAIL + WARN ≠ Total stated) | −3 pts (global) |
 | Results table entirely absent | −10 pts (global) |
 | Artifact file paths not present in results rows (verdict rows with no artifact path) | −2 pts (global, once) |
+| Individual findings lack all 4 required elements (file path + root cause + fix recommendation + spec reference) | −3 pts per incomplete finding, capped at −10 pts |
+| Summary section does not state total artifact count, PASS count, and FAIL count | −4 pts |
+| CRITICAL finding documented without marking it as blocking/critical in severity | −3 pts |
 
 ---
+
+### Domain evaluation notes
+
+**Expected finding structure** — each finding (F-001 through F-008 in the reference) should contain all 4 elements: (1) affected artifact file path, (2) root cause, (3) concrete fix recommendation, and (4) spec reference (requirement ID or rule ID). Findings with only a title and one-line description score ≤ 40% on Specificity.
+
+**Reference counts** — the reference validation report covers 27 artifacts: 19 PASS, 8 FAIL. The summary section must state these three numbers. A summary that says only "mostly passing" without counts scores 0 on Specificity for that criterion.
+
+**F-003 is the CRITICAL finding** — it identifies missing JDBC configuration keys in `environment.yaml`. A submission that documents F-003 as a minor warning rather than a CRITICAL/blocking issue should be flagged on Technical accuracy.
+
+**Finding ID range** — the reference documents 8 failures: F-001 through F-008. A submission with only 3–4 failures and no acknowledgment of the others loses proportional Coverage points in the Findings section.
 
 ## Score Interpretation
 

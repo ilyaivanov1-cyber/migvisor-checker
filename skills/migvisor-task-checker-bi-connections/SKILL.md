@@ -318,6 +318,10 @@ Calculate global penalties after all section scores are summed:
 | Missing H2 section present in reference but absent in participant | −5 pts each | Max −15 pts total |
 | GRANT SQL present but uses only `{{placeholder}}` values with no concrete SP/role names | −2 pts | Only if GRANT SQL block exists |
 | Connection string uses reference catalog/schema instead of participant's own | −2 pts | Only if connection string block exists |
+| Only one BI report documented when reference covers two distinct reports | −8 pts |
+| Cross-product dependency on Sales_Orders product not documented for the stock item report | −4 pts |
+| Geography column decomposition (CLR → _wkt/_lat/_lon) not documented for the supplier report | −3 pts |
+| DateKey type conversion (INT YYYYMMDD → DATE) not documented for the stock item report | −3 pts |
 
 Compute:
 ```
@@ -325,6 +329,22 @@ subtotal     = sum of all section weighted scores
 auto_deducts = sum of applicable penalties (negative)
 total_score  = max(subtotal + auto_deducts, 0)
 ```
+
+---
+
+### Domain evaluation notes
+
+**Two reports to document:**
+1. `wwidw_purchase_and_sale_per_stockitem_dynamic` — joins 5 tables (fact_purchase + fact_sale + 3 dimension tables). Has a cross-product dependency on Sales_Orders product (joint cutover required). 16-item cutover checklist. DirectQuery mode.
+2. `wwidw_ordered_by_supplier` — joins 2 tables (fact_purchase + silver_dim.supplier). Self-contained (no Sales_Orders dependency). 17-item cutover checklist (one extra item for the geography CLR rewrite).
+
+A submission that documents only one report scores at most 55% on Coverage.
+
+**DateKey type** — the calendar dimension's `date_key` column is stored as INT YYYYMMDD (not DATE), because it is the primary key. Power BI connections must cast it to DATE for time intelligence. The stock item report documents this cast requirement explicitly. Submissions that describe date_key as DATE type are technically inaccurate.
+
+**Geography CLR decomposition** — the supplier dimension's `DeliveryLocation` column is a SQL Server CLR `geography` type, decomposed into 3 columns: `delivery_location_wkt STRING`, `delivery_location_lat DOUBLE`, `delivery_location_lon DOUBLE`. The supplier report must reference these 3 columns, not the original CLR column.
+
+**`_current` view** — the supplier report should join to the `_current` view of the supplier dimension (filtering is_current_row = TRUE) rather than the full SCD-2 table. Submissions joining the base table without the current-row filter are technically inaccurate.
 
 ---
 

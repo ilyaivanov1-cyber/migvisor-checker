@@ -340,6 +340,9 @@ Calculate global penalties after all section scores are summed:
 | No Description column in any table | −3 pts | Skip if `doc_has_description_column` is true |
 | No lineage_key or audit-key column in any fact or dimension table | −3 pts | Skip if `doc_has_lineage_key` is true |
 | SCD-2 tracking columns entirely absent from a matched SCD-2 dimension table | −2 pts per table | Max −4 pts total (in addition to section scoring penalty above) |
+| Fewer than 4 tables documented when reference has exactly 5 tables | −5 pts |
+| Staging table missing lineage_key or _extracted_at_utc tracking columns | −3 pts |
+| dq_rejections table uses column name fk_column instead of violation_column | −2 pts |
 
 Compute:
 ```
@@ -550,6 +553,21 @@ Then write exactly 5–6 sentences of plain-English verdict following these rule
 Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict. The final score **must appear as a number** in sentence 4.
 
 ---
+
+### Domain evaluation notes
+
+**Reference table and column counts:**
+- `fact_purchase`: 11 columns (surrogate key, 5 SCD-2 tracking columns, 4 measure/FK columns, lineage_key)
+- `purchase_staging`: 15 columns (all fact source columns plus _extracted_at_utc, _source_file, _batch_id, lineage_key)
+- `lineage_run`: 9 columns (job_id, task_id, start_time, end_time, status, row_count, success, lineage_key, error_message)
+- `etl_cutoff`: 3 columns (product_key, watermark_column, watermark_value)
+- `dq_rejections`: 10 columns (rejection_id, fact_key, rule_id, rule_name, violation_column, violation_value, severity, rejected_at, lineage_key, corrective_action)
+
+**SCD-2 five-column block** — a complete SCD-2 implementation requires exactly 5 control columns: `valid_from DATE`, `valid_to DATE`, `row_effective_date DATE`, `row_expiry_date DATE DEFAULT '9999-12-31'`, `is_current_row BOOLEAN DEFAULT TRUE`. Note: validity columns use DATE (not TIMESTAMP) — this is rule TY-P001.
+
+**lineage_run.success is three-valued** — NULL (in-progress), TRUE (success), FALSE (failed). Typing as `BOOLEAN NOT NULL` is incorrect for the in-progress state.
+
+**dq_rejections column name** — some reference documents incorrectly call this column `fk_column`. The correct name in the schema is `violation_column`. Flag submissions that use `fk_column` as a Technical accuracy issue.
 
 ## Score Interpretation
 

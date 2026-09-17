@@ -353,6 +353,8 @@ Deduct only for **missing tables, missing columns, wrong SQL syntax patterns, mi
 | Hardcoded credential strings visible in any code block | −5 pts (global, once) |
 | Surrogate key resolution (SK resolver) design absent when reference has it | −3 pts (global, once) |
 | Lineage key propagation design absent (no mention of lineage_key in fact/dim DDL or code) | −3 pts (global, once) |
+| MERGE ON predicate uses only a single surrogate key when the fact grain is a 4-column composite (order-line) | −5 pts |
+| Observability section documents fewer than 5 QV rules when reference has 9 | −3 pts |
 
 ---
 
@@ -400,6 +402,16 @@ Then immediately output a **plain-English summary** of 5–6 sentences. Rules:
 - No bullet points, no markdown headers — flowing prose only.
 
 ---
+
+### Domain evaluation notes
+
+**Known MERGE key defect** — the reference `design.md` (§3.3) documents that the generated MERGE ON predicate uses a single `wwi_purchase_order_id` key, but the actual fact grain is order-line (4-column composite: order_id, line_id, order_date, supplier_id). A well-researched submission calls this out explicitly as a known defect requiring a fix. A submission that documents the single-column MERGE without flagging it loses all Issues/gaps points for the Transformation section.
+
+**Observability section** — the reference documents 9 quality-validation (QV) rules covering row counts, orphan surrogate keys, referential integrity, business-rule assertions, and rejection-store writes. A submission that mentions only "data quality checks" without enumerating individual QV rules scores low on Specificity.
+
+**lineage_run.success is three-valued** — NULL means in-progress, TRUE means success, FALSE means failed. A submission that types this as `BOOLEAN NOT NULL` or describes it as a simple toggle is technically inaccurate for the in-progress state.
+
+**Phantom rule citations** — the reference design document cites DM-001 and DM-002 rules that do not exist in the project or product rule set. If a trainee mentions these rule IDs, note them as phantom citations. Trainees who reproduce the citation should not lose points for it, but should lose Issues/gaps points if they treat the DM rules as authoritative without questioning their absence from the rule index.
 
 ## Score Interpretation
 

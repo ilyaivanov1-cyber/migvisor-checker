@@ -316,6 +316,8 @@ Calculate global penalties after all section scores are summed:
 | No requirements traceability on any task | −3 pts | No link to requirements |
 | Any task with no description (ID only) | −2 pts per task | Max −6 pts |
 | Missing `[PENDING]` markers for open items in reference | −2 pts | Compare pending items |
+| Fewer than 4 task types documented when reference has 6 distinct types (DDL, ETL, Config, Test, BI, Docs) | −4 pts |
+| No dependency mapping (DAG or prerequisite list) when reference documents task ordering | −3 pts |
 
 Compute:
 ```
@@ -507,6 +509,14 @@ Then write exactly 5–6 sentences of plain-English verdict following these rule
 Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict.
 
 ---
+
+### Domain evaluation notes
+
+**Expected task structure** — the reference documents 26 tasks across 6 types: DDL (8 tasks: table/view/schema creation), ETL (9 tasks: extract, transform, MERGE, QA), Config (2 tasks: environment and constants setup), Test (3 tasks: unit, integration, E2E), BI (2 tasks: report reconnection), Docs (2 tasks: runbook and data dictionary). A submission covering only DDL and ETL is missing at least 35% of task coverage.
+
+**Known divergences** — the reference tasks document includes 6 noted divergences from other deliverables (e.g., the MERGE key in tasks.md may differ from what design.md specifies). Submissions that acknowledge at least one divergence in the Issues/gaps section earn full points for that criterion. Submissions that present all tasks as consistent with upstream documents when known divergences exist score 0 on Issues/gaps.
+
+**Task fields** — each task entry in the reference includes: task ID, type, name, description, dependency list, and acceptance criteria. Submissions missing dependency lists score lower on Structure and Specificity. Submissions without acceptance criteria score 0 on Issues/gaps (no way to verify correctness).
 
 ## Score Interpretation
 

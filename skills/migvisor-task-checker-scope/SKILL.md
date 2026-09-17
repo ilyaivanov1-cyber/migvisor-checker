@@ -260,8 +260,19 @@ Applied to every section regardless of its heading or domain. Points below are e
 | Scope section (objects in scope): fewer than 3 objects documented when reference has > 10 | −5 pts |
 | Out-of-scope section: no entries at all when reference has > 5 | −4 pts |
 | Risks section: section present but empty with no "no known risks" statement | −3 pts |
+| Risks section: fewer than 3 distinct risks documented when reference has ≥ 7 migration risks | −3 pts |
+| Out-of-scope entries present but **no reason given** for any exclusion when reference provides reasons for all exclusions | −3 pts |
+| Objects in scope section present but objects grouped into fewer than 3 categories when reference uses 6+ distinct categories | −3 pts |
 
 A section is identified as "scope-type", "out-of-scope-type", or "risks-type" by its heading text — look for keywords like "scope", "objects", "out-of-scope", "risk", "boundaries", "consumers", "calculation" in the heading.
+
+### Domain evaluation notes
+
+**Objects in Scope section** — a thorough submission organizes objects into functional categories (e.g., fact tables, dimension tables, staging tables, ETL procedures, orchestration, BI reports) rather than a flat list. The reference groups 19 objects across 6 categories. Submissions with an unorganized flat list score lower on Structure.
+
+**Out-of-Scope section** — each exclusion entry should state *why* it is excluded (different product boundary, deferred to another sprint, not owned by this product). Entries with no rationale score 0 on the Issues/gaps criterion for that entry.
+
+**Migration Risks section** — the reference documents 7 known risks including source-side data quality issues, SQL Server-specific constructs (SEQUENCE, T-SQL MERGE), cross-team dimension dependencies, and known ETL bugs. A submission that names only generic risks ("data quality", "testing") without product-specific facts scores low on Specificity. `[USER INPUT REQUIRED]` entries for stakeholder-decision items are valid intentional deferrals and should not be penalized.
 
 ---
 

@@ -261,8 +261,19 @@ Applied to every section regardless of its heading or domain. Points below are e
 | Model-type section: fewer than 3 entities documented when reference has > 10 | −5 pts |
 | Lineage-type section: consumer listed as a source (direction reversed) | −4 pts |
 | Calculations-type section: section present but empty with no "no calculations" statement | −3 pts |
+| Lineage section present but **SSIS staging bug** (or equivalent source-side truncation defect) not mentioned when reference documents it | −4 pts |
+| Calculations section covers SCD-2 resolution but omits the **COALESCE(…, 0) fallback** for unresolved keys | −3 pts |
+| Definition section present but metadata table has **fewer than 10 fields** when reference has ≥ 15 | −4 pts |
 
 A section is identified as "model-type", "lineage-type", or "calculations-type" by its heading text — look for keywords like "model", "lineage", "calculation", "sources", "consumers", "definition" in the heading. When ambiguous, apply only the direction-error auto-deduct.
+
+### Domain evaluation notes
+
+**Definition / Metadata section** — a thorough submission names the grain (one row per purchase order **line**, not per order), the 15 metadata fields (source system, schema, version, owner, etc.), and the product/project context. Vague entries ("various tables") score low on Specificity.
+
+**Lineage section** — the reference traces 11 discrete ETL steps. A submission that lists only a high-level "extract → load" flow without naming individual staging, transformation, and watermark steps scores < 50% on Coverage. The SSIS truncation bug (staging table was truncated instead of purchase staging) is a distinguishing fact that well-researched submissions include.
+
+**Calculations section** — the SCD-2 surrogate-key resolution algorithm (temporal range JOIN on validity dates, ROW_NUMBER() tie-breaker, COALESCE to 0 for unresolved keys) and the date_key derivation (`CAST(order_date AS DATE)`, not from last_modified_when) are the two calculations worth the most Specificity points. Submissions that only say "SCD-2 lookup" without the algorithm detail score ≤ 60% on Specificity for that criterion.
 
 ---
 

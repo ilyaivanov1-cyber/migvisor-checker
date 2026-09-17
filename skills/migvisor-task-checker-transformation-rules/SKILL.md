@@ -272,6 +272,24 @@ Points expressed as **percentages of that section's weight**.
 | Rule IDs use systematically wrong prefix (e.g., all PL rules listed under NM heading) | −20% of that dimension's score |
 | Active Dimensions metadata table entirely absent | −5 pts (global) |
 | Rule count in Active Dimensions table is off by more than 2 for any one dimension | −2 pts (global, once per document) |
+| **Product rules** — QA or CX dimension absent when reference explicitly includes it (these are product-only extensions, not project rules) | −5 pts (global, once per missing product-only dimension) |
+| **Product rules** — TY-P001 override (valid_from / valid_to → DATE) missing when reference documents it | −3 pts (global) |
+
+### Domain evaluation notes
+
+**Project rules vs. product rules** — project rules cover 7 dimensions (PL, NM, TY, OB, SX, PE, LN) totalling 90 rules across 7 YAML files. Product rules add 4 more files: `override.yaml` (1 rule: TY-P001), `extensions.yaml` (12 rules), `new-rules.yaml` (11 rules including QA-P001–005 and CX-P001–006), and `deactivations.yaml` (empty). A submission for product rules that omits QA and CX dimensions is missing a significant block.
+
+**Expected rule counts per dimension (project rules):**
+- PL (Platform): 10 rules
+- NM (Naming): 9 rules
+- TY (Types): 26 rules — the largest dimension; TY covers all source-to-target type mappings
+- OB (Objects): 11 rules
+- SX (Syntax): 17 rules
+- PE (Performance): 9 rules
+- LN (Lineage): 8 rules
+- Total project rules: 90
+
+When the Active Dimensions metadata table is present, use these counts to verify count accuracy. A submission with TY = 15 or TY = 30 (more than ±2 variance) should be flagged in the Metadata correctness criterion.
 
 ---
 

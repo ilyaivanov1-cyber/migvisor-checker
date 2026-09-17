@@ -276,8 +276,30 @@ Points expressed as **percentages of that section's weight**.
 | Active Dimensions metadata table entirely absent | −5 pts (global) |
 | Total rule count stated in metadata is off by more than 3 from reference total | −3 pts (global, once) |
 | Unexpected extra dimension section present with no explanation | −2 pts (global, once, only if > 1 extra section) |
+| TY dimension has fewer than 20 or more than 30 rules when reference has exactly 26 | −3 pts |
+| LN dimension absent when reference requires lineage tracking rules | −5 pts (global) |
 
 ---
+
+### Domain evaluation notes
+
+**Expected rule counts per dimension (project rules):**
+- PL (Platform): 10 rules
+- NM (Naming): 9 rules
+- TY (Types): 26 rules — largest dimension; covers all source→target type mappings
+- OB (Objects): 11 rules
+- SX (Syntax): 17 rules
+- PE (Performance): 9 rules
+- LN (Lineage): 8 rules
+- Total: 90 rules across 7 YAML files (PL-platform.yaml, NM-naming.yaml, TY-types.yaml, OB-objects.yaml, SX-syntax.yaml, PE-performance.yaml, LN-lineage.yaml)
+
+A submission whose TY dimension has fewer than 20 or more than 30 rules should be flagged on the Metadata correctness criterion. TY is large because it maps every SQL Server source type to a Databricks equivalent.
+
+**Key rules to watch for by dimension:**
+- TY: must include DATETIME2→TIMESTAMP, NVARCHAR→STRING, MONEY→DECIMAL(18,2), SMALLMONEY→DECIMAL(10,2), BIT→BOOLEAN, geography CLR→3 columns (_wkt/_lat/_lon), BIGINT IDENTITY→BIGINT GENERATED ALWAYS AS IDENTITY
+- SX: must address T-SQL constructs to avoid in target code (TOP N, NOLOCK, ISNULL as null-check, SEQUENCE)
+- LN: must address lineage_key propagation via dbutils.jobs.taskValues.set/get
+- PE: must address OPTIMIZE/ZORDER invocation threshold (moved to environment.yaml, not constants.py)
 
 ## Score Interpretation
 
