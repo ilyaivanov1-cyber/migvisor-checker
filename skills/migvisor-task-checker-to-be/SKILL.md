@@ -306,6 +306,18 @@ For each SQL block in the participant section:
 
 **sk_resolver.py pattern** — well-researched submissions mention that surrogate-key resolution is implemented in a shared Python utility (`sk_resolver.py`) using a temporal range JOIN on validity dates with a ROW_NUMBER() tie-breaker and COALESCE(…, 0) fallback for unknown dimension members. Absence of any surrogate-key resolution detail scores 0 on the Issues/gaps criterion for the Lineage section.
 
+**16 deliverables in Section 1** — a complete to-be lists all 16 components: 8 tables (`silver_fact.fact_purchase`, `bronze.purchase_staging`, `bronze.etl_cutoff`, `bronze.lineage_run`, `bronze.dq_rejections`, `silver_dim.supplier`, `silver_dim.stock_item`, `silver_dim.date`), 3 notebooks (`nb_extract_watermark`, `nb_extract_purchase`, `migrate_staged_purchase_data`), 4 Python modules (`sk_resolver.py`, `fact_merge.py`, `src/common/udfs.py`, `src/common/lineage_utils.py`), 1 config file (`config/environment.yaml`), 1 Workflow (`nightly_etl_purchase`). `bronze.dq_rejections` is NEW — did not exist in the legacy system.
+
+**3 consumers in Section 2** — the reference documents 3 consumers: (1) `wwidw_purchase_and_sale_per_stockitem_dynamic` — still requires coordinated cutover with Sales_Orders product (cross-domain dependency survives); (2) `wwidw_ordered_by_supplier` — self-contained within Purchase; (3) `migrate_staged_purchase_data.py` as Databricks Workflow task (replaces the `integration.migratestagedpurchasedata` stored procedure consumer).
+
+**MERGE predicate known issue** — the to-be specifies a 4-column composite MERGE key (`wwi_purchase_order_id + date_key + supplier_key + stock_item_key`) at order-line grain, but `design.md §3.3` and FR-007 carry only the single-column `wwi_purchase_order_id`. Submissions that use the 4-column key are aligned with the to-be; those using single-column match the design. A submission that flags this discrepancy between to-be and design earns maximum Issues/gaps points.
+
+**Watermark advance — step 21** — the to-be assigns the watermark write to `migrate_staged_purchase_data.py` as step 21: `set_etl_cutoff(spark, "fact_purchase", new_cutoff)`. This step is missing from `design.md §3.1` and §5.4. Submissions that include the watermark commit in the notebook description earn Coverage points; those that omit it are missing a critical step.
+
+**sk_resolver CAST detail** — the `sk_resolver.py` join includes an explicit `CAST(dim.valid_from AS TIMESTAMP)` and `CAST(dim.valid_to AS TIMESTAMP)` because `valid_from`/`valid_to` are DATE (TY-P001) and `last_modified_when` is TIMESTAMP. Without the cast, the comparison involves an implicit type coercion. The window spec is `ROW_NUMBER() OVER (PARTITION BY purchase_staging_key ORDER BY dim.valid_from DESC) = 1`.
+
+**QA framework is entirely new** — 5 assertions added that did not exist in legacy: 1 blocking (row count reconciliation) + 4 informational (orphaned SK, RI checks, business rules, rejection store write). The `bronze.dq_rejections` table is the physical evidence of the QA framework and should be described with its 10 columns (`lineage_key`, `rule_id`, `pk_column`, `pk_value`, `violation_column`, `violation_value`, `rejection_reason`, `detected_at`, `table_name`, `source_system`).
+
 ---
 
 ## Score Interpretation

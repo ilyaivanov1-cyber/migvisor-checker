@@ -660,11 +660,15 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 ### Domain evaluation notes
 
-**Expected pending decisions** — the reference build plan documents 4 open decisions: PD-001 (JDBC connectivity for source extraction), PD-002 (reseed sign-off from data steward), PD-003 (Unity Catalog grants from platform team), QA-DQ-01 (data quality threshold values). A submission that omits the pending decisions section scores 0 on the Issues/gaps criterion.
+**Expected pending decisions** — the reference build plan documents 4 open decisions: PD-001 (JDBC connectivity for source extraction), PD-002 (reseed sign-off from data steward), PD-003 (Unity Catalog grants from platform team), QA-DQ-01 (data quality threshold values). Note: PD-001 and QA-DQ-01 were discovered during planning and do not appear in upstream specifications — only PD-002 and PD-003 are traceable to requirements. A submission that omits the pending decisions section scores 0 on the Issues/gaps criterion.
 
-**Phase and batch structure** — the reference organizes work into 3 phases and 10 batches. A submission with only a flat task list and no phase/batch grouping scores ≤ 50% on Structure.
+**Phase and batch structure** — the reference organizes work into 3 phases and 10 batches (Phase 1: 3 batches; Phase 2: 7 batches; Phase 3: mostly parallel). Phase 1 = DDL (run by `/smartbuilder_generate-db`); Phase 2+3 = ETL+Config+Tests+BI+Docs (run by `/smartbuilder_generate-etl`). A submission with only a flat task list and no phase/batch grouping scores ≤ 50% on Structure.
 
-**Prerequisite checks** — the reference includes a prerequisite checklist (environment, access, connectivity) that must be satisfied before Phase 1 begins. Submissions that start directly with execution steps score lower on Coverage.
+**Prerequisite checks** — the reference includes 5 specific prerequisite checks with verification commands: (1) `databricks configure --check`; (2) `databricks catalogs get inventory_stock`; (3) `SHOW SCHEMAS IN inventory_stock` returns bronze, silver_dim, silver_fact; (4) `SELECT COUNT(*) FROM inventory_stock.silver_dim.supplier` returns > 0; (5) JDBC connectivity confirmation (PD-001 pending). Submissions that start directly with execution steps score lower on Coverage.
+
+**Design-constraint table** — Phase 2 contains an 8-row design-constraint table mapping specification decisions to task IDs. Two rows are highlighted as incorrect/bold: the lineage-close constraint (instructs `spark.sql UPDATE` but NFR-009 requires `close_lineage_record` helper) and the MERGE key constraint (single-column `wwi_purchase_order_id` when the fact grain is a 4-column composite). A submission that identifies these contradictions scores maximum on Issues/gaps.
+
+**TASK-010 isolation** — `scd2_merge.py` (TASK-010) is generated but has no importers among the notebooks and no dependent test task. The dependency diagram shows it as isolated ("independent"). This is a dead-code signal. Well-researched submissions flag TASK-010 as an unused module.
 
 ## Score Interpretation
 

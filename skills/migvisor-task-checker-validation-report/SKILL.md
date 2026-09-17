@@ -308,6 +308,8 @@ Points expressed as **percentages of that section's weight**.
 | Individual findings lack all 4 required elements (file path + root cause + fix recommendation + spec reference) | −3 pts per incomplete finding, capped at −10 pts |
 | Summary section does not state total artifact count, PASS count, and FAIL count | −4 pts |
 | CRITICAL finding documented without marking it as blocking/critical in severity | −3 pts |
+| Prior-run finding status section absent when reference includes one resolved finding | −3 pts |
+| F-003 fix documented as resolving PD-001 (wrong) instead of adding placeholder keys to environment.yaml (correct) | −3 pts |
 
 ---
 
@@ -317,9 +319,23 @@ Points expressed as **percentages of that section's weight**.
 
 **Reference counts** — the reference validation report covers 27 artifacts: 19 PASS, 8 FAIL. The summary section must state these three numbers. A summary that says only "mostly passing" without counts scores 0 on Specificity for that criterion.
 
-**F-003 is the CRITICAL finding** — it identifies missing JDBC configuration keys in `environment.yaml`. A submission that documents F-003 as a minor warning rather than a CRITICAL/blocking issue should be flagged on Technical accuracy.
+**F-003 is the CRITICAL finding** — it identifies missing JDBC configuration keys (`jdbc_driver`, `jdbc_user`, `jdbc_password`, `source_table`) in `environment.yaml` that `nb_extract_purchase.py` reads. The notebook raises `KeyError: 'jdbc_driver'` before any ETL logic runs. A submission that documents F-003 as a minor warning rather than a CRITICAL/blocking issue should be flagged on Technical accuracy.
 
-**Finding ID range** — the reference documents 8 failures: F-001 through F-008. A submission with only 3–4 failures and no acknowledgment of the others loses proportional Coverage points in the Findings section.
+**Finding ID range and severities** — the reference documents 8 failures with distinct severities:
+- F-001 (LOW): `build-plan.md` layout tree lists wrong grants file path
+- F-002 (MEDIUM): lineage-close uses `spark.sql UPDATE` inline instead of `close_lineage_record` helper (dead module)
+- F-003 (HIGH/CRITICAL): missing JDBC config keys block pipeline execution
+- F-004 (LOW): stale table name `fact_purchase_order` in workflow JSON description
+- F-005 (MEDIUM): test regex `inserted=\d+` does not match notebook's `inserted/updated=\d+` — false-green test
+- F-006 (MEDIUM): `docs/design.md` generated from wrong template — 8 wrong table names
+- F-007 (MEDIUM): MERGE INTO example in `docs/design.md` references non-existent columns
+- F-008 (LOW): same grants file path error as F-001 encountered in Phase 1 acceptance gate
+
+A submission with only 3–4 failures and no acknowledgment of the others loses proportional Coverage points in the Findings section.
+
+**Prior-run finding tracking** — the reference report includes a "Prior-Run Finding Status" section confirming that F-001 (missing PRIMARY KEY on `bronze_lineage_run.sql`) from a previous run is RESOLVED. Submissions that omit this section when the reference has it lose Structure points.
+
+**Pass-rate by category** — DDL files (7) and shared modules (5) all PASS; failures cluster in notebooks/config (F-003, F-002) and generated documentation (F-004, F-006, F-007). A submission that correctly identifies this pass-rate pattern scores full Specificity on the Summary section.
 
 ## Score Interpretation
 

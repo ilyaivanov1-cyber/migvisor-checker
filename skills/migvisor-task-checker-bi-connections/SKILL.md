@@ -346,6 +346,20 @@ A submission that documents only one report scores at most 55% on Coverage.
 
 **`_current` view** — the supplier report should join to the `_current` view of the supplier dimension (filtering is_current_row = TRUE) rather than the full SCD-2 table. Submissions joining the base table without the current-row filter are technically inaccurate.
 
+**Exact filenames** — the two generated BI specs are `wwidw_purchase_and_sale_per_stockitem_dynamic_reconnection.md` and `wwidw_ordered_by_supplier_reconnection.md` (both carry a `_reconnection` suffix; the build plan paths omit this suffix — this is a known discrepancy, F-004 in the validation report).
+
+**Connection auth** — both reports use OAuth 2.0 client credentials flow (service principal, not user account). Connection template has exactly two environment-specific placeholders: `{{DATABRICKS_HOST}}` and `{{WAREHOUSE_ID}}`. Five connection fields must be present: Server hostname, HTTP path, Authentication, Catalog, and Schema.
+
+**Stock item report tables** — the 5 joined tables are: `silver_fact.fact_purchase` (Purchase-owned), `silver_fact.fact_sale` (Sales_Orders-owned), `silver_dim.date` (shared infrastructure), `silver_dim.stock_item` (Dimensions team), `silver_dim.supplier_current` (Purchase-adjacent). Section 4 maps only the 11 `fact_purchase` columns; `fact_sale` columns are unmapped in this document.
+
+**Supplier dimension column categories** — Section 4.2 has three categories: (1) name normalization only (8 columns: SupplierKey, WWISupplierID, Supplier, Category, PrimaryContact, PostalCode, ValidFrom, ValidTo); (2) type changes requiring expression rewrites: `ValidFrom` and `ValidTo` changed from DATETIME2 → DATE (TY-P001); (3) structural decomposition: `DeliveryLocation` (geography CLR) → `delivery_location_wkt` STRING, `delivery_location_lat` DOUBLE, `delivery_location_lon` DOUBLE (TY-P004); (4) new SCD-2 control columns: `row_effective_date`, `row_expiry_date`, `is_current_row`.
+
+**`received_outers` nullability** — this is the only nullable measure column in `fact_purchase`. NULL means "not yet received"; 0 means "delivered with zero outers". Submissions that do not call out this distinction miss the fill-rate calculation risk (divide-by-zero on `received_outers / ordered_outers`).
+
+**`lineage_key` audit column** — both `fact_purchase` and `silver_dim.supplier` have a `lineage_key` column with no business meaning in reports. Submissions that note it should be excluded from displays (or `SELECT *` results) show awareness of the audit-column pattern.
+
+**Cutover checklist lengths** — stock item: 16 items; supplier: 17 items (extra item covers geography CLR expression rewrite). Different lengths are structurally correct, not an inconsistency.
+
 ---
 
 ### Step 8 — Resolve Output Path

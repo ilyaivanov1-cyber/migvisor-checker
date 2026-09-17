@@ -559,15 +559,19 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 **Reference table and column counts:**
 - `fact_purchase`: 11 columns (surrogate key, 5 SCD-2 tracking columns, 4 measure/FK columns, lineage_key)
 - `purchase_staging`: 15 columns (all fact source columns plus _extracted_at_utc, _source_file, _batch_id, lineage_key)
-- `lineage_run`: 9 columns (job_id, task_id, start_time, end_time, status, row_count, success, lineage_key, error_message)
-- `etl_cutoff`: 3 columns (product_key, watermark_column, watermark_value)
-- `dq_rejections`: 10 columns (rejection_id, fact_key, rule_id, rule_name, violation_column, violation_value, severity, rejected_at, lineage_key, corrective_action)
+- `lineage_run`: 9 columns — exact names: `lineage_key`, `etl_run_id`, `table_name`, `pipeline_name`, `data_load_started`, `data_load_completed`, `was_successful`, `table_row_count`, `source_system_cutoff_time`
+- `etl_cutoff`: 3 columns — exact names: `table_name`, `cutoff_time`, `last_updated_utc`
+- `dq_rejections`: 10 columns — exact names: `lineage_key`, `rule_id`, `pk_column`, `pk_value`, `violation_column`, `violation_value`, `rejection_reason`, `detected_at`, `table_name`, `source_system`
 
 **SCD-2 five-column block** — a complete SCD-2 implementation requires exactly 5 control columns: `valid_from DATE`, `valid_to DATE`, `row_effective_date DATE`, `row_expiry_date DATE DEFAULT '9999-12-31'`, `is_current_row BOOLEAN DEFAULT TRUE`. Note: validity columns use DATE (not TIMESTAMP) — this is rule TY-P001.
 
-**lineage_run.success is three-valued** — NULL (in-progress), TRUE (success), FALSE (failed). Typing as `BOOLEAN NOT NULL` is incorrect for the in-progress state.
+**lineage_run.was_successful is three-valued** — NULL (in-progress), TRUE (success), FALSE (failed). Typing as `BOOLEAN NOT NULL` is incorrect for the in-progress state. Column `etl_run_id` is a UUID string for cross-system correlation (Databricks Workflow run matching); `lineage_key` is the internal integer join key.
 
 **dq_rejections column name** — some reference documents incorrectly call this column `fk_column`. The correct name in the schema is `violation_column`. Flag submissions that use `fk_column` as a Technical accuracy issue.
+
+**purchase_staging special columns** — `purchase_staging_key` (BIGINT GENERATED ALWAYS AS IDENTITY) is the partition key for `sk_resolver.py` window functions: `PARTITION BY purchase_staging_key` makes the ROW_NUMBER window per-row, forcing per-row tie-breaking in SCD-2 resolution. `wwi_supplier_id` and `wwi_stock_item_id` are natural keys retained in staging for SK resolution but NOT propagated to `fact_purchase`. `_extracted_at_utc` has no legacy equivalent; it is set by Python at write time.
+
+**Nullable measures** — `received_outers` is the only nullable column among the fact table's measure columns. NULL means the order has not been received yet; 0 means delivered with zero outers. Submissions that make this column NOT NULL are technically inaccurate.
 
 ## Score Interpretation
 

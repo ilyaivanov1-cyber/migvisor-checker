@@ -296,10 +296,13 @@ Points expressed as **percentages of that section's weight**.
 A submission whose TY dimension has fewer than 20 or more than 30 rules should be flagged on the Metadata correctness criterion. TY is large because it maps every SQL Server source type to a Databricks equivalent.
 
 **Key rules to watch for by dimension:**
-- TY: must include DATETIME2→TIMESTAMP, NVARCHAR→STRING, MONEY→DECIMAL(18,2), SMALLMONEY→DECIMAL(10,2), BIT→BOOLEAN, geography CLR→3 columns (_wkt/_lat/_lon), BIGINT IDENTITY→BIGINT GENERATED ALWAYS AS IDENTITY
-- SX: must address T-SQL constructs to avoid in target code (TOP N, NOLOCK, ISNULL as null-check, SEQUENCE)
-- LN: must address lineage_key propagation via dbutils.jobs.taskValues.set/get
-- PE: must address OPTIMIZE/ZORDER invocation threshold (moved to environment.yaml, not constants.py)
+- TY: must include DATETIME2→**TIMESTAMP_NTZ** (not just TIMESTAMP — NTZ is required for SCD-2 validity tracking); NVARCHAR→STRING; MONEY→DECIMAL(18,2); SMALLMONEY→DECIMAL(10,2); BIT→BOOLEAN; geography CLR→3 columns (`delivery_location_wkt STRING`, `delivery_location_lat DOUBLE`, `delivery_location_lon DOUBLE`); BIGINT IDENTITY→`BIGINT GENERATED ALWAYS AS IDENTITY`. TY-022 specifically maps `integration.etl cutoff`: `NVARCHAR(50)→STRING`, `DATETIMEOFFSET(7)→TIMESTAMP`.
+- SX: must include SX-003 — the critical `TOP(1)` correlated SCD-2 surrogate key subquery → `JOIN + ROW_NUMBER() OVER (PARTITION BY … ORDER BY valid_from DESC) = 1` (the entire `UPDATE staging SET key = (SELECT TOP(1)…)` is restructured into a pre-join step in `sk_resolver.py`). SX-014 corrects the SSIS truncation bug: `DELETE FROM Integration.Order_Staging` (wrong table) → `OVERWRITE bronze.purchase_staging` (correct table).
+- LN: must address lineage_key propagation via `dbutils.jobs.taskValues.set/get`; LN-001 migrates `integration.lineage` → `bronze.lineage_run` and adds `etl_run_id`, `table_row_count`, `pipeline_name` columns plus Change Data Feed.
+- PE: must address OPTIMIZE/ZORDER invocation threshold (moved to environment.yaml, not constants.py); PE-002 specifies liquid clustering `CLUSTER BY (date_key, supplier_key)` on `fact_purchase` and `CLUSTER BY (supplier_key/stock_item_key)` on SCD-2 dimensions.
+- PL: PL-002 schema mapping — `fact→silver_fact`, `dimension→silver_dim`, `integration→bronze`, `sequences→retired`. PL-005 fixes the SSIS truncation bug via INSERT OVERWRITE.
+- NM: NM-002 (top-priority) — all space-bearing objects renamed: `dimension.stock item→stock_item`, `integration.etl cutoff→etl_cutoff`, `WWI Purchase Order ID→wwi_purchase_order_id`.
+- OB: OB-010 lists excluded objects: `dbo.*` (SSMS artifacts), sequences reseed utilities, non-Purchase `migratestaged*` procedures, and cross-domain objects.
 
 ## Score Interpretation
 

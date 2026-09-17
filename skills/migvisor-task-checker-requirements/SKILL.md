@@ -489,6 +489,21 @@ Submissions that reproduce these errors without flagging them score full Coverag
 
 **Negative acceptance criteria** — well-written DQR ACs include rejection-path tests (e.g., "when row count delta exceeds threshold, pipeline halts and writes to dq_rejections"). Submissions with only positive ACs score ≤ 60% on Specificity per DQR requirement.
 
+**Key individual requirement details:**
+- **FR-001** is a regression requirement: tests for ABSENCE of prior-run rows via `_extracted_at_utc`. Submissions that describe FR-001 as a "new feature" rather than a defect-fix miss this framing.
+- **FR-002**: the obligation to WRITE the new cutoff back to `bronze.etl_cutoff` lives ONLY in the Acceptance Criterion column, not in the Description. Submissions that document the AC correctly but miss the watermark-write should be flagged as a precision gap.
+- **FR-003**: names an API — `dbutils.jobs.taskValues.set(key="lineage_key")`. The three-table invariant: same `lineage_key` on every row in `fact_purchase`, `purchase_staging`, and `dq_rejections`, with exactly one matching record in `lineage_run`.
+- **FR-004 / FR-005**: twins — FR-005 references "the same temporal range join pattern as FR-004" rather than restating it. Both ACs have three parts: (a) matched rows get non-zero key, (b) unmatched rows get 0, (c) no row gets NULL. Missing part (c) is the most common gap.
+- **FR-007 idempotency**: the phrase "same `wwi_purchase_order_id` and `lineage_key` combination" is vacuous (lineage_key is unique per run). The meaningful idempotency criterion is "same staging input, same resulting row count."
+- **FR-011** is destructive: resets `bronze.etl_cutoff` to the initial load date, triggering a full re-extract. Requires explicit scope-owner sign-off (PD-002).
+- **NFR-003** exact error message: `Row count mismatch: staging=N, inserted=M`. Task marked FAILED; `lineage_run.was_successful = false`.
+- **NFR-009**: 6-section notebook skeleton; `close_lineage_record` must appear in BOTH success path and `except` block. AC tests this by injecting an exception and verifying the failure-path close is called.
+- **NFR-011**: 4 named shared modules must exist: `constants.py`, `scd2_merge.py`, `sk_resolver.py`, `fact_merge.py`. Naming them in a requirement makes the shared-code boundary non-negotiable.
+- **DQR-002 / DQR-003**: "non-zero" qualifier is essential — `supplier_key = 0` is the sentinel (valid), not an RI violation. Submissions that check all keys including zero are inaccurate.
+- **DQR-004**: `date_key` joins to `silver_dim.date.date` — different column names (fact FK vs. dimension PK). Submissions that join on `date_key = date_key` are inaccurate.
+- **DQR-009**: the only requirement sourced from other requirements (FR-004 + FR-005). It checks `COUNT(*) WHERE supplier_key IS NULL OR stock_item_key IS NULL = 0` on `bronze.purchase_staging` before the MERGE.
+- **Bronze retention bound**: NFR-012 sets bronze retention at 90 days; DQR-008 promises batch replay via `lineage_key`. The replay guarantee expires after 90 days (staging rows gone). Neither requirement states this interaction.
+
 ## Score Interpretation
 
 | Score | Grade | Recommended action |

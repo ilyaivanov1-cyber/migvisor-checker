@@ -516,7 +516,13 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 **Known divergences** — the reference tasks document includes 6 noted divergences from other deliverables (e.g., the MERGE key in tasks.md may differ from what design.md specifies). Submissions that acknowledge at least one divergence in the Issues/gaps section earn full points for that criterion. Submissions that present all tasks as consistent with upstream documents when known divergences exist score 0 on Issues/gaps.
 
-**Task fields** — each task entry in the reference includes: task ID, type, name, description, dependency list, and acceptance criteria. Submissions missing dependency lists score lower on Structure and Specificity. Submissions without acceptance criteria score 0 on Issues/gaps (no way to verify correctness).
+**Inline artifact tasks** — five DDL tasks (TASK-001 through TASK-005) and one grants task (TASK-008) include the complete SQL inline. TASK-009 includes the constants file inline. TASK-017 includes the sentinel INSERT inline. TASK-018 includes the YAML inline. This blurs the line between plan and deliverable — the inline artifact is the reviewed source of truth for column names and types. A submission that does not note the inline artifact pattern scores lower on Specificity.
+
+**TASK-010 isolation** — `src/common/scd2_merge.py` (TASK-010) has no dependents in the task graph and no test task. It is generated but imported by no notebook. A well-researched submission flags it as isolated dead code. Its acceptance criterion in tasks.md cannot be satisfied if no notebook imports it.
+
+**SK resolution test scenarios** — TASK-020 (`tests/common/test_sk_resolver.py`) must cover all 3 branches: (1) match found → returns non-zero key; (2) no match → returns 0; (3) multiple versions → returns the most recent. These 3 cases are stated in the Phase 3 acceptance gate and should be verifiable in the test file.
+
+**Task fields** — each task entry in the reference includes: task ID, type, name, description, dependency list, output file path, and acceptance criteria. Submissions missing dependency lists score lower on Structure and Specificity. Submissions without acceptance criteria score 0 on Issues/gaps (no way to verify correctness).
 
 ## Score Interpretation
 

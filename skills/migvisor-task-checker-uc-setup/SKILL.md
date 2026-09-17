@@ -1,6 +1,6 @@
 ---
 name: migvisor-task-checker-uc-setup
-description: Evaluates a participant's Unity Catalog bootstrap SQL against the reference. Scores catalog creation, four medallion schema creation, IF NOT EXISTS guards, COMMENT strings, and verification step presence.
+description: Evaluates a participant's Unity Catalog bootstrap SQL against the reference. Scores catalog creation, three medallion schema creation (bronze, silver_dim, silver_fact), IF NOT EXISTS guards, COMMENT strings, and verification step presence.
 ---
 
 # Skill 34 — task-checker-uc-setup
@@ -19,7 +19,7 @@ description: Evaluates a participant's Unity Catalog bootstrap SQL against the r
 
 ## Purpose
 
-Evaluate a Unity Catalog bootstrap SQL script against the reference. The script provisions the top-level catalog and the four medallion schemas (stg, dim, fact, mart) using idempotent `IF NOT EXISTS` guards. It must be safe to re-run and must not contain any destructive or credential-bearing statements.
+Evaluate a Unity Catalog bootstrap SQL script against the reference. The script provisions the top-level catalog and the three medallion schemas (`bronze`, `silver_dim`, `silver_fact`) using idempotent `IF NOT EXISTS` guards. It must be safe to re-run and must not contain any destructive or credential-bearing statements.
 
 Catalog/schema names differ between reference (globalpurchase) and participant (e.g. globalsales) — this is expected and never penalised. Commented-out statements are noted but do not trigger auto-deducts unless the placeholder is uncommented and unresolved.
 

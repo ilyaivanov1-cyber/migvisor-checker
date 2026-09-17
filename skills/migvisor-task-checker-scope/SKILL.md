@@ -268,11 +268,13 @@ A section is identified as "scope-type", "out-of-scope-type", or "risks-type" by
 
 ### Domain evaluation notes
 
-**Objects in Scope section** — a thorough submission organizes objects into functional categories (e.g., fact tables, dimension tables, staging tables, ETL procedures, orchestration, BI reports) rather than a flat list. The reference groups 19 objects across 6 categories. Submissions with an unorganized flat list score lower on Structure.
+**Objects in Scope section** — a thorough submission organizes objects into functional categories (e.g., fact tables, dimension tables, staging tables, ETL procedures, orchestration, BI reports) rather than a flat list. The reference groups 19 objects across 6 categories: (3.1) Core Fact Table — 1 object; (3.2) Conformed Dimensions — 3 objects; (3.3) Integration Staging Layer — 7 objects (3 tables + 4 stored procedures); (3.4) Sequences/Infrastructure — 1 object; (3.5) SSIS Orchestration Pipeline — 5 objects; (3.6) BI Reports — 2 objects. `fact.purchase` schema is listed inline (all 11 columns with types and roles). Submissions with an unorganized flat list score lower on Structure.
 
-**Out-of-Scope section** — each exclusion entry should state *why* it is excluded (different product boundary, deferred to another sprint, not owned by this product). Entries with no rationale score 0 on the Issues/gaps criterion for that entry.
+**Out-of-Scope section** — the reference has 12 exclusion entries, each with a reason. Categories: belongs to another product, load logic for a read dependency, follows an out-of-scope fact, platform-specific config, deferred decision, excluded at project level, partial exclusion. Entries with no rationale score 0 on the Issues/gaps criterion for that entry.
 
-**Migration Risks section** — the reference documents 7 known risks including source-side data quality issues, SQL Server-specific constructs (SEQUENCE, T-SQL MERGE), cross-team dimension dependencies, and known ETL bugs. A submission that names only generic risks ("data quality", "testing") without product-specific facts scores low on Specificity. `[USER INPUT REQUIRED]` entries for stakeholder-decision items are valid intentional deferrals and should not be penalized.
+**Migration Risks section** — the reference documents 7 known risks: (1) SSIS truncation bug — staging never cleared; (2) spaces in dimension object names; (3) SEQUENCE → no Databricks equivalent; (4) T-SQL MERGE rewrite; (5) `configuration_reseedetl` scope uncertain — "confirm with scope owner"; (6) dimension load owned by other products — cross-team runtime dependency; (7) cross-domain BI report — coordinated cutover required with Sales_Orders. A submission that names only generic risks scores low on Specificity.
+
+**Document structure** — the reference scope has 9 sections (Identity, Description, Objects in Scope, Out-of-Scope Objects, Consumers, Calculation Surface, Boundaries, Priority and Sequencing, Known Migration Risks). Priority is **PRIMARY** — first product in Inventory_Stock_Project. Three `[USER INPUT REQUIRED]` placeholders exist: scope owner (§1), temporal boundary (§7), organizational boundary (§7). These are valid intentional deferrals and should not be penalized.
 
 ---
 

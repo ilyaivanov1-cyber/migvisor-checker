@@ -291,6 +291,28 @@ Points expressed as **percentages of that section's weight**.
 
 When the Active Dimensions metadata table is present, use these counts to verify count accuracy. A submission with TY = 15 or TY = 30 (more than ±2 variance) should be flagged in the Metadata correctness criterion.
 
+**Product rule key facts:**
+- **Single override — TY-P001**: maps SCD-2 validity columns (`valid_from`, `valid_to`) on Purchase-scope dimension tables to DATE (not TIMESTAMP_NTZ). Scope is narrow — only these two columns on `supplier` and `stock_item`. All other DATETIME2 columns (lineage timestamps, watermark columns) still use TIMESTAMP_NTZ per TY-012.
+- **13 extensions** — across TY, OB, PE, LN, SX dimensions. Key extensions: TY-P002 (5-column SCD-2 control block: valid_from, valid_to, row_effective_date, row_expiry_date, is_current_row); TY-P003 (MONEY→DECIMAL(18,2), SMALLMONEY→DECIMAL(10,2)); TY-P004 (geography CLR → delivery_location_wkt STRING, delivery_location_lat DOUBLE, delivery_location_lon DOUBLE); OB-P001 (key=0 sentinel bootstrap notebook per SCD-2 dim); OB-P002 (lineage_key + _extracted_at_utc audit columns on purchase_staging); OB-P004 (scd2_merge.py, sk_resolver.py, fact_merge.py as first-class shared modules); LN-P001 (lineage_key obtained via taskValues.get, not open_lineage_record() directly).
+- **12 new rules** — across SX (1: SX-P004 lineage close UPDATE), QA (5: QA-P001 through QA-P005), CX (6: CX-P001 through CX-P006). The entire QA dimension has no project-level equivalent. CX-P005 mandates the 6-section Python ETL notebook skeleton; CX-P006 requires the standard DDL header with RULES field.
+- **deactivations.yaml is EMPTY** — all 90 project rules remain active for Purchase. A submission that claims rules were deactivated should be flagged.
+- **116 effective rules total** (90 inherited + 26 customizations) across 9 dimensions.
+
+**QA-P001 through QA-P005 are product-only rules:**
+- QA-P001: row count reconciliation (staging vs. fact) — BLOCKING
+- QA-P002: orphaned surrogate key detection — non-blocking warning
+- QA-P003: referential integrity via LEFT ANTI JOIN per FK → writes to bronze.dq_rejections — non-blocking
+- QA-P004: business rule assertions on loaded rows — non-blocking warning
+- QA-P005: centralised DQ rejection store (10-column DDL, append-only) — non-blocking
+
+**CX-P001 through CX-P006 are product-only rules:**
+- CX-P001: externalise date filters to config/environment.yaml
+- CX-P002: externalise business factors with NULL guards and bound assertions
+- CX-P003: consolidate duplicate scalar functions into NULL-guarded Python UDFs in src/common/udfs.py
+- CX-P004: enforce standard Purchase codebase directory layout
+- CX-P005: mandate 6-section Python ETL notebook skeleton (imports → lineage_key → zero-rows guard → try/except → conditional OPTIMIZE → close lineage)
+- CX-P006: require standard SQL DDL file header block in every generated DDL file (with RULES field listing all rule IDs)
+
 ---
 
 ## Score Interpretation

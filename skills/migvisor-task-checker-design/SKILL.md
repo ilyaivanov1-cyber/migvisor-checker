@@ -413,6 +413,24 @@ Then immediately output a **plain-English summary** of 5–6 sentences. Rules:
 
 **Phantom rule citations** — the reference design document cites DM-001 and DM-002 rules that do not exist in the project or product rule set. If a trainee mentions these rule IDs, note them as phantom citations. Trainees who reproduce the citation should not lose points for it, but should lose Issues/gaps points if they treat the DM rules as authoritative without questioning their absence from the rule index.
 
+**8 tables across 2 layers** — Purchase owns 5: `silver_fact.fact_purchase` (11 cols), `bronze.purchase_staging` (15 cols), `bronze.etl_cutoff` (3 cols), `bronze.lineage_run` (9 cols), `bronze.dq_rejections` (10 cols). 3 externally owned: `silver_dim.supplier`, `silver_dim.stock_item`, `silver_dim.date`. A submission that creates DDL for the externally-owned tables loses Technical Accuracy points.
+
+**Staging carries 4 extra columns vs fact** — `wwi_supplier_id INT NOT NULL` and `wwi_stock_item_id INT NOT NULL` (business keys for SK resolution), `last_modified_when TIMESTAMP NOT NULL` (temporal probe for SCD-2 join), `_extracted_at_utc TIMESTAMP NOT NULL` (freshness audit, OB-P002). None of these propagate to `fact_purchase`. A submission that includes them in the fact DDL is inaccurate.
+
+**6 CALC IDs in Transformation** — CALC-001: `date_key = CAST(order_date AS DATE)` (in nb_extract_purchase during OLTP JOIN); CALC-002: supplier_key temporal range join + ROW_NUMBER + COALESCE(…,0); CALC-003: stock_item_key same pattern; CALC-004: lineage_key via IDENTITY INSERT+READ; CALC-005: `_extracted_at_utc = current_timestamp()`; CALC-006: rows_merged count via `SELECT COUNT(*) FROM fact_purchase WHERE lineage_key = X`. CALC-001 source column is `order_date` (OrderDate), NOT `last_modified_when`.
+
+**taskValues contract: 3 keys** — `lineage_key` (int), `last_cutoff` (timestamp string), `current_cutoff` (timestamp string). Publisher: `nb_extract_watermark` for all 3. Consumers: `nb_extract_purchase` reads `last_cutoff` + `lineage_key`; `migrate_staged_purchase_data` reads `lineage_key` + `current_cutoff`. A submission that omits `current_cutoff` from the MERGE task's inputs misses a key contract detail.
+
+**fact_purchase clustering** — two mutually exclusive strategies: (1) `CLUSTER BY (date_key, supplier_key)` for DBR 13.3+; (2) `PARTITIONED BY (date_key) ZORDER BY (supplier_key, stock_item_key)` as the pre-DBR-13.3 fallback (PE-P001). Submissions that specify only one strategy without the fallback are incomplete.
+
+**Watermark advance is missing from the spec design** — `design.md §3.3` (to-be step 21) requires `etl_cutoff` to be updated after a successful MERGE. The spec design's Transformation section does not mention this commit step. Submissions that also omit the watermark advance lose Coverage points; those that flag the omission earn Issues/gaps points.
+
+**`_current` views are NOT materialized** — `supplier_current` and `stock_item_current` are `CREATE OR REPLACE VIEW … WHERE is_current_row = TRUE`. No aggregation, no materialization. A submission that creates these as `MATERIALIZED VIEW` is technically inaccurate.
+
+**Zero-rows guard** — every notebook calls `dbutils.notebook.exit("SKIPPED: zero rows")` if `bronze.purchase_staging` count = 0. This produces a SKIPPED exit visible in the job logs, not a failure. Submissions that describe empty-batch handling as "silently succeeds" or "fails" are inaccurate.
+
+**`dq_rejections` has 10 columns, not 9** — NFR-007 states "nine required columns" but lists 10; the design schema has 10. The design is authoritative. Submissions that document 9 columns for `dq_rejections` should be flagged.
+
 ## Score Interpretation
 
 | Score | Grade | Recommended action |

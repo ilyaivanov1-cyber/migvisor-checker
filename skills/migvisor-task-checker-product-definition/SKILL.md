@@ -653,21 +653,27 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 ### Domain evaluation notes
 
 **ODPS 4.1 five-block structure** — a complete product-definition.yaml has 5 top-level blocks:
-1. `details` — product metadata (name, version, status, owner, description)
-2. `x-inputPorts` — ODPS extension (x- prefix marks it non-standard); lists 5 input ports; `purchase_staging` and `etl_cutoff` are owned by this product itself, not upstream products
-3. `dataAccess` — 2 access profiles (analyst read-only, ETL service account read-write)
-4. `dataQuality` — 5 dimensions: completeness (BLOCKING), uniqueness, validity, timeliness, accuracy
-5. `SLA` — 4 dimensions: freshness, availability, recovery time, retention
+1. `details` — product metadata (productID, name, type, status, visibility, description, valueProposition, categories, tags)
+2. `x-inputPorts` — ODPS extension (x- prefix marks it non-standard); lists 5 input ports: `purchase_staging`, `supplier_dimension`, `stock_item_dimension`, `date_dimension`, `etl_cutoff`; only `supplier_dimension`, `stock_item_dimension`, `date_dimension` are truly external; `purchase_staging` and `etl_cutoff` are owned by this product
+3. `dataAccess` — 2 access profiles: `default` (SQL Warehouse endpoint, `outputType: sql_endpoint`) and `bi_reports` (Power BI DirectQuery, lists both reports with `crossProductDependency: inventory_stock.silver_fact.fact_sale`)
+4. `dataQuality` — 5 dimensions: `completeness` (QA-P001, BLOCKING), `consistency` (QA-P003), `accuracy` (QA-P004), `uniqueness` (QA-P002), `traceability` (QA-P005)
+5. `SLA` — 4 entries: `updateFrequency: daily`, `latency: 4 hours` (available by 06:00 UTC, job starts 02:00 UTC), `uptime: 99.5 percent`, `retentionPolicy: silver 7_years / bronze 90_days`
 
 A submission missing any block scores 0 on Coverage for that block.
 
-**x-inputPorts is an ODPS extension** — the `x-` prefix indicates this block is not part of standard ODPS 4.1. Submissions that treat all 5 input ports as external upstream dependencies are inaccurate: `purchase_staging` and `etl_cutoff` are this product's own tables.
+**x-inputPorts is an ODPS extension** — the `x-` prefix indicates this block is not part of standard ODPS 4.1. Submissions that treat all 5 input ports as external upstream dependencies are inaccurate: `purchase_staging` and `etl_cutoff` are this product's own tables. The SQL Server 2014 source (`wideworldimportersdw`) is NOT an input port — this omission is a known gap tracked as PD-001.
 
-**dataQuality blocking dimension** — `completeness` is the only BLOCKING check, mapping to QA-P001 (row count reconciliation). The other 4 dimensions are non-blocking. A submission that marks multiple dimensions as blocking is inaccurate.
+**dataQuality blocking dimension** — `completeness` is the only BLOCKING check, mapping to QA-P001 (row count reconciliation). The other 4 dimensions are non-blocking. The 5 `strategy` values used are: `zero_tolerance` (completeness), `reject_and_continue` (consistency), `log_and_continue` (accuracy, uniqueness), `centralised_sink` (traceability). A submission that marks multiple dimensions as blocking is inaccurate.
 
 **QA rule cross-references** — the dataQuality block should cite QA-P001 through QA-P005 by rule ID. Prose descriptions without rule ID citations score lower on Specificity.
 
-**uniqueness dimension** — in this product, the `uniqueness` dimension is used for orphan detection (orphan surrogate keys in the fact table), not for checking actual uniqueness constraints. Submissions that describe it as a primary-key uniqueness check are inaccurate.
+**uniqueness dimension** — in this product, the `uniqueness` dimension is used for orphan detection (orphan surrogate keys in the fact table), not for checking actual uniqueness constraints. The fact table has no grain-uniqueness check anywhere in the quality model — the slot was consumed by orphan detection. Submissions that describe it as a primary-key uniqueness check are inaccurate.
+
+**details.description states the line grain** — "Each row represents one purchase order line" is the clearest statement of the fact grain anywhere in the specification chain. This sentence makes the single-column MERGE key in `design.md §3.3` and FR-007 provably wrong. Submissions that reproduce the description accurately earn full Coverage points; those that paraphrase it as "one row per order" (losing "line") should be flagged as a grain error.
+
+**details.status: draft after completed build** — `details.en.status` is `draft` even though all 26 tasks are listed as completed in `_manifest.yaml`. This is a known stale field — PD-001, PD-002, PD-003 remain open, which is one possible justification. Submissions that flag this inconsistency earn Issues/gaps points.
+
+**Markdown companion (product-definition.md) renders empty tables** — the `emit-md` companion has empty value columns for Input Ports, Output Ports, Data Quality, and SLA sections due to a field-name mismatch: the renderer looks for `name`/`type`/`measuredValue`, but the YAML uses `inputName`/`inputType`/`value`. The companion is for orientation only; the YAML is authoritative. Submissions that note this discrepancy earn Issues/gaps points.
 
 ## Score Interpretation
 

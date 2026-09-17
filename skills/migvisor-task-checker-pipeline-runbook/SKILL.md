@@ -333,13 +333,15 @@ total_score  = max(subtotal + auto_deducts, 0)
 
 ### Domain evaluation notes
 
-**Three source notebooks** — the reference runbook covers 3 task notebooks: `nb_extract_watermark` (reads and advances the ETL watermark), `nb_extract_purchase` (extracts from SQL Server into staging), `migrate_staged_purchase_data` (transforms staging into fact via MERGE). Failure recovery procedures should be described per-notebook. A submission that describes only 1–2 notebooks is missing proportional Coverage.
+**Three source notebooks** — the reference runbook covers 3 task notebooks: `nb_extract_watermark` (reads and advances the ETL watermark, `max_retries: 2`), `nb_extract_purchase` (extracts from SQL Server into staging, `max_retries: 2`), `migrate_staged_purchase_data` (transforms staging into fact via MERGE, `max_retries: 0`). Failure recovery procedures should be described per-notebook. A submission that describes only 1–2 notebooks is missing proportional Coverage.
 
-**SK resolution failure section** — the reference includes a dedicated section for surrogate-key resolution failures (when sk_resolver.py returns 0). Recovery steps: pause the pipeline, investigate the dimension table for the missing key, optionally insert a placeholder row, re-trigger the affected task. This is distinct from generic ETL failure recovery and should score as a separate Coverage criterion.
+**SK resolution failure section** — the reference includes a dedicated section (Section 3) for surrogate-key resolution failures: all-null `supplier_key` or `stock_item_key` rows. Root cause: dimension tables not loaded by the Dimensions team. Verification: `SELECT COUNT(*) FROM inventory_stock.silver_dim.supplier_current` (uses the `_current` view, not the base table). Recovery: escalate to the Dimensions team — do not proceed with Purchase ETL. This is distinct from generic ETL failure recovery and should score as a separate Coverage criterion.
 
-**9-step cutover checklist** — covering: environment validation, final source extract, staging reconciliation, dimension pre-load verification, fact MERGE execution, QA rule execution, BI report smoke test, access grant confirmation, and go-live sign-off. A submission with fewer than 6 named steps scores proportionally on Coverage.
+**9-step cutover checklist** — the 9 steps in sequence: (1) update `environment.yaml` with JDBC keys (PD-001); (2) get PD-002 sign-off and run reseed notebook; (3) execute DDL files against target catalog; (4) verify prerequisites; (5) confirm Dimensions team loaded supplier and stock_item; (6) trigger `nb_extract_watermark` standalone; (7) trigger full pipeline and verify `lineage_run` shows success; (8) run `purchase_grants.sql` (PD-003); (9) tune QA thresholds in `environment.yaml` (QA-DQ-01). A submission with fewer than 6 named steps scores proportionally on Coverage.
 
-**5 diagnostic queries** — watermark state, staging row count, fact row count, orphan SK detection, and dq_rejections summary. A submission with only 1–2 queries scores proportionally on Coverage for the diagnostics section.
+**5 diagnostic queries** — last 10 pipeline runs (`bronze.lineage_run`), current watermark (`bronze.etl_cutoff`), DQ rejection summary (`bronze.dq_rejections`), and fact table row count (`silver_fact.fact_purchase`). The success indicator is `was_successful = true` in `bronze.lineage_run` — not the Databricks Workflows UI status. A submission with only 1–2 queries scores proportionally on Coverage for the diagnostics section.
+
+**Known divergence in dq_rejections queries** — the reference runbook queries `bronze.dq_rejections` using `assertion_name` and `violation_type` columns, but the data dictionary's schema uses `rule_id` and `violation_column`/`rejection_reason`. Submissions that flag this column-name mismatch earn full Issues/gaps points; submissions that reproduce the runbook query without noting the discrepancy score 0 on Issues/gaps for that section.
 
 ---
 
