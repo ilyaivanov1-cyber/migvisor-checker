@@ -1,0 +1,194 @@
+dimension: Syntax
+prefix: SX
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+customizations: 1 extension (SX-004-EXT-P01)
+rule_count: 6
+
+rules:
+
+  - id: SX-001
+    source: project
+    dimension: Syntax
+    name: Remove T-SQL Transaction Blocks
+    intent: Eliminate BEGIN TRAN / COMMIT / ROLLBACK constructs because Delta Lake provides per-statement atomicity.
+    purchase_occurrences:
+      - location: integration.migratestagedpurchasedata
+        pattern: "SET XACT_ABORT ON; BEGIN TRAN; [Steps 1-7]; COMMIT;"
+        action: >
+          Remove SET XACT_ABORT ON, BEGIN TRAN, and COMMIT entirely. Each Delta MERGE/INSERT/UPDATE in
+          nb_load_fact_purchase.py is atomic. Wrap the notebook's main logic in a Python try/except block
+          to replicate the ROLLBACK error propagation behavior (raise exception on failure).
+      - location: wideworldimporters.integration.getpurchaseupdates
+        pattern: "SET NOCOUNT ON; SET XACT_ABORT ON;"
+        action: Remove both statements — no equivalent in Databricks JDBC extraction context
+    transformation:
+      source: T-SQL explicit transaction blocks (BEGIN TRAN ... COMMIT / ROLLBACK)
+      target: Delta Lake DML statements executed directly; Python try/except for error propagation
+      algorithm:
+        - Identify and remove all BEGIN TRAN, COMMIT, ROLLBACK, SET XACT_ABORT ON/OFF statements
+        - Add Python try/except around the notebook main logic where ROLLBACK was the error handling mechanism
+    validation:
+      success_criteria:
+        - No BEGIN TRAN, COMMIT, or ROLLBACK keywords in generated Spark SQL or Python notebook code
+        - Error handling is implemented via Python try/except
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: SX-002
+    source: project
+    dimension: Syntax
+    name: Replace Staging-Table and migratestaged* Procedure Pattern with Delta MERGE
+    intent: Replace the SQL Server pattern of loading data into a staging table and then calling a migratestaged* stored procedure with an equivalent Delta MERGE operation in a Python or SQL notebook.
+    purchase_pattern_mapping:
+      source_steps:
+        - 1: SSIS truncate purchase_staging (BUG — targets Order_Staging; fix in target)
+        - 2: SSIS extract dataflow → loads getpurchaseupdates result into purchase_staging
+        - 3: SSIS calls migratestagedpurchasedata
+      target_steps:
+        - 1: nb_extract_purchase_staging.py — JDBC reads 4 OLTP tables, derives ordered_quantity, writes to stg.purchase_staging via truncate+overwrite (fixing the source bug by writing to the correct table)
+        - 2: nb_load_fact_purchase.py — reads stg.purchase_staging, resolves surrogate keys (sk_resolver.py), performs two-phase MERGE/DELETE+INSERT (see SX-004-EXT-P01)
+    transformation:
+      source: T-SQL pattern — bulk insert into staging table followed by EXEC migratestagedpurchasedata
+      target: Python notebook function that performs Delta MERGE INTO purchase, reading from stg.purchase_staging
+    validation:
+      success_criteria:
+        - No EXEC migratestagedpurchasedata call remains in generated code
+        - stg.purchase_staging is written via truncate+overwrite each ETL run (idempotent)
+        - The source SSIS bug (truncating Order_Staging instead of Purchase_Staging) is eliminated by design in the target
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: SX-003
+    source: project
+    dimension: Syntax
+    name: Replace SCD-2 UPDATE Valid-To and INSERT Pattern with Delta MERGE INTO
+    intent: Convert the SQL Server SCD Type-2 pattern of UPDATE + INSERT into a single atomic Delta MERGE INTO statement with is_current boolean flag.
+    purchase_scd2_tables:
+      - table: supplier
+        scd2_columns:
+          source: Valid From datetime2, Valid To datetime2
+          target: valid_from DATE, valid_to DATE (business dates); row_effective_date DATE, row_expiry_date DATE DEFAULT DATE '9999-12-31', is_current_row BOOLEAN DEFAULT TRUE (technical SCD-2 control)
+        natural_key: wwi_supplier_id
+        load_notebook: src/etl/dimensions/nb_load_dim_supplier.py
+      - table: stock_item
+        scd2_columns:
+          source: Valid From datetime2, Valid To datetime2
+          target: valid_from DATE, valid_to DATE (business dates); row_effective_date DATE, row_expiry_date DATE DEFAULT DATE '9999-12-31', is_current_row BOOLEAN DEFAULT TRUE
+        natural_key: wwi_stock_item_id
+        load_notebook: src/etl/dimensions/nb_load_dim_stock_item.py
+    purchase_scd2_notes:
+      - Sentinel row (key=0 Unknown member) must be pre-inserted in both supplier and stock_item by a bootstrap notebook before any fact load. See CX-P02.
+      - Both SCD-2 dimensions are shared (loaded by shared infrastructure ETL), but their surrogate keys are resolved by the Purchase product's sk_resolver.py.
+      - The SCD-2 MERGE is implemented via scd2_merge.py shared helper.
+    transformation:
+      source: "T-SQL: UPDATE dim SET ValidTo = @closeDate WHERE key = @key AND ValidTo = 9999-12-31; INSERT INTO dim VALUES (...)"
+      target: "Spark SQL MERGE INTO globalpurchase.dim.<table> with WHEN MATCHED (expire) and WHEN NOT MATCHED (insert new active) clauses"
+    validation:
+      success_criteria:
+        - No standalone UPDATE + INSERT SCD-2 pairs remain in generated code
+        - supplier and stock_item have is_current_row BOOLEAN column
+        - key=0 Unknown sentinel rows exist in both dimensions before first fact load
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: SX-004
+    source: project
+    dimension: Syntax
+    name: Replace Fact Table DELETE and INSERT Pattern with Delta MERGE INTO
+    intent: Convert the SQL Server fact table refresh pattern of DELETE + INSERT into a single idempotent Delta MERGE INTO statement keyed on the business key.
+    purchase_base_pattern:
+      source: >
+        DELETE FROM Fact.Purchase WHERE wwi_purchase_order_id IN (SELECT wwi_purchase_order_id FROM purchase_staging);
+        INSERT INTO Fact.Purchase SELECT ... FROM purchase_staging;
+      target: Delta MERGE or two-phase DELETE + INSERT per SX-004-EXT-P01
+      business_key: wwi_purchase_order_id
+    inheritance:
+      level: project
+      product_customization: extended by SX-004-EXT-P01 — standard MERGE is insufficient for full-order-level replacement
+
+  - id: SX-004-EXT-P01
+    source: product
+    dimension: Syntax
+    name: Purchase fact MERGE must implement full-order-level replacement semantics
+    intent: >
+      The source procedure deletes all fact rows for any wwi_purchase_order_id present in staging, then re-inserts
+      all staging rows. A single changed line causes all lines for that order to be fully replaced. Standard MERGE
+      (WHEN MATCHED UPDATE, WHEN NOT MATCHED INSERT) does not remove lines absent from staging that previously
+      existed in the fact for the same order IDs.
+    transformation:
+      source: "DELETE FROM Fact.Purchase WHERE wwi_purchase_order_id IN (staging_order_ids); INSERT INTO Fact.Purchase SELECT ... FROM staging;"
+      target: >
+        Two-phase Delta operation in nb_load_fact_purchase.py:
+          Phase 1 — DELETE:
+            spark.sql(f"""
+              DELETE FROM {TBL_FACT_PURCHASE}
+              WHERE wwi_purchase_order_id IN (
+                SELECT DISTINCT wwi_purchase_order_id FROM {TBL_STAGING}
+              )
+            """)
+          Phase 2 — INSERT:
+            resolved_df.write.format("delta").mode("append").saveAsTable(TBL_FACT_PURCHASE)
+
+        Alternative (single MERGE with deletion clause):
+          MERGE INTO globalpurchase.fact.purchase t
+          USING purchase_staging s ON t.wwi_purchase_order_id = s.wwi_purchase_order_id AND t.purchase_key = s.purchase_key_lookup
+          WHEN MATCHED THEN UPDATE SET *
+          WHEN NOT MATCHED BY TARGET THEN INSERT *
+          WHEN NOT MATCHED BY SOURCE AND t.wwi_purchase_order_id IN (affected_order_ids) THEN DELETE
+      algorithm:
+        - Before any write, collect distinct wwi_purchase_order_id values from stg.purchase_staging
+        - Phase 1: Delete all existing purchase rows whose wwi_purchase_order_id is in the collected set
+        - Phase 2: Append all resolved staging rows to purchase with lineage_key stamped
+        - Wrap both phases in Python try/except; if Phase 2 fails, log error and raise — Phase 1 deletion cannot be undone without a full re-extract
+        - Row count reconciliation assertion QA-P01-C validates that staging count = rows inserted
+    applies_to: src/etl/facts/nb_load_fact_purchase.py
+
+  - id: SX-005
+    source: project
+    dimension: Syntax
+    name: Convert T-SQL Syntax to Spark SQL and Python
+    intent: Translate T-SQL-specific functions, operators, data types, and DML constructs to their Spark SQL or Python equivalents.
+    purchase_tsql_occurrences:
+      - pattern: "EXEC Integration.GetLineageKey"
+        target: "lineage_key = int(dbutils.jobs.taskValues.get(taskKey='nb_extract_watermark', key='lineage_key'))"
+      - pattern: "UPDATE Integration.Lineage SET [Data Load Completed] = SYSDATETIME()"
+        target: "spark.sql(f'UPDATE {TBL_LINEAGE} SET rows_loaded = {rows_merged} WHERE lineage_key = {lineage_key}')"
+      - pattern: "SYSDATETIME()"
+        target: "current_timestamp()"
+      - pattern: "ISNULL(x, y)"
+        target: "COALESCE(x, y)"
+      - pattern: "COALESCE(subquery, 0)"
+        target: "COALESCE(resolved_key, 0) — preserved as Unknown member fallback; see CX-P02 for DQ observability"
+      - pattern: "TOP(1) ... ORDER BY valid_from"
+        target: "ROW_NUMBER() OVER (PARTITION BY nat_key ORDER BY valid_from ASC) = 1 in sk_resolver.py pre-join"
+      - pattern: "WITH EXECUTE AS OWNER"
+        target: Remove — replaced by Databricks service principal
+      - pattern: "SET NOCOUNT ON"
+        target: Remove — no Databricks equivalent
+      - pattern: "[Bracket Quoted Identifier]"
+        target: "snake_case_identifier (no quoting needed)"
+      - pattern: "CONVERT(CHAR(8), GETDATE()-N, 112)"
+        target: "date_format(date_sub(current_date(), N), 'yyyyMMdd')"
+      - pattern: "UPDATE Integration.[ETL Cutoff] SET [Cutoff Time] = ..."
+        target: "spark.sql(f'MERGE INTO {TBL_ETL_CUTOFF} USING ... ON table_name = ... WHEN MATCHED THEN UPDATE SET ...')"
+      - pattern: "CASE WHEN pol.LastEditedWhen > po.LastEditedWhen THEN pol.LastEditedWhen ELSE po.LastEditedWhen END (repeated twice in WHERE)"
+        target: >
+          Use a CTE or derived column in Spark SQL to compute max_last_edited once, then reference in the filter.
+          Python: staging_df = spark.sql("""
+            SELECT *, CASE WHEN pol_last_edited > po_last_edited THEN pol_last_edited ELSE po_last_edited END AS last_modified_when
+            FROM ...
+          """)
+          Then filter: staging_df.where((col('last_modified_when') > last_cutoff) & (col('last_modified_when') <= new_cutoff))
+    validation:
+      success_criteria:
+        - No T-SQL-only functions remain in generated Spark SQL or Python
+        - No square-bracket identifiers in generated code
+        - CASE expression for max watermark computed once in a CTE or derived column, not duplicated in the WHERE clause
+    inheritance:
+      level: project
+      product_customization: none

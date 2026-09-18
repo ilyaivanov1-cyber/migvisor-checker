@@ -1,0 +1,150 @@
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+new_rules:
+
+  - id: CX-P01
+    dimension: Custom
+    name: Derive ordered_quantity in Databricks transformation layer
+    intent: >
+      The source extraction procedure getpurchaseupdates computes ordered_quantity = ordered_outers * quantity_per_outer
+      via a JOIN to warehouse.stockitems at extract time. Since getpurchaseupdates is not migrated, this derivation
+      must be implemented explicitly in the Databricks ingestion notebook.
+    activation:
+      preconditions:
+        - JDBC reads extract purchaseorders, purchaseorderlines, stockitems, and packagetypes directly from wideworldimporters
+        - ordered_quantity is not available as a raw column on any OLTP table — it must be computed
+      scope: product
+    transformation:
+      source: "OLTP: pol.OrderedOuters * si.QuantityPerOuter AS [Ordered Quantity] computed in getpurchaseupdates"
+      target: "Databricks: col('ordered_outers') * col('quantity_per_outer') computed as a derived column in nb_extract_purchase_staging.py"
+      algorithm:
+        - Read Warehouse.StockItems from wideworldimporters via JDBC (can be read separately or joined in pushdown)
+        - After joining PurchaseOrderLines to StockItems on StockItemID, compute ordered_quantity = ordered_outers * quantity_per_outer
+        - Store ordered_quantity in stg.purchase_staging as a non-null measure column
+        - Do not re-derive ordered_quantity in nb_load_fact_purchase.py — pass through from staging
+        - Keep ordered_outers in staging alongside ordered_quantity for auditability of the source multiplicands
+    validation:
+      success_criteria:
+        - stg.purchase_staging.ordered_quantity is present, computed as ordered_outers * quantity_per_outer
+        - The join to StockItems for QuantityPerOuter is executed in the Databricks layer
+        - ordered_quantity is NOT NULL (both source columns are NOT NULL in source schema)
+      stakeholder_confirmation:
+        - "CONFIRM before go-live (see CX-P03): Whether ordered_quantity should use quantity_per_outer at batch-run time or at the original order date."
+
+  - id: CX-P02
+    dimension: Custom
+    name: Unknown member (key=0) sentinel pattern — retain with DQ observability
+    intent: >
+      The source ETL uses COALESCE(<scd2_lookup>, 0) to silently write key=0 for unresolved supplier or stock item
+      dimension lookups. The target must preserve the Unknown member pattern (key=0 sentinel rows are required for
+      referential integrity in the MERGE) but must make each fallback visible via stg.dq_rejections.
+    activation:
+      preconditions:
+        - supplier and stock_item each have a key=0 Unknown sentinel row pre-loaded by the bootstrap notebook before any fact load
+        - sk_resolver.py performs the SCD-2 point-in-time surrogate key resolution using a LEFT JOIN with validity window filter
+      scope: product
+    transformation:
+      source: "COALESCE((SELECT TOP(1) key FROM dim WHERE nat_key=... AND date BETWEEN valid_from AND valid_to ORDER BY valid_from), 0)"
+      target: >
+        In sk_resolver.py:
+          Step 1 — LEFT JOIN staging to supplier/stock_item on (natural_key AND last_modified_when BETWEEN valid_from AND valid_to), using ROW_NUMBER() tiebreaker (ORDER BY valid_from ASC) to pick the earliest matching version.
+          Step 2 — Apply COALESCE(dim.surrogate_key, 0) on the join output to assign key=0 for unmatched rows.
+          Step 3 — Identify rows where resolved key = 0 and write a record to stg.dq_rejections per unresolved row, including: lineage_key, natural_key value, dimension_table name, severity='WARNING'.
+          Step 4 — Do NOT block the fact load. key=0 rows proceed to purchase.
+      algorithm:
+        - LEFT JOIN globalpurchase.dim.supplier ON wwi_supplier_id = s.wwi_supplier_id AND s.valid_from < last_modified_when AND last_modified_when <= s.valid_to
+        - Use COALESCE(s.supplier_key, 0) AS supplier_key
+        - Filter rows WHERE s.supplier_key IS NULL → write to dq_rejections
+        - Repeat symmetric pattern for stock_item / wwi_stock_item_id
+    validation:
+      success_criteria:
+        - purchase rows with supplier_key=0 or stock_item_key=0 appear as WARNING rows in stg.dq_rejections
+        - dq_rejections rows reference the same lineage_key as the fact load batch
+        - Pipeline does not fail due to key=0 rows — DQ entries are informational
+        - Bootstrap notebook inserts key=0 Unknown sentinel rows into supplier and stock_item before first fact load
+
+  - id: CX-P03
+    dimension: Custom
+    name: QuantityPerOuter point-in-time risk — stakeholder confirmation required before go-live
+    intent: >
+      The source extraction reads quantity_per_outer from warehouse.stockitems at batch-run time, not at the time
+      the purchase order was placed. If quantity_per_outer changes between order date and batch run date,
+      ordered_quantity reflects the current value rather than the historical value at order time. The migration
+      must preserve or explicitly correct this behavior.
+    activation:
+      preconditions:
+        - CX-P01 derivation rule is active
+        - A stakeholder decision on point-in-time vs. current-value semantics for ordered_quantity has not yet been recorded
+      scope: product
+    transformation:
+      source: "quantity_per_outer read from Warehouse.StockItems at batch-run time (current value)"
+      target: "Default: preserve source behavior — read quantity_per_outer from globalpurchase.dim.stock_item WHERE is_current_row = TRUE (current version at batch-run time)"
+      algorithm:
+        - Join stg.purchase_staging to globalpurchase.dim.stock_item WHERE is_current_row = TRUE to retrieve current quantity_per_outer
+        - Compute ordered_quantity = ordered_outers * quantity_per_outer using the current dim row value
+        - Document in docs/data_dictionary.md: "ordered_quantity is computed using quantity_per_outer at the batch-run date, matching source system behavior. This value may differ from quantity_per_outer at the original order date if the stock item's packaging changed between order and extraction."
+        - If stakeholder decision changes to point-in-time, switch JOIN to: globalpurchase.dim.stock_item WHERE date_key BETWEEN valid_from AND valid_to (using order date as the effective date)
+    validation:
+      success_criteria:
+        - ordered_quantity derivation strategy is documented in docs/data_dictionary.md
+        - Stakeholder confirmation of chosen approach is recorded in docs/go_live_checklist.md before production cutover
+      stakeholder_confirmation:
+        - "REQUIRED before go-live: Confirm whether ordered_quantity should use quantity_per_outer at batch-run time (default, preserving source behavior) or at the original order date (point-in-time historical accuracy). Record decision and approver in go_live_checklist.md."
+
+  - id: QA-P01
+    dimension: Quality
+    name: Purchase-specific DQ assertions for purchase
+    intent: >
+      Define data quality assertions specific to the Purchase fact table that validate business invariants
+      implied by the source schema design and procurement domain logic.
+    activation:
+      preconditions:
+        - purchase has been loaded with the current incremental batch
+        - dq_engine.py and nb_dq_purchase.py are implemented
+      scope: product
+    transformation:
+      source: "Implicit constraints in Fact.Purchase (NOT NULL on all measure columns; received ≤ ordered by procurement logic)"
+      target: "Explicit DQ assertions in src/etl/dq/nb_dq_purchase.py, executed via dq_engine.py after fact load"
+      algorithm:
+        - "Assertion QA-P01-A (informational): received_outers <= ordered_outers for every row in the current batch. Violations written to stg.dq_rejections with severity='WARNING'. Does not block pipeline."
+        - "Assertion QA-P01-B (informational): ordered_quantity > 0 and ordered_outers > 0. Rows with zero or negative measures are anomalies written to stg.dq_rejections."
+        - "Assertion QA-P01-C (blocking): Row count in stg.purchase_staging must equal rows merged into purchase for the current batch (zero tolerance). Pipeline alert on mismatch."
+        - "Assertion QA-P01-D (informational): Fraction of rows in the current batch with supplier_key=0 OR stock_item_key=0 must be below threshold (default 5%). Alert if exceeded; do not block."
+        - "Assertion QA-P01-E (blocking): is_order_finalized must be BOOLEAN (true/false only). No NULLs permitted — source column is BIT NOT NULL."
+        - Define assertion thresholds in config/dq_assertions_fact_purchase.yaml (key=0 fraction threshold, etc.)
+    validation:
+      success_criteria:
+        - nb_dq_purchase.py runs after fact load and before any mart promotion task in the Workflow
+        - Informational assertions (A, B, D) write to stg.dq_rejections without blocking the pipeline
+        - Blocking assertions (C, E) halt the Workflow on failure and fire an alert
+        - DQ assertion definitions and thresholds are stored in config/dq_assertions_fact_purchase.yaml
+
+  - id: LN-P01
+    dimension: Lineage
+    name: Preserve package column name and type for cross-domain view compatibility
+    intent: >
+      The out-of-scope analytical view analytics.v_ordertoyearanalytics joins fact.purchase on the Package column
+      using string equality (fo.Package = p.Package). The column must retain its migrated name (package) and STRING
+      type in the target. Additionally, the case-sensitivity difference between SQL Server (CI collation) and
+      Databricks (case-sensitive by default) must be documented as a cross-domain risk.
+    activation:
+      preconditions:
+        - purchase DDL is being authored for globalpurchase.fact
+        - analytics.v_ordertoyearanalytics may be rebuilt by the Order product team in a future migration phase
+      scope: product
+    transformation:
+      source: "Fact.Purchase.[Package] nvarchar(100) COLLATE Latin1_General_100_CI_AS NOT NULL"
+      target: "globalpurchase.fact.purchase.package STRING NOT NULL — column name must remain 'package'"
+      algorithm:
+        - Apply NM-001 snake_case conversion: [Package] → package. No further rename.
+        - Map nvarchar(100) → STRING per TY-003.
+        - Do NOT apply any alias, prefix, or suffix to this column — the downstream view references it by this exact name.
+        - Document in docs/data_dictionary.md: "package column name and STRING type are preserved as-is. analytics.v_ordertoyearanalytics (driven by the Order product, out-of-scope for Purchase) references this column by name in a correlated subquery (fo.Package = p.Package). Renaming breaks that join."
+        - Document case-sensitivity risk: SQL Server Latin1_General_100_CI_AS collation treats 'Each' and 'each' as equal; Databricks default is case-sensitive. If package values contain mixed-case variants, string equality joins between Order and Purchase domains may produce different result sets on Databricks vs. SQL Server. Communicate to Order product team.
+    validation:
+      success_criteria:
+        - globalpurchase.fact.purchase contains a column named exactly package (snake_case; no rename)
+        - Column type is STRING NOT NULL
+        - docs/data_dictionary.md documents the cross-domain dependency and case-sensitivity difference
+        - Order product team is informed of the case-sensitivity risk before they rebuild analytics.v_ordertoyearanalytics

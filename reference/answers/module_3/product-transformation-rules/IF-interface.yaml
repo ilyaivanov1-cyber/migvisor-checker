@@ -1,0 +1,152 @@
+dimension: Interface
+prefix: IF
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+customizations: 1 extension (IF-001-EXT-P01)
+rule_count: 5
+
+rules:
+
+  - id: IF-001
+    source: project
+    dimension: Interface
+    name: Replace SSIS Pipeline with Databricks Workflows Nightly Batch
+    intent: Migrate the legacy SSIS daily ETL orchestration to a Databricks Workflow with explicit task dependencies enforcing Staging → Dimensions/Facts → Mart execution order.
+    purchase_ssis_task_mapping:
+      source_pipeline: demo_ssis.folder_ssis-project.pipeline_dailyetlmain (Purchase container)
+      tasks:
+        - ssis_task: pipeline_item_set tablename to purchase
+          target: REMOVED — variable assignment replaced by notebook parameter or workflow parameter
+        - ssis_task: pipeline_item_truncate purchase_staging (BUG — executes DELETE FROM Order_Staging)
+          target: FIXED — nb_extract_purchase_staging.py writes to stg.purchase_staging via truncate+overwrite (no explicit truncate task needed; overwrite mode handles it)
+        - ssis_task: pipeline_item_extract updated purchase data to staging
+          target: nb_extract_purchase_staging.py — Tier 1 Staging task
+        - ssis_task: pipeline_item_migrate staged purchase data (calls migratestagedpurchasedata)
+          target: nb_load_fact_purchase.py — Tier 2 Fact task
+    purchase_workflow_dag: >
+      Tier 1 (Staging):
+        nb_extract_watermark → sets lineage_key via taskValues
+        nb_extract_purchase_staging → JDBC reads, derives ordered_quantity, writes stg.purchase_staging
+        nb_extract_dimensions → extracts supplier and stock_item incremental data as temp views
+      Tier 2 (Dimensions + Fact) — all depend on Tier 1 completing:
+        nb_load_dim_supplier → SCD-2 MERGE for supplier (depends_on: nb_extract_dimensions)
+        nb_load_dim_stock_item → SCD-2 MERGE for stock_item (depends_on: nb_extract_dimensions)
+        nb_load_fact_purchase → two-phase DELETE+INSERT into fact_purchase (depends_on: nb_load_dim_supplier, nb_load_dim_stock_item, nb_extract_purchase_staging)
+        nb_dq_purchase → DQ assertions (depends_on: nb_load_fact_purchase)
+      Tier 3 (Mart — future):
+        nb_refresh_mart_purchase (if mart views are added)
+        nb_commit_watermark → advances etl_cutoff watermark (depends_on: nb_load_fact_purchase success)
+    transformation:
+      source: SSIS package hierarchy with four sequential control-flow tasks in the Purchase container
+      target: Databricks Workflow with named tasks, dependency graph, and nightly schedule trigger
+    validation:
+      success_criteria:
+        - Databricks Workflow enforces Staging → Dimensions/Facts → Mart dependency order
+        - Source SSIS bug (wrong staging table truncated) is eliminated by design in the target workflow
+        - Workflow runs nightly on the defined schedule without manual intervention
+        - Failure in any Staging task prevents Dimension/Fact tasks from starting
+    inheritance:
+      level: project
+      product_customization: extended by IF-001-EXT-P01
+
+  - id: IF-001-EXT-P01
+    source: product
+    dimension: Interface
+    name: Purchase workflow enforces supplier and stock_item completion before purchase fact
+    intent: >
+      SCD-2 surrogate key resolution depends on globalpurchase.dim.supplier and globalpurchase.dim.stock_item being fully loaded for the current
+      batch. If either dimension is stale, sk_resolver.py falls back to key=0 silently. The Workflow must enforce
+      the dependency explicitly.
+    transformation:
+      source: "SSIS implicit ordering (Dimension ETL runs before Fact ETL within pipeline_dailyetlmain)"
+      target: >
+        In config/workflow_nightly_etl_main.yml, the nb_load_fact_purchase task must declare:
+          depends_on:
+            - nb_load_dim_supplier
+            - nb_load_dim_stock_item
+            - nb_extract_purchase_staging
+        This Purchase-specific dependency is in addition to the standard Tier 1 → Tier 2 ordering from IF-001.
+        If either nb_load_dim_supplier or nb_load_dim_stock_item fails, nb_load_fact_purchase must be skipped
+        (not just delayed) — configure the Workflow task failure policy accordingly.
+    applies_to: config/workflow_nightly_etl_main.yml
+
+  - id: IF-002
+    source: project
+    dimension: Interface
+    name: Extract Source Entities via JDBC Incremental Reads with LastEditedWhen Watermark
+    intent: Replace full SSIS extracts with JDBC incremental reads filtered by LastEditedWhen, committing the watermark only after all downstream loads succeed.
+    purchase_extraction_specifics:
+      watermark_table: globalpurchase.stg.etl_cutoff
+      watermark_column: last_modified_when (derived from MAX(pol.LastEditedWhen, po.LastEditedWhen) in getpurchaseupdates)
+      source_tables_to_read:
+        - wideworldimporters.Purchasing.PurchaseOrders (filtered by LastEditedWhen or derived watermark)
+        - wideworldimporters.Purchasing.PurchaseOrderLines
+        - wideworldimporters.Warehouse.StockItems (for QuantityPerOuter derivation per CX-P01)
+        - wideworldimporters.Warehouse.PackageTypes (for PackageTypeName lookup)
+      incremental_filter: >
+        CASE WHEN pol.LastEditedWhen > po.LastEditedWhen THEN pol.LastEditedWhen ELSE po.LastEditedWhen END
+        must be > last_cutoff AND <= new_cutoff. Implement using a CTE or derived column (not repeated twice
+        in the WHERE clause — see SX-005).
+      history_anchor_date: Configurable in Workflow parameters or config/environment.yaml; default 2013-01-01
+      watermark_commit: nb_commit_watermark.py — runs after nb_load_fact_purchase and nb_dq_purchase succeed
+    transformation:
+      source: SSIS full or delta extract via getpurchaseupdates stored procedure
+      target: JDBC incremental reads in nb_extract_purchase_staging.py, post-success watermark commit in nb_commit_watermark.py
+    validation:
+      success_criteria:
+        - Extraction reads only rows where derived last_modified_when is within the cutoff window
+        - etl_cutoff watermark for 'Purchase' is updated only after all downstream tasks succeed
+        - A failed downstream task leaves etl_cutoff unchanged; next run re-processes the same window
+    inheritance:
+      level: project
+      product_customization: none — override column is last_modified_when (derived MAX, consistent with IF-002 intent)
+
+  - id: IF-003
+    source: project
+    dimension: Interface
+    name: Store Source Credentials in Databricks Secrets and Configure Environment-Specific JDBC Driver
+    intent: Eliminate hard-coded SQL Server credentials by storing the JDBC URL, username, and password in Databricks Secrets; require the environment-specific JDBC driver class in cluster configuration.
+    purchase_connections:
+      - connection: wideworldimporters OLTP (source of extraction)
+        secret_scope: globalpurchase-<env>
+        secret_keys: jdbc_url_oltp, jdbc_username, jdbc_password
+      - connection: wideworldimportersdw DW (shared dims loaded by shared infrastructure)
+        note: Purchase product connects to OLTP source only; DW dims are loaded by shared ETL, not by Purchase notebooks
+    transformation:
+      source: SSIS connection managers with hardcoded or environment-variable credentials
+      target: dbutils.secrets.get(scope='globalpurchase-<env>', key='jdbc_url_oltp') pattern in all extraction notebooks
+    validation:
+      success_criteria:
+        - No JDBC URL, username, or password literal in any notebook, config file, or Workflow definition
+        - Secrets retrieved exclusively via dbutils.secrets.get at runtime
+        - Credential rotation requires only secret scope update — no code change
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: IF-004
+    source: project
+    dimension: Interface
+    name: Dimensions Use In-Memory Temp Views; Facts Use Truncate+Overwrite to Staging
+    intent: Dimension data is held only in transient in-memory temp views; fact data is written to globalpurchase.stg.* tables via truncate+overwrite.
+    purchase_application:
+      dimensions:
+        - supplier: extracted to temp view supplier_incremental (no persist to stg)
+        - stock_item: extracted to temp view stock_item_incremental (no persist to stg)
+        - date: static table — no extraction; read directly from globalpurchase.dim.date
+      facts:
+        - stg.purchase_staging: written via truncate+overwrite (mode="overwrite" with overwriteSchema=false) each ETL run
+      history_anchor_date: If no etl_cutoff row exists for Purchase, extraction window starts from HISTORY_ANCHOR_DATE
+    transformation:
+      source: SSIS staging tables (persistent SQL Server tables) for all entity types
+      target: Temp views for dimensions; Delta staging tables (truncate+overwrite) for facts
+    validation:
+      success_criteria:
+        - No dimension entity produces a persisted Delta table in the stg layer for Purchase; all dimension data is in-memory temp views
+        - stg.purchase_staging contains exactly the rows from the current incremental window after each successful run
+        - On first run with no etl_cutoff row, extraction window starts from HISTORY_ANCHOR_DATE
+        - HISTORY_ANCHOR_DATE is configurable without notebook code change
+    inheritance:
+      level: project
+      product_customization: none

@@ -1,0 +1,273 @@
+rules:
+
+  - id: TY-001
+    dimension: Types
+    name: Map SQL Server integer types to Databricks equivalents
+    intent: Convert INT, SMALLINT, TINYINT to INT and BIGINT to BIGINT in all Delta Lake table definitions.
+
+    activation:
+      preconditions:
+        - Source column data type is one of INT, SMALLINT, TINYINT, or BIGINT
+        - Target platform is Databricks Delta Lake
+      scope: project
+
+    transformation:
+      source: INT | SMALLINT | TINYINT | BIGINT
+      target: INT (for INT, SMALLINT, TINYINT) | BIGINT (for BIGINT)
+      algorithm:
+        - Identify all source columns with data type INT, SMALLINT, TINYINT, or BIGINT in the SQL Server schema.
+        - Map SMALLINT and TINYINT to INT, as Databricks does not have distinct smaller integer subtypes.
+        - Map INT to INT (direct equivalent).
+        - Map BIGINT to BIGINT (direct equivalent).
+        - Update all DDL CREATE TABLE and ALTER TABLE statements in the target schema accordingly.
+        - Verify no precision loss occurs for TINYINT (range 0-255) and SMALLINT (range -32768 to 32767) values present in the data, as both fit within INT range.
+
+    validation:
+      success_criteria:
+        - No INT, SMALLINT, or TINYINT column type references remain in target Delta table DDL.
+        - BIGINT source columns are mapped to BIGINT in the target schema.
+        - All integer column values load without overflow or truncation errors.
+        - Data profiling confirms min/max values of TINYINT and SMALLINT source columns fall within INT range.
+      test_cases:
+        - input: "col1 TINYINT"
+          expected_output: "col1 INT"
+        - input: "col2 SMALLINT"
+          expected_output: "col2 INT"
+        - input: "col3 INT"
+          expected_output: "col3 INT"
+        - input: "col4 BIGINT"
+          expected_output: "col4 BIGINT"
+
+    inheritance:
+      level: project
+      override: "Product-level rules may narrow the mapping for specific columns (e.g., flag columns using TINYINT may be overridden to BOOLEAN)."
+      extend: "Product rules may add column-specific casting logic if source TINYINT values exceed standard flag usage."
+      deactivate: "Deactivate this rule for a specific product if that product applies TY-005 BIT/BOOLEAN mapping to TINYINT flag columns instead."
+
+  - id: TY-002
+    dimension: Types
+    name: Map SQL Server decimal and floating-point types to DECIMAL or DOUBLE
+    intent: Convert DECIMAL, NUMERIC, FLOAT, and REAL SQL Server types to their Databricks equivalents, preserving precision and scale where applicable.
+
+    activation:
+      preconditions:
+        - Source column data type is one of DECIMAL(p,s), NUMERIC(p,s), FLOAT, or REAL
+        - Target platform is Databricks Delta Lake
+      scope: project
+
+    transformation:
+      source: DECIMAL(p,s) | NUMERIC(p,s) | FLOAT | REAL
+      target: DECIMAL(p,s) (for DECIMAL/NUMERIC) | DOUBLE (for FLOAT/REAL)
+      algorithm:
+        - Identify all source columns with data type DECIMAL, NUMERIC, FLOAT, or REAL in the SQL Server schema.
+        - For DECIMAL(p,s) and NUMERIC(p,s), extract the precision (p) and scale (s) parameters and map to DECIMAL(p,s) in Databricks, preserving the same values.
+        - For FLOAT (SQL Server FLOAT is equivalent to IEEE 754 double precision), map to DOUBLE in Databricks.
+        - For REAL (SQL Server REAL is equivalent to IEEE 754 single precision), map to DOUBLE in Databricks to avoid precision loss.
+        - Update all target DDL statements with the appropriate Databricks type.
+        - Document any REAL columns that are widened to DOUBLE to flag potential storage increase.
+
+    validation:
+      success_criteria:
+        - All DECIMAL and NUMERIC columns in target schema retain their original precision and scale parameters.
+        - No FLOAT or REAL column type references remain in the target Delta table DDL.
+        - Numeric data loads without rounding errors beyond the declared scale.
+        - REAL-to-DOUBLE widening is documented in the migration log.
+      test_cases:
+        - input: "amount DECIMAL(18, 4)"
+          expected_output: "amount DECIMAL(18, 4)"
+        - input: "ratio NUMERIC(10, 6)"
+          expected_output: "ratio DECIMAL(10, 6)"
+        - input: "measure FLOAT"
+          expected_output: "measure DOUBLE"
+        - input: "weight REAL"
+          expected_output: "weight DOUBLE"
+
+    inheritance:
+      level: project
+      override: "Product rules may override DECIMAL precision/scale for specific financial columns (e.g., currency amounts requiring DECIMAL(38,10))."
+      extend: "Product rules may add rounding or casting logic for specific aggregated measures."
+      deactivate: "Not applicable — this rule must remain active for all products."
+
+  - id: TY-003
+    dimension: Types
+    name: Map SQL Server string types to STRING
+    intent: Consolidate all SQL Server character and text types (VARCHAR, NVARCHAR, CHAR, NCHAR, TEXT, NTEXT) into the Databricks STRING type.
+
+    activation:
+      preconditions:
+        - Source column data type is one of VARCHAR(n), NVARCHAR(n), CHAR(n), NCHAR(n), TEXT, or NTEXT
+        - Target platform is Databricks Delta Lake
+      scope: project
+
+    transformation:
+      source: VARCHAR(n) | NVARCHAR(n) | CHAR(n) | NCHAR(n) | TEXT | NTEXT
+      target: STRING
+      algorithm:
+        - Identify all source columns with character or text data types in the SQL Server schema.
+        - Map VARCHAR(n), NVARCHAR(n), CHAR(n), NCHAR(n), TEXT, and NTEXT uniformly to STRING in the target Delta schema.
+        - Remove length constraints (e.g., VARCHAR(255) becomes STRING) as Databricks STRING is unbounded.
+        - Strip trailing spaces from CHAR/NCHAR values during data load, since Databricks STRING does not pad with spaces.
+        - Ensure Unicode content in NVARCHAR/NCHAR/NTEXT columns is preserved; STRING in Databricks is UTF-8 by default.
+        - Document columns that previously had length enforcement, as that constraint will be enforced at the application or ETL layer instead.
+
+    validation:
+      success_criteria:
+        - No VARCHAR, NVARCHAR, CHAR, NCHAR, TEXT, or NTEXT type references remain in the target Delta table DDL.
+        - All string columns are typed as STRING in target schema.
+        - Unicode characters from NVARCHAR/NTEXT source columns load correctly as UTF-8 in the target.
+        - CHAR/NCHAR trailing spaces are trimmed and do not appear in target data.
+      test_cases:
+        - input: "name VARCHAR(100)"
+          expected_output: "name STRING"
+        - input: "description NVARCHAR(MAX)"
+          expected_output: "description STRING"
+        - input: "code CHAR(5)"
+          expected_output: "code STRING"
+        - input: "notes TEXT"
+          expected_output: "notes STRING"
+        - input: "comments NTEXT"
+          expected_output: "comments STRING"
+
+    inheritance:
+      level: project
+      override: "Product rules may apply specific length-validation checks in ETL for columns that previously had VARCHAR(n) constraints."
+      extend: "Product rules may add TRIM() transformations explicitly in ETL SQL for CHAR/NCHAR source columns."
+      deactivate: "Not applicable — this rule must remain active for all products."
+
+  - id: TY-004
+    dimension: Types
+    name: Map SQL Server date and time types to DATE, TIMESTAMP, or STRING
+    intent: Convert SQL Server temporal types (DATE, DATETIME, DATETIME2, SMALLDATETIME, TIME) to their closest Databricks equivalents, using STRING for TIME since Databricks has no native time-only type.
+
+    activation:
+      preconditions:
+        - Source column data type is one of DATE, DATETIME, DATETIME2, SMALLDATETIME, or TIME
+        - Target platform is Databricks Delta Lake
+      scope: project
+
+    transformation:
+      source: DATE | DATETIME | DATETIME2 | SMALLDATETIME | TIME
+      target: DATE (for DATE) | TIMESTAMP (for DATETIME, DATETIME2, SMALLDATETIME) | STRING (for TIME)
+      algorithm:
+        - Identify all source columns with temporal data types in the SQL Server schema.
+        - Map DATE to DATE in Databricks (direct equivalent, no fractional seconds).
+        - Map DATETIME (precision to 3ms), DATETIME2 (precision to 100ns), and SMALLDATETIME (precision to 1 minute) all to TIMESTAMP in Databricks; TIMESTAMP covers the required range and precision.
+        - Map TIME to STRING in Databricks format 'HH:MM:SS.fffffff', as Databricks has no native TIME type; document this as a lossy semantic mapping.
+        - For SMALLDATETIME columns, note that second and sub-second precision is lost (SMALLDATETIME rounds to the nearest minute); document this in the migration log.
+        - Apply explicit CAST or to_timestamp() / to_date() functions in ETL transformations where format conversion is needed.
+
+    validation:
+      success_criteria:
+        - No DATETIME, DATETIME2, SMALLDATETIME, or TIME type references remain in the target Delta table DDL.
+        - DATE source columns are typed as DATE in the target schema.
+        - DATETIME, DATETIME2, and SMALLDATETIME source columns are typed as TIMESTAMP in the target schema.
+        - TIME source columns are typed as STRING and store values in 'HH:MM:SS' or 'HH:MM:SS.fffffff' format.
+        - Timestamp values load without date/time truncation beyond the SMALLDATETIME documented limitation.
+      test_cases:
+        - input: "order_date DATE"
+          expected_output: "order_date DATE"
+        - input: "created_at DATETIME"
+          expected_output: "created_at TIMESTAMP"
+        - input: "updated_at DATETIME2(7)"
+          expected_output: "updated_at TIMESTAMP"
+        - input: "scheduled_at SMALLDATETIME"
+          expected_output: "scheduled_at TIMESTAMP"
+        - input: "shift_start TIME"
+          expected_output: "shift_start STRING"
+
+    inheritance:
+      level: project
+      override: "Product rules may override TIME-to-STRING mapping with a specific format pattern (e.g., 'HH:MM:SS') for reporting consistency."
+      extend: "Product rules may add timezone handling (e.g., converting to UTC TIMESTAMP WITH TIME ZONE) for DATETIME2 columns in event-driven products."
+      deactivate: "Not applicable — this rule must remain active for all products."
+
+  - id: TY-005
+    dimension: Types
+    name: Map SQL Server BIT, UNIQUEIDENTIFIER, VARBINARY, and BINARY types
+    intent: Convert SQL Server BIT to BOOLEAN, UNIQUEIDENTIFIER to STRING, and VARBINARY/BINARY to BINARY in all Delta Lake table definitions.
+
+    activation:
+      preconditions:
+        - Source column data type is one of BIT, UNIQUEIDENTIFIER, VARBINARY(n), VARBINARY(MAX), or BINARY(n)
+        - Target platform is Databricks Delta Lake
+      scope: project
+
+    transformation:
+      source: BIT | UNIQUEIDENTIFIER | VARBINARY(n) | VARBINARY(MAX) | BINARY(n)
+      target: BOOLEAN (for BIT) | STRING (for UNIQUEIDENTIFIER) | BINARY (for VARBINARY/BINARY)
+      algorithm:
+        - Identify all source columns with BIT, UNIQUEIDENTIFIER, VARBINARY, or BINARY data types.
+        - Map BIT to BOOLEAN; transform source values: 1 → true, 0 → false, NULL → NULL.
+        - Map UNIQUEIDENTIFIER to STRING; store GUIDs in canonical lowercase hyphenated format (e.g., 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') using LOWER(CAST(... AS STRING)) in ETL.
+        - Map VARBINARY(n), VARBINARY(MAX), and BINARY(n) to BINARY in Databricks; no format conversion needed.
+        - Document any VARBINARY(MAX) columns, as very large binary payloads may affect Delta Lake file sizes and should be reviewed for storage optimization.
+        - For the SCD-2 `is_current` derived column (added to dimension tables), declare the column as BOOLEAN in the target DDL.
+
+    validation:
+      success_criteria:
+        - No BIT, UNIQUEIDENTIFIER, VARBINARY, or BINARY type references remain in target Delta table DDL.
+        - BIT columns are typed as BOOLEAN, with 0/1 correctly loaded as false/true.
+        - UNIQUEIDENTIFIER columns are typed as STRING and store lowercase hyphenated GUID strings.
+        - VARBINARY and BINARY columns are typed as BINARY with binary content preserved.
+        - The derived `is_current` BOOLEAN column is present in all SCD-2 dimension tables.
+      test_cases:
+        - input: "is_active BIT"
+          expected_output: "is_active BOOLEAN"
+        - input: "record_guid UNIQUEIDENTIFIER"
+          expected_output: "record_guid STRING"
+        - input: "photo VARBINARY(MAX)"
+          expected_output: "photo BINARY"
+        - input: "hash_value BINARY(32)"
+          expected_output: "hash_value BINARY"
+        - input: "is_current (derived SCD-2 column)"
+          expected_output: "is_current BOOLEAN"
+
+    inheritance:
+      level: project
+      override: "Product rules may override UNIQUEIDENTIFIER-to-STRING to use UPPER format for GUIDs if downstream systems require uppercase."
+      extend: "Product rules may add MD5 or SHA hashing logic for VARBINARY columns used as surrogate keys."
+      deactivate: "Not applicable — this rule must remain active for all products."
+
+  - id: TY-006
+    dimension: Types
+    name: Replace SQL Server IDENTITY columns with Delta Lake GENERATED ALWAYS AS IDENTITY
+    intent: Migrate SQL Server auto-increment IDENTITY columns to the Delta Lake native `GENERATED ALWAYS AS IDENTITY` syntax to maintain surrogate key generation on the target platform.
+
+    activation:
+      preconditions:
+        - Source column is defined with the IDENTITY(seed, increment) property in SQL Server
+        - Target platform is Databricks Delta Lake with Unity Catalog
+      scope: project
+
+    transformation:
+      source: <col_name> <int_type> IDENTITY(seed, increment)
+      target: <col_name> BIGINT GENERATED ALWAYS AS IDENTITY (START WITH <seed> INCREMENT BY <increment>)
+      algorithm:
+        - Identify all source columns with the IDENTITY property in the SQL Server schema.
+        - Extract the seed and increment values from the IDENTITY definition (default is IDENTITY(1,1)).
+        - In the target Delta DDL, replace the IDENTITY property with `GENERATED ALWAYS AS IDENTITY (START WITH <seed> INCREMENT BY <increment>)`.
+        - Use BIGINT as the target type for all identity columns regardless of source integer subtype (INT or BIGINT), to accommodate future growth.
+        - Remove any SET IDENTITY_INSERT ON/OFF statements from migration scripts, as they are not applicable in Databricks.
+        - Ensure that identity column values are not explicitly inserted during data migration; instead, allow Delta to regenerate identity values, or disable GENERATED ALWAYS and re-enable after bulk load if preserving original key values is required.
+        - Coordinate with the LN (Lineage) and NM (Naming) dimensions to ensure foreign key references to identity columns are updated in child tables.
+
+    validation:
+      success_criteria:
+        - No IDENTITY property syntax remains in any target Delta DDL.
+        - All former IDENTITY columns are defined with `GENERATED ALWAYS AS IDENTITY` in the target schema.
+        - Identity columns use BIGINT type in the target schema.
+        - Auto-increment behavior is verified by inserting test rows and confirming sequential key generation.
+        - No SET IDENTITY_INSERT statements appear in any migration or ETL script.
+      test_cases:
+        - input: "customer_key INT IDENTITY(1,1)"
+          expected_output: "customer_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)"
+        - input: "sale_key BIGINT IDENTITY(1,1)"
+          expected_output: "sale_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)"
+        - input: "sequence_id INT IDENTITY(100,10)"
+          expected_output: "sequence_id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 100 INCREMENT BY 10)"
+
+    inheritance:
+      level: project
+      override: "Product rules may override GENERATED ALWAYS AS IDENTITY with a sequence-based approach if the product requires portable key generation outside Delta."
+      extend: "Product rules may add logic to preserve original IDENTITY values during bulk historical load by temporarily using INSERT OVERWRITE with explicit key values before enabling GENERATED ALWAYS AS IDENTITY."
+      deactivate: "Deactivate for products that use externally generated surrogate keys (e.g., UUIDs managed by the application layer)."

@@ -1,0 +1,122 @@
+dimension: Custom
+prefix: CX
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+customizations: 3 new product-only rules (CX-P01, CX-P02, CX-P03)
+rule_count: 3
+note: No corresponding project-level CX dimension file — all rules in this file are product-only (new-rules.yaml).
+
+rules:
+
+  - id: CX-P01
+    source: product
+    dimension: Custom
+    name: Derive ordered_quantity in Databricks transformation layer
+    intent: >
+      The source extraction procedure getpurchaseupdates computes ordered_quantity = ordered_outers * quantity_per_outer
+      using a JOIN to warehouse.stockitems. Since getpurchaseupdates is not migrated to the target platform, this
+      derivation must be explicitly implemented in the Databricks ingestion notebook.
+    activation:
+      preconditions:
+        - JDBC reads extract purchaseorders, purchaseorderlines, stockitems, and packagetypes directly from wideworldimporters
+        - ordered_quantity is not available as a pre-computed column on any OLTP source table — it is a derived measure
+      scope: product
+    transformation:
+      source: "OLTP: pol.OrderedOuters * si.QuantityPerOuter AS [Ordered Quantity] — computed inside getpurchaseupdates"
+      target: "Databricks: col('ordered_outers') * col('quantity_per_outer') computed in nb_extract_purchase_staging.py"
+      algorithm:
+        - Read Warehouse.StockItems from wideworldimporters via JDBC (either as a separate read and broadcast join, or included in a JDBC pushdown query joining to PurchaseOrderLines)
+        - After joining PurchaseOrderLines to StockItems on StockItemID, compute ordered_quantity = col('ordered_outers') * col('quantity_per_outer')
+        - Store ordered_quantity in stg.purchase_staging as a NON-NULL measure column (both source columns are NOT NULL)
+        - Retain ordered_outers in staging alongside ordered_quantity so the multiplicands are auditable
+        - Do not re-derive ordered_quantity in nb_load_fact_purchase.py — pass through from staging to fact
+      code_sketch: |
+        enriched = (
+            purchase_orderlines_df
+            .join(stockitems_df, on="stock_item_id", how="inner")
+            .withColumn("ordered_quantity", col("ordered_outers") * col("quantity_per_outer"))
+        )
+    validation:
+      success_criteria:
+        - stg.purchase_staging.ordered_quantity is present, computed as ordered_outers * quantity_per_outer
+        - The JOIN to Warehouse.StockItems for QuantityPerOuter is executed in Databricks, not in the JDBC source query
+        - ordered_quantity is NOT NULL in every row in stg.purchase_staging
+      stakeholder_confirmation:
+        - "CONFIRM before go-live (see CX-P03): whether ordered_quantity should use quantity_per_outer at batch-run time (preserving source behavior) or at the original order date (point-in-time historical accuracy)."
+
+  - id: CX-P02
+    source: product
+    dimension: Custom
+    name: Unknown member (key=0) sentinel pattern — retain with DQ observability
+    intent: >
+      The source ETL uses COALESCE(<scd2_lookup>, 0) to silently write key=0 for unresolved supplier or stock item
+      dimension lookups. The target must retain the Unknown member pattern (key=0 sentinel rows) to preserve
+      referential integrity in the fact table, but must make each silent fallback visible via stg.dq_rejections.
+    activation:
+      preconditions:
+        - supplier and stock_item each have a key=0 Unknown sentinel row pre-loaded by the bootstrap notebook before any fact load
+        - sk_resolver.py performs SCD-2 point-in-time surrogate key resolution using a LEFT JOIN with validity window filter
+      scope: product
+    transformation:
+      source: "COALESCE((SELECT TOP(1) key FROM dim WHERE nat_key=... AND date BETWEEN valid_from AND valid_to ORDER BY valid_from), 0)"
+      target: >
+        In sk_resolver.py:
+          Step 1 — LEFT JOIN staging to globalpurchase.dim.supplier on (wwi_supplier_id AND last_modified_when BETWEEN valid_from AND valid_to),
+                   using ROW_NUMBER() tiebreaker (PARTITION BY wwi_supplier_id ORDER BY valid_from ASC), pick rn=1.
+          Step 2 — Apply COALESCE(resolved.supplier_key, 0) for the final supplier_key in the staging DataFrame.
+          Step 3 — Identify rows where resolved supplier_key = 0 (join miss) and write a DQ rejection record to
+                   stg.dq_rejections with: lineage_key, entity='supplier', natural_key_value=wwi_supplier_id,
+                   severity='WARNING', message='Supplier key unresolved — Unknown member (key=0) assigned'.
+          Step 4 — Repeat symmetric pattern for stock_item / wwi_stock_item_id.
+          Step 5 — Do NOT block the fact load — rows with key=0 proceed to purchase.
+      algorithm:
+        - "supplier_resolved = staging_df.join(dim_supplier_df, on=[...validity...], how='left')"
+        - "supplier_resolved = supplier_resolved.withColumn('supplier_key', coalesce(col('supplier_key'), lit(0)))"
+        - "dq_failures = supplier_resolved.filter(col('supplier_key') == 0)"
+        - "dq_failures.select(...).write_to_dq_rejections(severity='WARNING', lineage_key=lineage_key)"
+        - "# repeat for stock_item_key"
+    validation:
+      success_criteria:
+        - purchase rows with supplier_key=0 or stock_item_key=0 appear as WARNING entries in stg.dq_rejections
+        - dq_rejections rows reference the same lineage_key as the fact load batch
+        - Pipeline does not fail due to key=0 rows — DQ entries are informational
+        - Bootstrap notebook inserts key=0 Unknown sentinel rows into supplier and stock_item before first fact load
+        - go_live_checklist.md records: "supplier key=0 sentinel row pre-loaded: YES/NO" and "stock_item key=0 sentinel row pre-loaded: YES/NO"
+
+  - id: CX-P03
+    source: product
+    dimension: Custom
+    name: QuantityPerOuter point-in-time risk — stakeholder confirmation required before go-live
+    intent: >
+      The source extraction reads quantity_per_outer from warehouse.stockitems at batch-run time, not at the time
+      the purchase order was placed. If quantity_per_outer changes between order date and batch-run date,
+      ordered_quantity reflects the current value rather than the historical value at order time. The migration must
+      explicitly document and confirm the chosen approach.
+    activation:
+      preconditions:
+        - CX-P01 derivation rule is active
+        - A stakeholder decision on the semantics of ordered_quantity has not yet been recorded in go_live_checklist.md
+      scope: product
+    transformation:
+      source: "quantity_per_outer read from Warehouse.StockItems at batch-run time (current value, not historical)"
+      target: >
+        Default: preserve source behavior — read quantity_per_outer from globalpurchase.dim.stock_item
+        WHERE is_current_row = TRUE (the current version at batch-run time).
+
+        Alternative (point-in-time): Join stg.purchase_staging to globalpurchase.dim.stock_item
+        WHERE date_key BETWEEN valid_from AND valid_to to obtain the stock item version active at order date.
+      algorithm:
+        - Default path: JOIN stg.purchase_staging to globalpurchase.dim.stock_item WHERE is_current_row = TRUE → use current quantity_per_outer
+        - Document in docs/data_dictionary.md: "ordered_quantity is computed using quantity_per_outer as of the batch-run date, preserving the behavior of the source system's getpurchaseupdates procedure. This may differ from the historical value at order date if stock item packaging changed."
+        - If stakeholder decision changes to point-in-time: modify sk_resolver.py to join on validity window for quantity_per_outer lookup at order_date (date_key)
+    validation:
+      success_criteria:
+        - ordered_quantity derivation strategy is documented in docs/data_dictionary.md
+        - Stakeholder decision (batch-run-time vs. point-in-time) is signed off and recorded in docs/go_live_checklist.md before production cutover
+      stakeholder_confirmation:
+        required: true
+        question: >
+          REQUIRED before go-live: Confirm whether ordered_quantity should reflect quantity_per_outer at batch-run
+          time (default, preserving source system behavior) or at the original purchase order date (point-in-time
+          historical accuracy). Record decision, rationale, and approver in go_live_checklist.md.

@@ -1,0 +1,233 @@
+rules:
+
+  - id: OB-001
+    dimension: Objects
+    name: Migrate in-scope tables to Delta Lake tables
+    intent: All tables in the fact, dimension, and integration schemas are recreated in Databricks as Delta Lake tables under the globalpurchase Unity Catalog.
+
+    activation:
+      preconditions:
+        - Source table resides in one of the in-scope schemas (fact, dimension, integration)
+        - Table is not in the excluded dbo.* schema
+        - Table is not a SEQUENCE container (sequences.* schema excluded)
+      scope: project
+
+    transformation:
+      source: SQL Server CREATE TABLE in fact / dimension / integration schema
+      target: Databricks Delta Lake CREATE TABLE ... USING DELTA registered in Unity Catalog globalpurchase
+      algorithm:
+        - Identify all tables in fact, dimension, and integration schemas from the source catalog wideworldimportersdw
+        - Map each source schema to the equivalent target schema in catalog globalpurchase (e.g. wideworldimportersdw.fact → globalpurchase.fact)
+        - Translate each column definition: map SQL Server data types to Databricks SQL types per the TY-types dimension rules
+        - Add USING DELTA clause to every CREATE TABLE statement
+        - Preserve original column names and ordering unless overridden by another dimension rule
+        - Apply NOT NULL constraints, DEFAULT expressions, and CHECK constraints where supported; document unsupported constraints for manual review
+        - Register each table in Unity Catalog under globalpurchase.<schema>.<table_name>
+        - Do not carry over SQL Server filegroup or partition scheme clauses; apply Delta Lake partitioning per the PK-partitioning rules if applicable
+
+    validation:
+      success_criteria:
+        - Every in-scope source table has a corresponding Delta Lake table in globalpurchase
+        - All target tables return DESCRIBE TABLE output confirming USING DELTA provider
+        - Column count and names match source definitions after type mapping
+        - No fact, dimension, or integration table is omitted from the target catalog
+      test_cases:
+        - input: "wideworldimportersdw.fact.Sale (source SQL Server table)"
+          expected_output: "globalpurchase.fact.Sale created with USING DELTA, all columns present with mapped Databricks types"
+        - input: "wideworldimportersdw.dimension.City (source SQL Server table)"
+          expected_output: "globalpurchase.dimension.City created with USING DELTA, column types translated, no filegroup clause"
+        - input: "wideworldimportersdw.integration.Customer_Staging (integration schema table)"
+          expected_output: "globalpurchase.integration.Customer_Staging created with USING DELTA"
+        - input: "wideworldimportersdw.dbo.SomeTable (excluded schema)"
+          expected_output: "Table not migrated; excluded from target catalog"
+
+    inheritance:
+      level: project
+      override: Product-level rules may override the target schema name or add table-specific PARTITIONED BY clauses
+      extend: Product rules may add column defaults or table properties specific to a data product
+      deactivate: Deactivate for any table explicitly listed in a product-level exclusion list
+
+  - id: OB-002
+    dimension: Objects
+    name: Convert stored procedures to Python functions
+    intent: All in-scope SQL Server stored procedures (migratestaged* family) are replaced by equivalent Python functions with snake_case names matching the original procedure names.
+
+    activation:
+      preconditions:
+        - Object is a SQL Server stored procedure
+        - Procedure name matches the migratestaged* pattern or is otherwise explicitly in scope
+        - Procedure does not belong to application.* schema (handled by OB-004)
+      scope: project
+
+    transformation:
+      source: SQL Server stored procedure (T-SQL) in integration or related schema
+      target: Python function in the ETL pipeline with snake_case name identical to the source procedure name
+      algorithm:
+        - Enumerate all stored procedures in scope (migratestaged* and other in-scope procedures)
+        - Convert the procedure name to snake_case (SQL Server names are already lowercase with underscores; confirm and normalise)
+        - Translate the T-SQL procedure body to equivalent Python logic using PySpark or Databricks SQL as appropriate
+        - Replace T-SQL cursor and WHILE-loop patterns with DataFrame transformations or SQL MERGE statements
+        - Replace T-SQL transaction blocks (BEGIN TRAN / COMMIT / ROLLBACK) with Delta Lake transaction semantics (MERGE INTO or write with overwrite mode)
+        - Replace EXEC calls to other procedures with direct Python function calls to their migrated equivalents
+        - Expose the function with the same input parameters as the original procedure, mapped to Python typed arguments
+        - Place the resulting function in the appropriate ETL module file corresponding to its source schema
+        - Unit-test each function against representative inputs (see test_cases)
+
+    validation:
+      success_criteria:
+        - Every in-scope stored procedure has a corresponding Python function with a matching snake_case name
+        - No T-SQL stored procedure DDL exists in the target platform for in-scope objects
+        - Python functions produce equivalent row-level output compared to source procedure execution on the same input data
+        - All inter-procedure EXEC dependencies are replaced by Python function calls
+      test_cases:
+        - input: "SQL Server stored procedure integration.MigrateStagedOrders"
+          expected_output: "Python function migrate_staged_orders() defined in etl/integration.py with identical business logic"
+        - input: "SQL Server stored procedure integration.MigrateStagedCustomers"
+          expected_output: "Python function migrate_staged_customers() defined in etl/integration.py"
+        - input: "Procedure body uses BEGIN TRAN / COMMIT"
+          expected_output: "Equivalent Python function uses Delta MERGE INTO or DataFrame write with transaction isolation"
+        - input: "Procedure calls EXEC integration.MigrateStagedOrders inside another procedure"
+          expected_output: "Python equivalent calls migrate_staged_orders() directly"
+
+    inheritance:
+      level: project
+      override: Product-level rules may override the module file placement or function signature for specific procedures
+      extend: Product rules may add logging, retry logic, or observability decorators to generated functions
+      deactivate: Deactivate for any procedure explicitly excluded from a product's ETL scope
+
+  - id: OB-003
+    dimension: Objects
+    name: Eliminate SEQUENCE objects — replace references with IDENTITY or Python counter
+    intent: SQL Server SEQUENCE objects in the sequences schema are not migrated; all references to NEXT VALUE FOR are replaced by GENERATED ALWAYS AS IDENTITY columns for surrogate keys or Python-managed counters for lineage keys.
+
+    activation:
+      preconditions:
+        - Object is a SQL Server SEQUENCE defined in the sequences schema
+        - Or a column or expression references NEXT VALUE FOR <sequence_name>
+      scope: project
+
+    transformation:
+      source: SQL Server CREATE SEQUENCE in sequences schema, or NEXT VALUE FOR <seq> references in T-SQL
+      target: No SEQUENCE object in target; surrogate key columns use BIGINT GENERATED ALWAYS AS IDENTITY; lineage/audit keys use Python-managed counter variable
+      algorithm:
+        - Identify all SEQUENCE objects in the sequences schema; mark them as excluded — do not emit any CREATE SEQUENCE DDL in the target
+        - Scan all in-scope table DDL for columns whose DEFAULT uses NEXT VALUE FOR <sequence>
+        - For surrogate key columns (typically named *Key or *Id): replace the DEFAULT with BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1) in the target Delta table DDL
+        - For lineage/audit counter columns not suitable for IDENTITY: implement a Python counter variable in the ETL function that increments and assigns values during data load
+        - Remove all NEXT VALUE FOR expressions from translated SQL or Python code
+        - Validate that no reference to sequences.* remains in any generated DDL or ETL code
+        - Document the mapping of each eliminated sequence to its replacement mechanism in the migration log
+
+    validation:
+      success_criteria:
+        - Zero CREATE SEQUENCE statements exist in any target DDL
+        - Zero NEXT VALUE FOR references exist in any generated SQL or Python code
+        - Surrogate key columns in target tables are defined with GENERATED ALWAYS AS IDENTITY
+        - Lineage key columns have a Python counter assignment in the corresponding ETL function
+        - Target tables load without sequence-related errors
+      test_cases:
+        - input: "sequences.CustomerKey (SQL Server SEQUENCE object)"
+          expected_output: "No SEQUENCE DDL emitted; dimension.Customer.CustomerKey column defined as BIGINT GENERATED ALWAYS AS IDENTITY"
+        - input: "T-SQL: DEFAULT (NEXT VALUE FOR sequences.TransactionId)"
+          expected_output: "Column default removed; Python ETL assigns transaction_id via incrementing counter"
+        - input: "integration staging table references NEXT VALUE FOR sequences.OrderKey"
+          expected_output: "Reference removed; surrogate key populated by IDENTITY or Python counter in ETL load step"
+        - input: "sequences.* schema in source catalog"
+          expected_output: "Schema not present in globalpurchase target catalog"
+
+    inheritance:
+      level: project
+      override: Product rules may specify a different counter strategy (e.g. UUID-based) for specific lineage key columns
+      extend: Product rules may add explicit START WITH values for IDENTITY columns when non-default seeds are required
+      deactivate: Not applicable — SEQUENCE elimination is mandatory for all in-scope objects
+
+  - id: OB-004
+    dimension: Objects
+    name: Do not migrate application.* objects — re-express as bootstrap scripts
+    intent: Objects in the application schema are excluded from object migration; any relevant behavior they encode is re-expressed as idempotent Databricks bootstrap scripts run at environment initialisation.
+
+    activation:
+      preconditions:
+        - Object resides in the application schema of wideworldimportersdw
+        - Object type is stored procedure, table, view, function, or any other database object
+      scope: project
+
+    transformation:
+      source: SQL Server objects in the application schema (tables, stored procedures, views, functions)
+      target: No application.* objects created in globalpurchase; behavior re-expressed as Python/SQL bootstrap scripts executed once at environment setup
+      algorithm:
+        - Enumerate all objects in the application schema; mark each as excluded from standard object migration
+        - Review each application object for behavior that must be preserved in the target environment (e.g. reference data population, permission grants, configuration settings)
+        - For each behavior that must be preserved, author an idempotent bootstrap script (Python notebook or SQL file) that reproduces the equivalent effect in Databricks
+        - Place bootstrap scripts in the designated bootstrap/ directory of the project codebase
+        - Ensure bootstrap scripts are parameterised for catalog name (globalpurchase) and environment (dev / test / prod)
+        - Do not emit any CREATE TABLE, CREATE PROCEDURE, or CREATE VIEW DDL targeting an application schema in the target catalog
+        - Document each application object and its disposition (bootstrapped or permanently excluded) in the migration object inventory
+
+    validation:
+      success_criteria:
+        - Zero application.* DDL objects exist in the globalpurchase target catalog
+        - All behaviors identified as required from application objects are covered by bootstrap scripts
+        - Bootstrap scripts execute successfully in a clean environment without errors
+        - Bootstrap scripts are idempotent (re-running produces no errors or duplicate data)
+      test_cases:
+        - input: "application.Configuration (SQL Server table storing environment settings)"
+          expected_output: "No application.Configuration table in target; settings injected via bootstrap script or Databricks secrets"
+        - input: "application.CreateStagingTables (stored procedure)"
+          expected_output: "Procedure not migrated; equivalent CREATE TABLE statements emitted by bootstrap/create_staging_tables.py"
+        - input: "application.PopulateReferenceTables (stored procedure)"
+          expected_output: "Procedure not migrated; bootstrap/populate_reference_tables.py loads equivalent reference data"
+        - input: "Any SELECT referencing application.* in ETL code"
+          expected_output: "Reference replaced with equivalent bootstrap-loaded table or configuration parameter"
+
+    inheritance:
+      level: project
+      override: Product rules may specify additional application objects to exclude or additional bootstrap behaviors to include
+      extend: Product rules may add product-specific bootstrap steps that depend on application-level data
+      deactivate: Not applicable — application schema exclusion is mandatory project-wide
+
+  - id: OB-005
+    dimension: Objects
+    name: Migrate in-scope views with v_ prefix; exclude out-of-scope views
+    intent: All in-scope SQL Server views are recreated in Databricks with a v_ name prefix; views explicitly listed as out of scope (e.g. analytics.v_ordertoyearanalytics) are not migrated.
+
+    activation:
+      preconditions:
+        - Object is a SQL Server VIEW in an in-scope schema (fact, dimension, integration)
+        - View is not listed in the project-level exclusion list (e.g. analytics.v_ordertoyearanalytics is excluded)
+      scope: project
+
+    transformation:
+      source: SQL Server CREATE VIEW in an in-scope schema, with any existing naming convention
+      target: Databricks SQL CREATE VIEW in the corresponding globalpurchase schema, with name prefixed v_ if not already present
+      algorithm:
+        - Enumerate all VIEW objects in the in-scope schemas (fact, dimension, integration)
+        - Check each view name against the project exclusion list; skip excluded views entirely
+        - For each included view, prepend v_ to the view name if the source name does not already begin with v_
+        - Translate the view body T-SQL to Databricks SQL, applying type-mapping and function-translation rules from the TY and FN dimensions
+        - Replace source three-part names (wideworldimportersdw.<schema>.<object>) with globalpurchase.<schema>.<object> in view body references
+        - Emit CREATE OR REPLACE VIEW globalpurchase.<schema>.v_<view_name> AS <translated_body>
+        - Register each view in Unity Catalog under the appropriate schema
+        - For the analytics schema: do not migrate any views; log analytics.v_ordertoyearanalytics as permanently excluded with reason "partial scope exclusion"
+
+    validation:
+      success_criteria:
+        - Every in-scope view has a corresponding v_-prefixed view in globalpurchase
+        - No view from the exclusion list exists in the target catalog
+        - All migrated views execute without errors against their underlying Delta tables
+        - View body references use globalpurchase catalog and correct schema names
+      test_cases:
+        - input: "wideworldimportersdw.dimension.vw_CustomerSummary (in-scope view without v_ prefix)"
+          expected_output: "globalpurchase.dimension.v_CustomerSummary created as Databricks SQL view with translated body"
+        - input: "wideworldimportersdw.fact.v_SalesByRegion (in-scope view already prefixed v_)"
+          expected_output: "globalpurchase.fact.v_SalesByRegion created; no double prefix applied"
+        - input: "analytics.v_ordertoyearanalytics (excluded view)"
+          expected_output: "View not migrated; logged as excluded in migration object inventory"
+        - input: "View body references wideworldimportersdw.dimension.City"
+          expected_output: "Reference rewritten to globalpurchase.dimension.City in target view definition"
+
+    inheritance:
+      level: project
+      override: Product rules may override the v_ prefix convention for a specific product's views or add additional excluded view names
+      extend: Product rules may add row-level security policies or column masking to migrated views
+      deactivate: Deactivate for any view that a product rule determines should be materialised as a Delta table instead

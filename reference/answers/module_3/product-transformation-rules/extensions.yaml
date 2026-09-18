@@ -1,0 +1,88 @@
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+extends:
+
+  - base_rule_id: SX-004
+    extension_id: SX-004-EXT-P01
+    dimension: Syntax
+    name: Purchase fact MERGE must implement full-order-level replacement semantics
+    reason: >
+      The source procedure migratestagedpurchasedata uses DELETE by wwi_purchase_order_id + INSERT for all lines
+      of changed orders. A single changed line causes all lines for that order to be deleted and re-inserted.
+      Standard SX-004 MERGE (WHEN MATCHED THEN UPDATE, WHEN NOT MATCHED THEN INSERT) does not cover deletion of
+      lines that previously existed in the fact for the same order IDs but are absent from the current staging batch.
+    override_detail: >
+      Implement a two-phase Delta operation for globalpurchase.fact.purchase:
+        Phase 1 — DELETE FROM globalpurchase.fact.purchase
+                   WHERE wwi_purchase_order_id IN (SELECT DISTINCT wwi_purchase_order_id FROM globalpurchase.stg.purchase_staging).
+        Phase 2 — INSERT INTO globalpurchase.fact.purchase
+                   SELECT ... FROM globalpurchase.stg.purchase_staging (with resolved surrogate keys and lineage_key stamped).
+      Alternatively implement as a single MERGE with an additional clause:
+        WHEN NOT MATCHED BY SOURCE AND t.wwi_purchase_order_id IN (affected_order_id_set) THEN DELETE.
+      Business natural key driving the merge/delete: wwi_purchase_order_id (not the surrogate purchase_key).
+    applies_to: src/etl/facts/nb_load_fact_purchase.py
+
+  - base_rule_id: TY-003
+    extension_id: TY-003-EXT-P01
+    dimension: Types
+    name: Map SQL Server sysname system alias to STRING
+    reason: >
+      The Purchase product sources include Integration.[ETL Cutoff] and Integration.Lineage, both of which use
+      the SQL Server system data type sysname (an alias for nvarchar(128) NOT NULL). sysname is not listed in
+      project rule TY-003 but must be handled consistently with NVARCHAR.
+    override_detail: >
+      Map sysname → STRING in all target DDL. Treat it identically to NVARCHAR(128): strip the length constraint,
+      map to STRING, preserve NOT NULL. No collation is carried over. Affected columns:
+        globalpurchase.stg.etl_cutoff.table_name STRING NOT NULL
+        globalpurchase.stg.lineage.table_name     STRING NOT NULL
+    applies_to: src/db/ddl/stg_etl_cutoff.sql, src/db/ddl/stg_lineage.sql
+
+  - base_rule_id: TY-005
+    extension_id: TY-005-EXT-P01
+    dimension: Types
+    name: Exclude Photo VARBINARY column from stock_item — declared without length (resolves to varbinary(1))
+    reason: >
+      Dimension.[Stock Item] declares Photo as VARBINARY without a length qualifier. SQL Server resolves this to
+      varbinary(1), meaning a maximum of 1 byte — effectively unusable for image storage. Carrying it forward to
+      Databricks as BINARY adds schema noise with no value.
+    override_detail: >
+      Exclude the photo column entirely from globalpurchase.dim.stock_item DDL.
+      Document in docs/data_dictionary.md: "photo column excluded from target — source declared varbinary without
+      length qualifier (resolves to varbinary(1)); column is functionally empty. If product image storage is
+      required in future, implement as a STRING column holding an object-storage URI."
+    applies_to: src/db/ddl/dim_stock_item.sql, docs/data_dictionary.md
+
+  - base_rule_id: OB-003
+    extension_id: OB-003-EXT-P01
+    dimension: Objects
+    name: Purchase lineage_key injected from upstream task value, not Python counter
+    reason: >
+      OB-003 specifies a Python-managed counter for lineage/audit keys. For the Purchase product, the Databricks
+      Workflow architecture passes lineage_key from the upstream nb_extract_watermark task via
+      dbutils.jobs.taskValues. This is more robust and observable than an in-notebook counter and aligns with the
+      project's shared workflow pattern.
+    override_detail: >
+      In nb_load_fact_purchase.py, retrieve lineage_key as:
+        lineage_key = int(dbutils.jobs.taskValues.get(taskKey="nb_extract_watermark", key="lineage_key"))
+      Raise RuntimeError if taskValues returns no value — do not fall back to an in-notebook counter.
+      After fact load completes, update the lineage record inline:
+        spark.sql(f"UPDATE {TBL_LINEAGE} SET rows_loaded = {rows_merged} WHERE lineage_key = {lineage_key}")
+      Do not implement a Python counter for lineage_key in any Purchase ETL notebook.
+    applies_to: src/etl/facts/nb_load_fact_purchase.py, src/etl/ingestion/nb_extract_watermark.py
+
+  - base_rule_id: IF-001
+    extension_id: IF-001-EXT-P01
+    dimension: Interface
+    name: Purchase workflow enforces supplier and stock_item dimension completion before purchase fact
+    reason: >
+      SCD-2 surrogate key resolution for globalpurchase.fact.purchase depends on globalpurchase.dim.supplier and
+      globalpurchase.dim.stock_item being fully loaded for the current batch. If either dimension is stale,
+      sk_resolver.py falls back to key=0 (Unknown member) silently — no error is raised, only incorrect data is
+      written. The Workflow dependency must enforce correct ordering explicitly.
+    override_detail: >
+      In config/workflow_nightly_etl_main.yml, configure the nb_load_fact_purchase task as:
+        depends_on: [nb_load_dim_supplier, nb_load_dim_stock_item, nb_extract_purchase_staging]
+      This is a Purchase-specific dependency in addition to the standard Tier 1 → Tier 2 structure from IF-001.
+      Failure of either dimension load task must prevent the fact load from running.
+    applies_to: config/workflow_nightly_etl_main.yml

@@ -1,0 +1,281 @@
+dimension: Types
+prefix: TY
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+customizations: 2 extensions (TY-003-EXT-P01, TY-005-EXT-P01)
+rule_count: 8
+
+rules:
+
+  - id: TY-001
+    source: project
+    dimension: Types
+    name: Map SQL Server integer types to Databricks equivalents
+    intent: Convert INT, SMALLINT, TINYINT to INT and BIGINT to BIGINT in all Delta Lake table definitions.
+    transformation:
+      source: INT | SMALLINT | TINYINT | BIGINT
+      target: INT (for INT, SMALLINT, TINYINT) | BIGINT (for BIGINT)
+    purchase_column_mappings:
+      - column: purchase.purchase_key
+        source_type: bigint IDENTITY(1,1)
+        target_type: BIGINT GENERATED ALWAYS AS IDENTITY
+        note: Handled by TY-006
+      - column: purchase.supplier_key
+        source_type: int
+        target_type: INT
+      - column: purchase.stock_item_key
+        source_type: int
+        target_type: INT
+      - column: purchase.wwi_purchase_order_id
+        source_type: int
+        target_type: INT
+      - column: purchase.ordered_outers
+        source_type: int
+        target_type: INT
+      - column: purchase.ordered_quantity
+        source_type: int
+        target_type: INT
+      - column: purchase.received_outers
+        source_type: int
+        target_type: INT
+      - column: purchase.lineage_key
+        source_type: int
+        target_type: BIGINT
+        note: Upgraded to BIGINT for forward compatibility with lineage volume growth
+      - column: supplier.supplier_key
+        source_type: int (SEQUENCE DEFAULT)
+        target_type: INT GENERATED ALWAYS AS IDENTITY
+      - column: supplier.wwi_supplier_id
+        source_type: int
+        target_type: INT
+      - column: supplier.payment_days
+        source_type: int
+        target_type: INT
+      - column: stock_item.stock_item_key
+        source_type: int (SEQUENCE DEFAULT)
+        target_type: INT GENERATED ALWAYS AS IDENTITY
+      - column: stock_item.wwi_stock_item_id
+        source_type: int
+        target_type: INT
+      - column: stock_item.lead_time_days
+        source_type: int
+        target_type: INT
+      - column: stock_item.quantity_per_outer
+        source_type: int
+        target_type: INT
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: TY-002
+    source: project
+    dimension: Types
+    name: Map SQL Server decimal and floating-point types to DECIMAL or DOUBLE
+    intent: Convert DECIMAL, NUMERIC, FLOAT, and REAL SQL Server types to their Databricks equivalents, preserving precision and scale.
+    transformation:
+      source: DECIMAL(p,s) | NUMERIC(p,s) | FLOAT | REAL
+      target: DECIMAL(p,s) (for DECIMAL/NUMERIC) | DOUBLE (for FLOAT/REAL)
+    purchase_column_mappings:
+      - column: stock_item.tax_rate
+        source_type: decimal(18,3)
+        target_type: DECIMAL(18,3)
+      - column: stock_item.unit_price
+        source_type: decimal(18,2)
+        target_type: DECIMAL(18,2)
+      - column: stock_item.recommended_retail_price
+        source_type: decimal(18,2) NULL
+        target_type: DECIMAL(18,2)
+      - column: stock_item.typical_weight_per_unit
+        source_type: decimal(18,3)
+        target_type: DECIMAL(18,3)
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: TY-003
+    source: project
+    dimension: Types
+    name: Map SQL Server string types to STRING
+    intent: Consolidate all SQL Server character and text types (VARCHAR, NVARCHAR, CHAR, NCHAR, TEXT, NTEXT) into the Databricks STRING type.
+    transformation:
+      source: VARCHAR(n) | NVARCHAR(n) | CHAR(n) | NCHAR(n) | TEXT | NTEXT
+      target: STRING
+    purchase_column_mappings:
+      - column: purchase.package
+        source_type: nvarchar(100) COLLATE Latin1_General_100_CI_AS
+        target_type: STRING NOT NULL
+        note: Column name preserved as 'package' per LN-P01
+      - column: supplier.supplier
+        source_type: nvarchar(200)
+        target_type: STRING
+      - column: supplier.category
+        source_type: nvarchar(100)
+        target_type: STRING
+      - column: supplier.primary_contact
+        source_type: nvarchar(100)
+        target_type: STRING
+      - column: supplier.supplier_reference
+        source_type: nvarchar(40) NULL
+        target_type: STRING
+      - column: supplier.postal_code
+        source_type: nvarchar(20)
+        target_type: STRING
+      - column: stock_item.stock_item
+        source_type: nvarchar(200)
+        target_type: STRING
+      - column: stock_item.color
+        source_type: nvarchar(40)
+        target_type: STRING
+      - column: stock_item.selling_package
+        source_type: nvarchar(100)
+        target_type: STRING
+      - column: stock_item.buying_package
+        source_type: nvarchar(100)
+        target_type: STRING
+      - column: stock_item.brand
+        source_type: nvarchar(100)
+        target_type: STRING
+      - column: stock_item.size
+        source_type: nvarchar(40)
+        target_type: STRING
+      - column: stock_item.barcode
+        source_type: nvarchar(100) NULL
+        target_type: STRING
+      - column: stg.etl_cutoff.table_name
+        source_type: sysname (→ see TY-003-EXT-P01)
+        target_type: STRING NOT NULL
+      - column: stg.lineage.table_name
+        source_type: sysname (→ see TY-003-EXT-P01)
+        target_type: STRING NOT NULL
+    inheritance:
+      level: project
+      product_customization: extended by TY-003-EXT-P01
+
+  - id: TY-003-EXT-P01
+    source: product
+    dimension: Types
+    name: Map SQL Server sysname system alias to STRING
+    intent: >
+      The Purchase product sources include Integration.[ETL Cutoff] and Integration.Lineage, both using the
+      SQL Server sysname data type (alias for nvarchar(128) NOT NULL). Map sysname to STRING.
+    transformation:
+      source: sysname (SQL Server system alias = nvarchar(128) NOT NULL)
+      target: STRING NOT NULL
+      algorithm:
+        - Treat sysname identically to NVARCHAR(128)
+        - Map to STRING, strip the length constraint, preserve NOT NULL
+        - No collation is carried over (Databricks STRING is UTF-8 by default)
+    applies_to:
+      - globalpurchase.stg.etl_cutoff.table_name STRING NOT NULL
+      - globalpurchase.stg.lineage.table_name STRING NOT NULL
+
+  - id: TY-004
+    source: project
+    dimension: Types
+    name: Map SQL Server date and time types to DATE, TIMESTAMP, or STRING
+    intent: Convert SQL Server temporal types (DATE, DATETIME, DATETIME2, SMALLDATETIME, TIME) to DATE, TIMESTAMP, or STRING as appropriate.
+    transformation:
+      source: DATE | DATETIME | DATETIME2 | SMALLDATETIME | TIME
+      target: DATE (for DATE) | TIMESTAMP (for DATETIME, DATETIME2, SMALLDATETIME) | STRING (for TIME)
+    purchase_column_mappings:
+      - column: purchase.date_key
+        source_type: date
+        target_type: DATE NOT NULL
+        note: FK references dim_date.date (date type) — preserves join semantics
+      - column: stg.purchase_staging.date_key
+        source_type: date NULL
+        target_type: DATE
+      - column: stg.purchase_staging.last_modified_when
+        source_type: datetime2 NULL
+        target_type: TIMESTAMP
+      - column: supplier.valid_from
+        source_type: datetime2
+        target_type: DATE NOT NULL
+        note: SCD-2 business validity date — mapped to DATE per product brief SCD-2 control column rules
+      - column: supplier.valid_to
+        source_type: datetime2
+        target_type: DATE NOT NULL
+        note: SCD-2 business validity date
+      - column: stock_item.valid_from
+        source_type: datetime2
+        target_type: DATE NOT NULL
+      - column: stock_item.valid_to
+        source_type: datetime2
+        target_type: DATE NOT NULL
+      - column: stg.lineage.data_load_started
+        source_type: datetime2
+        target_type: TIMESTAMP NOT NULL
+      - column: stg.lineage.data_load_completed
+        source_type: datetime2 NULL
+        target_type: TIMESTAMP
+      - column: stg.lineage.source_system_cutoff_time
+        source_type: datetime2
+        target_type: TIMESTAMP NOT NULL
+      - column: stg.etl_cutoff.cutoff_time
+        source_type: datetime2
+        target_type: TIMESTAMP NOT NULL
+    inheritance:
+      level: project
+      product_customization: none — SCD-2 datetime2 columns map to DATE for business validity columns (valid_from, valid_to)
+
+  - id: TY-005
+    source: project
+    dimension: Types
+    name: Map SQL Server BIT, UNIQUEIDENTIFIER, VARBINARY, and BINARY types
+    intent: Convert SQL Server BIT to BOOLEAN, UNIQUEIDENTIFIER to STRING, and VARBINARY/BINARY to BINARY.
+    transformation:
+      source: BIT | UNIQUEIDENTIFIER | VARBINARY(n) | VARBINARY(MAX) | BINARY(n)
+      target: BOOLEAN (for BIT) | STRING (for UNIQUEIDENTIFIER) | BINARY (for VARBINARY/BINARY)
+    purchase_column_mappings:
+      - column: purchase.is_order_finalized
+        source_type: bit NOT NULL
+        target_type: BOOLEAN NOT NULL
+      - column: stock_item.is_chiller_stock
+        source_type: bit NOT NULL
+        target_type: BOOLEAN NOT NULL
+      - column: stock_item.photo
+        source_type: varbinary (no length — resolves to varbinary(1))
+        target_type: EXCLUDED
+        note: See TY-005-EXT-P01 — column dropped from target DDL
+      - column: stg.lineage.was_successful
+        source_type: bit NOT NULL
+        target_type: BOOLEAN NOT NULL
+    inheritance:
+      level: project
+      product_customization: extended by TY-005-EXT-P01
+
+  - id: TY-005-EXT-P01
+    source: product
+    dimension: Types
+    name: Exclude Photo VARBINARY column from stock_item — declared without length (resolves to varbinary(1))
+    intent: >
+      Dimension.[Stock Item] declares Photo as VARBINARY without a length qualifier, which SQL Server resolves to
+      varbinary(1) (maximum 1 byte). The column is functionally unusable. Exclude it from the target DDL.
+    transformation:
+      source: "Photo VARBINARY (no length) — effectively varbinary(1)"
+      target: Column excluded entirely from globalpurchase.dim.stock_item
+      algorithm:
+        - Do not emit a photo column in stock_item DDL
+        - Document in docs/data_dictionary.md: "photo column excluded — source declared varbinary without length qualifier (resolves to varbinary(1)); functionally empty. Future product image storage should use a STRING column holding an object-storage URI."
+    applies_to: src/db/ddl/dim_stock_item.sql, docs/data_dictionary.md
+
+  - id: TY-006
+    source: project
+    dimension: Types
+    name: Replace SQL Server IDENTITY columns with Delta Lake GENERATED ALWAYS AS IDENTITY
+    intent: Migrate SQL Server auto-increment IDENTITY columns to the Delta Lake native GENERATED ALWAYS AS IDENTITY syntax.
+    transformation:
+      source: <col_name> <int_type> IDENTITY(seed, increment)
+      target: <col_name> BIGINT GENERATED ALWAYS AS IDENTITY (START WITH <seed> INCREMENT BY <increment>)
+    purchase_column_mappings:
+      - column: purchase.purchase_key
+        source_type: bigint IDENTITY(1,1)
+        target_type: BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)
+      - column: stg.purchase_staging.purchase_staging_key
+        source_type: bigint IDENTITY(1,1)
+        target_type: BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)
+        note: Staging key is transient — regenerated on each truncate+overwrite cycle
+    inheritance:
+      level: project
+      product_customization: none — supplier.supplier_key and stock_item.stock_item_key use SEQUENCE defaults in source (not IDENTITY); PL-004 covers the SEQUENCE replacement to IDENTITY

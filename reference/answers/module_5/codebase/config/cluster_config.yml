@@ -1,0 +1,34 @@
+# CFG-001: Databricks cluster configuration for the nightly Purchase ETL job.
+# No credential values in this file — all secrets referenced by scope/key name only.
+
+cluster_name: globalpurchase-etl-nightly
+
+node_type_id: Standard_DS3_v2  # Replace with your Azure/AWS instance type
+
+autoscale:
+  min_workers: 2
+  max_workers: 8
+
+spark_version: "14.3.x-scala2.12"
+
+spark_conf:
+  spark.databricks.delta.optimizeWrite.enabled: "true"
+  spark.databricks.delta.autoCompact.enabled: "true"
+  # JDBC driver class — driver JAR must be installed on the cluster
+  spark.driver.extraClassPath: "/databricks/jars/mssql-jdbc.jar"
+  spark.executor.extraClassPath: "/databricks/jars/mssql-jdbc.jar"
+  # History anchor date: used as the first-run watermark fallback
+  spark.globalpurchase.history_anchor_date: "2020-01-01T00:00:00"
+
+custom_tags:
+  product: Purchase
+  catalog: globalpurchase
+  team: data-engineering
+  cost_center: "{{COST_CENTER_PLACEHOLDER}}"
+
+cluster_log_conf:
+  dbfs:
+    destination: dbfs:/cluster-logs/globalpurchase-etl
+
+# Cluster policy ID — set by platform team; controls instance types and costs
+cluster_policy_id: "{{CLUSTER_POLICY_ID_PLACEHOLDER}}"

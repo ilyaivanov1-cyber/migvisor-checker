@@ -1,0 +1,187 @@
+rules:
+
+  - id: IF-001
+    dimension: Interface
+    name: Replace SSIS Pipeline with Databricks Workflows Nightly Batch
+    intent: Migrate the legacy SSIS daily ETL orchestration to a Databricks Workflow with explicit task dependencies enforcing Staging → Dimensions/Facts → Mart execution order.
+
+    activation:
+      preconditions:
+        - SSIS pipeline demo_ssis.folder_ssis-project.pipeline_dailyetlmain exists in the source system
+        - Target Databricks workspace and Unity Catalog globalpurchase are provisioned
+        - All source notebooks (staging, dimension, fact, mart) are implemented and registered in the workspace
+      scope: project
+
+    transformation:
+      source: SSIS package demo_ssis.folder_ssis-project.pipeline_dailyetlmain executing nightly ETL tasks sequentially
+      target: Databricks Workflow with named tasks, dependency graph, and nightly schedule trigger
+      algorithm:
+        - Identify all SSIS control-flow tasks and their execution order from the source pipeline
+        - Map each SSIS task to a corresponding Databricks notebook or Python wheel task
+        - Define a Databricks Workflow with tasks grouped into three dependency layers: Staging (extract from source), Dimensions and Facts (SCD-2 merges and fact loads), Mart (final aggregation and publish)
+        - Configure depends_on references so Dimension and Fact tasks depend on all Staging tasks completing successfully, and Mart tasks depend on all Dimension and Fact tasks completing successfully
+        - Set a nightly schedule trigger (e.g. 02:00 UTC) on the Workflow using a Quartz or cron expression
+        - Configure email or webhook alerts on task failure and workflow completion
+        - Validate that no SSIS precedence constraint logic (e.g. conditional branching on failure) is lost; replicate via Databricks task retry policies or conditional task runs where required
+
+    validation:
+      success_criteria:
+        - Databricks Workflow exists with tasks mapped one-to-one to legacy SSIS control-flow steps
+        - Dependency graph enforces Staging completes before Dimensions/Facts, and Dimensions/Facts complete before Mart
+        - Workflow is triggered nightly on the defined schedule without manual intervention
+        - Failure in any Staging task prevents Dimension/Fact tasks from starting
+        - Workflow run history is retained and accessible for audit
+      test_cases:
+        - input: SSIS pipeline with three sequential tasks (Extract, Transform, Load)
+          expected_output: Databricks Workflow with three tasks; Transform depends_on Extract; Load depends_on Transform
+        - input: Nightly schedule defined as 02:00 UTC
+          expected_output: Workflow trigger configured with equivalent cron expression 0 2 * * *
+        - input: Staging task fails at runtime
+          expected_output: All downstream Dimension, Fact, and Mart tasks are skipped; alert is fired
+
+    inheritance:
+      level: project
+      override: Product-level workflows may override the schedule expression or add product-specific task steps while preserving the three-layer dependency structure
+      extend: Products may add pre- or post-processing tasks within their layer without altering cross-layer dependencies
+      deactivate: Deactivate this rule only if a product uses a streaming or micro-batch interface instead of nightly batch orchestration
+
+  - id: IF-002
+    dimension: Interface
+    name: Extract Source Entities via JDBC Incremental Reads with LastEditedWhen Watermark
+    intent: Replace full SSIS extracts with JDBC incremental reads filtered by LastEditedWhen, committing the watermark to etl_cutoff only after all downstream loads succeed to guarantee exactly-once processing semantics.
+
+    activation:
+      preconditions:
+        - Source SQL Server 2014 database wideworldimportersdw is reachable from the Databricks cluster via JDBC
+        - Each source entity has a LastEditedWhen column suitable for watermark-based incremental extraction
+        - Table globalpurchase.stg.etl_cutoff exists with columns for entity name and last successful watermark timestamp
+      scope: project
+
+    transformation:
+      source: Full or delta SSIS extracts from SQL Server 2014 wideworldimportersdw without explicit watermark management
+      target: JDBC incremental reads in Databricks notebooks filtered by LastEditedWhen > last watermark, with post-success watermark commit to etl_cutoff
+      algorithm:
+        - At the start of each pipeline run, read the current watermark for the entity from globalpurchase.stg.etl_cutoff; if no row exists, fall back to HISTORY_ANCHOR_DATE
+        - Construct a JDBC read query with a WHERE clause filtering LastEditedWhen > current_watermark AND LastEditedWhen <= pipeline_run_timestamp
+        - Execute the JDBC read using spark.read.jdbc with pushdown predicate to minimise data transfer
+        - Store the resulting DataFrame in a variable for downstream use; do not persist to any intermediate table for dimension entities
+        - For fact entities, write the extracted DataFrame to the appropriate globalpurchase.stg.* staging table using truncate+overwrite mode before any downstream transformation
+        - After all downstream loads (dimension SCD-2 merges and fact loads) complete successfully within the same Workflow run, issue an UPDATE or MERGE to globalpurchase.stg.etl_cutoff setting the watermark to pipeline_run_timestamp for each entity
+        - If any downstream load fails, do not update etl_cutoff so that the next run re-extracts from the previous watermark
+
+    validation:
+      success_criteria:
+        - Each extraction reads only rows where LastEditedWhen is greater than the stored watermark and less than or equal to the pipeline run timestamp
+        - etl_cutoff watermark is updated only after all downstream tasks in the same Workflow run succeed
+        - A failed downstream task leaves etl_cutoff unchanged, causing the next run to re-process the same window
+        - On first run with no etl_cutoff row, extraction starts from HISTORY_ANCHOR_DATE
+        - No duplicate rows are introduced across consecutive successful runs
+      test_cases:
+        - input: etl_cutoff watermark for entity SalesOrder is 2024-01-15 00:00:00; pipeline_run_timestamp is 2024-01-16 00:00:00
+          expected_output: JDBC query filters LastEditedWhen > '2024-01-15 00:00:00' AND LastEditedWhen <= '2024-01-16 00:00:00'
+        - input: No etl_cutoff row exists for entity Customer
+          expected_output: JDBC query filters LastEditedWhen > HISTORY_ANCHOR_DATE
+        - input: Downstream SCD-2 merge for dimension City fails
+          expected_output: etl_cutoff watermark for City remains at previous value; next run re-extracts the same incremental window
+        - input: All downstream loads succeed
+          expected_output: etl_cutoff watermark updated to pipeline_run_timestamp for all processed entities
+
+    inheritance:
+      level: project
+      override: A product may use a different watermark column if LastEditedWhen is absent, provided the alternative column is monotonically increasing and documented in the product transformation rules
+      extend: Products may add additional filter predicates to the JDBC read (e.g. partition key ranges) to improve parallelism
+      deactivate: Deactivate for entities that require full reload on every run due to absence of a reliable change-tracking column
+
+  - id: IF-003
+    dimension: Interface
+    name: Store Source Credentials in Databricks Secrets and Configure Environment-Specific JDBC Driver
+    intent: Eliminate hard-coded SQL Server credentials by storing the JDBC URL, username, and password in Databricks Secrets and requiring the environment-specific JDBC driver class to be configured before pipeline execution.
+
+    activation:
+      preconditions:
+        - Databricks Secrets backend (backed by Azure Key Vault or Databricks-native secrets) is available in the workspace
+        - SQL Server JDBC driver JAR compatible with SQL Server 2014 is available or installable on the target cluster
+        - At least two deployment environments exist (e.g. dev, prod) each requiring separate JDBC connection parameters
+      scope: project
+
+    transformation:
+      source: SSIS connection managers storing SQL Server credentials in SSIS package XML or environment variables without centralised secret management
+      target: Databricks Secrets storing jdbc_url, username, and password per environment; driver class externalised as a cluster-level Spark configuration or init script
+      algorithm:
+        - Create a Databricks secret scope named globalpurchase-<env> for each deployment environment (e.g. globalpurchase-dev, globalpurchase-prod)
+        - Store the following secrets in each scope with standardised key names: jdbc_url (full JDBC connection string including host, port, and database), jdbc_username, jdbc_password
+        - In each extraction notebook, retrieve secrets at runtime using dbutils.secrets.get(scope, key) and construct the JDBC connection properties dictionary; never log or print secret values
+        - Externalise the JDBC driver class name (e.g. com.microsoft.sqlserver.jdbc.SQLServerDriver) as a Spark configuration property spark.jdbc.driver_class set in the cluster policy or job cluster configuration, not hard-coded in notebooks
+        - Document the required driver JAR installation method (Maven coordinate or init script) in the pipeline README; validate driver availability as a pre-flight check in the Workflow's first task
+        - Rotate credentials by updating the secret scope values without modifying any notebook code
+
+    validation:
+      success_criteria:
+        - No JDBC URL, username, or password appears as a literal string in any notebook, configuration file, or Workflow definition
+        - Secrets are retrieved exclusively via dbutils.secrets.get at runtime
+        - Changing the JDBC driver class requires only a cluster configuration update, not a notebook code change
+        - Credentials for dev and prod environments are isolated in separate secret scopes
+        - A credential rotation (secret value update) takes effect on the next pipeline run without code deployment
+      test_cases:
+        - input: Notebook code contains the string jdbc:sqlserver:// as a literal
+          expected_output: Validation fails; JDBC URL must be sourced from dbutils.secrets.get
+        - input: Secret scope globalpurchase-prod contains keys jdbc_url, jdbc_username, jdbc_password
+          expected_output: Extraction notebook connects successfully to production SQL Server without any credential literals in code
+        - input: JDBC driver JAR is missing from the cluster
+          expected_output: Pre-flight check task fails with a descriptive error before any extraction task begins
+        - input: jdbc_password secret is rotated in the secret scope
+          expected_output: Next pipeline run uses the new password without any notebook or Workflow modification
+
+    inheritance:
+      level: project
+      override: A product may use a different secret scope naming convention if it connects to an additional source system beyond wideworldimportersdw, provided the override is documented in the product transformation rules
+      extend: Products may add additional secret keys (e.g. api_key for REST sources) within the same scoped pattern
+      deactivate: Deactivate only if the target environment provides an alternative secret injection mechanism (e.g. Azure Managed Identity with passwordless authentication) that supersedes Databricks Secrets
+
+  - id: IF-004
+    dimension: Interface
+    name: Dimensions Use In-Memory Temp Views; Facts Use Truncate+Overwrite to Staging with HISTORY_ANCHOR_DATE Fallback
+    intent: Standardise the staging strategy so dimension data is held only in transient in-memory temp views consumed within the same Workflow run, while fact data is written to globalpurchase.stg.* tables via truncate+overwrite to ensure idempotency, with HISTORY_ANCHOR_DATE as the fallback extraction start on first run.
+
+    activation:
+      preconditions:
+        - Databricks Workflow is configured so dimension extraction tasks and their downstream SCD-2 MERGE tasks execute within the same Workflow run and share a cluster session or pass data via temp views registered on a shared cluster
+        - globalpurchase.stg schema exists in Unity Catalog with fact staging tables pre-created
+        - HISTORY_ANCHOR_DATE is defined as a configurable parameter in the Workflow or a Delta table, accessible to all extraction notebooks
+      scope: project
+
+    transformation:
+      source: SSIS staging approach using persistent flat files or staging database tables for all entity types without distinction between dimensions and facts
+      target: Dimensions registered as in-memory Spark temp views (createOrReplaceTempView) within the Workflow run; facts written to globalpurchase.stg.* Delta tables using mode overwrite with option truncateTable or equivalent
+      algorithm:
+        - For each dimension entity, after JDBC incremental read, call DataFrame.createOrReplaceTempView("<entity>_incremental") to register the data as a session-scoped temp view; do not write to any Delta table or file path in the stg layer
+        - Downstream SCD-2 MERGE notebooks for dimensions must reference the temp view name directly in their SQL or DataFrame operations within the same cluster session
+        - For each fact entity, after JDBC incremental read (with watermark filter as per IF-002), write the DataFrame to the corresponding globalpurchase.stg.<fact_table> Delta table using spark.write.format("delta").mode("overwrite").option("overwriteSchema", "false").save() or equivalent; this truncates and replaces all rows in the staging table on each run
+        - Before constructing the JDBC watermark filter for any entity (dimension or fact), check whether a row exists in globalpurchase.stg.etl_cutoff for that entity; if absent, substitute HISTORY_ANCHOR_DATE as the lower bound of the extraction window
+        - HISTORY_ANCHOR_DATE must be readable from the Workflow parameter or a configuration Delta table; it must not be hard-coded in notebooks
+        - After all fact staging writes and dimension temp view registrations complete, downstream transformation tasks may proceed; temp views are automatically discarded when the cluster session ends
+
+    validation:
+      success_criteria:
+        - No dimension entity produces a persisted Delta table or file in the stg layer; all dimension data exists only as in-memory temp views during the Workflow run
+        - Each fact staging table in globalpurchase.stg.* contains exactly the rows extracted in the current incremental window after each successful run (no accumulation of prior runs)
+        - On the first pipeline run for an entity with no etl_cutoff row, extraction window starts from HISTORY_ANCHOR_DATE
+        - HISTORY_ANCHOR_DATE value can be changed without modifying notebook code
+        - SCD-2 MERGE notebooks for dimensions resolve temp view names without error when running in the same Workflow cluster session
+      test_cases:
+        - input: Dimension entity City is extracted via JDBC incremental read
+          expected_output: DataFrame registered as temp view city_incremental; no Delta table written to globalpurchase.stg.City
+        - input: Fact entity Sale is extracted via JDBC incremental read
+          expected_output: DataFrame written to globalpurchase.stg.Sale using overwrite mode; previous rows in the table are replaced
+        - input: First pipeline run; no etl_cutoff row exists for fact entity Purchase
+          expected_output: JDBC extraction window lower bound is HISTORY_ANCHOR_DATE (e.g. 2013-01-01 00:00:00)
+        - input: SCD-2 MERGE notebook for dimension StockItem references temp view stockitem_incremental
+          expected_output: Notebook executes successfully and resolves the temp view within the same Workflow cluster session
+        - input: Workflow run completes and cluster is terminated
+          expected_output: All dimension temp views are discarded; globalpurchase.stg.* fact tables retain the data from the completed run
+
+    inheritance:
+      level: project
+      override: A product may persist dimension data to a stg table instead of a temp view if the dimension SCD-2 MERGE notebook runs in a separate Workflow job that cannot share a cluster session with the extraction task
+      extend: Products may add additional staging tables in globalpurchase.stg.* for intermediate fact aggregations without violating the truncate+overwrite pattern
+      deactivate: Deactivate the temp-view clause for a specific dimension if cross-job data sharing is required and Unity Catalog Delta tables are the approved inter-job data exchange mechanism for that product

@@ -1,0 +1,78 @@
+# CFG-010: CI/CD pipeline definition (GitHub Actions).
+# Stages: lint → test → deploy-dev → deploy-prod (manual gate).
+# No credential values in this file — secrets injected from CI environment.
+
+name: globalpurchase-purchase-ci-cd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install linting tools
+        run: pip install flake8 black
+      - name: Run flake8
+        run: flake8 src/ config/ tests/ --max-line-length=120
+      - name: Run black check
+        run: black --check src/ config/ tests/
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: pip install pyspark pytest pytest-cov
+      - name: Run unit tests
+        run: pytest -m unit --tb=short -v
+        working-directory: .
+
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Databricks CLI
+        run: pip install databricks-cli
+      - name: Deploy to Dev
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_DEV }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_DEV }}
+        run: bash config/deploy_workflow.sh --env dev
+
+  deploy-prod:
+    name: Deploy to Prod
+    runs-on: ubuntu-latest
+    needs: deploy-dev
+    environment:
+      name: prod
+      url: ${{ secrets.DATABRICKS_HOST_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Databricks CLI
+        run: pip install databricks-cli
+      - name: Deploy to Prod
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_PROD }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_PROD }}
+        run: bash config/deploy_workflow.sh --env prod

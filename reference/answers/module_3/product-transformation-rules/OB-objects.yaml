@@ -1,0 +1,178 @@
+dimension: Objects
+prefix: OB
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+customizations: 1 extension (OB-003-EXT-P01)
+rule_count: 6
+
+rules:
+
+  - id: OB-001
+    source: project
+    dimension: Objects
+    name: Migrate in-scope tables to Delta Lake tables
+    intent: All tables in the fact, dimension, and integration schemas are recreated in Databricks as Delta Lake tables under the globalpurchase Unity Catalog.
+    purchase_in_scope_objects:
+      - source: Fact.Purchase → target: globalpurchase.fact.purchase
+      - source: Dimension.Supplier → target: globalpurchase.dim.supplier
+      - source: "Dimension.[Stock Item] → target: globalpurchase.dim.stock_item"
+      - source: Dimension.Date → target: globalpurchase.dim.date
+      - source: Integration.Purchase_Staging → target: globalpurchase.stg.purchase_staging
+      - source: "Integration.[ETL Cutoff] → target: globalpurchase.stg.etl_cutoff"
+      - source: Integration.Lineage → target: globalpurchase.stg.lineage
+    excluded_objects:
+      - Sequences.SupplierKey (eliminated per PL-004 / OB-003)
+      - Sequences.StockItemKey (eliminated per PL-004 / OB-003)
+      - Sequences.LineageKey (eliminated per PL-004 / OB-003)
+      - application.configuration_reseedetl (excluded per OB-004)
+    transformation:
+      source: SQL Server CREATE TABLE in fact / dimension / integration schema
+      target: Databricks Delta Lake CREATE TABLE ... USING DELTA registered in Unity Catalog globalpurchase
+      algorithm:
+        - Identify all in-scope tables from fact, dimension, and integration schemas
+        - Map each source schema to the equivalent target schema in globalpurchase per NM-005
+        - Translate each column definition per TY-types dimension rules
+        - Add USING DELTA clause to every CREATE TABLE statement
+        - Apply NOT NULL constraints; document unsupported constraints for manual review
+        - Register each table in Unity Catalog under globalpurchase.<schema>.<table_name>
+    validation:
+      success_criteria:
+        - All 7 in-scope tables have corresponding Delta Lake tables in globalpurchase
+        - All target tables return DESCRIBE TABLE output confirming USING DELTA provider
+        - Column count and names match source definitions after type mapping and exclusions (photo column excluded from stock_item)
+    inheritance:
+      level: project
+      product_customization: none — photo column exclusion from stock_item handled by TY-005-EXT-P01
+
+  - id: OB-002
+    source: project
+    dimension: Objects
+    name: Convert stored procedures to Python functions
+    intent: All in-scope SQL Server stored procedures (migratestaged* family) are replaced by equivalent Python functions with snake_case names.
+    purchase_in_scope_procedures:
+      - source: integration.migratestagedpurchasedata
+        target: src/etl/facts/nb_load_fact_purchase.py (notebook, not a standalone function)
+        note: The procedure body becomes the fact load notebook; SCD-2 key resolution extracted to sk_resolver.py; fact MERGE logic to fact_merge.py
+      - source: wideworldimporters.integration.getpurchaseupdates
+        target: NOT MIGRATED — replaced by Databricks native JDBC reads in nb_extract_purchase_staging.py
+        note: The four OLTP tables (purchaseorders, purchaseorderlines, stockitems, packagetypes) are read directly via JDBC; ordered_quantity derivation implemented per CX-P01
+    excluded_procedures:
+      - integration.getlastetlcutofftime (replaced by watermark read from stg.etl_cutoff in nb_extract_watermark.py)
+      - integration.getlineagekey (replaced by lineage_key injection via dbutils.jobs.taskValues per OB-003-EXT-P01)
+    transformation:
+      source: SQL Server stored procedure (T-SQL) in integration schema
+      target: Python function / notebook in ETL pipeline with snake_case name
+      algorithm:
+        - Enumerate all stored procedures in scope (migratestagedpurchasedata and related)
+        - Convert procedure name to snake_case
+        - Translate T-SQL body to equivalent Python / PySpark logic
+        - Replace BEGIN TRAN / COMMIT blocks with Delta Lake transaction semantics
+        - Replace EXEC calls with direct Python function calls to migrated equivalents
+    validation:
+      success_criteria:
+        - migratestagedpurchasedata equivalent logic lives in nb_load_fact_purchase.py + sk_resolver.py + fact_merge.py
+        - No T-SQL stored procedure DDL exists in the target platform for in-scope objects
+        - getpurchaseupdates is replaced by Databricks JDBC reads with inline ordered_quantity derivation
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: OB-003
+    source: project
+    dimension: Objects
+    name: Eliminate SEQUENCE objects — replace references with IDENTITY or Python counter
+    intent: SQL Server SEQUENCE objects in the sequences schema are not migrated; all references to NEXT VALUE FOR are replaced by GENERATED ALWAYS AS IDENTITY for surrogate keys or Python-managed counters for lineage keys.
+    purchase_sequence_mapping:
+      - sequence: Sequences.SupplierKey
+        replaced_by: globalpurchase.dim.supplier.supplier_key INT GENERATED ALWAYS AS IDENTITY
+      - sequence: Sequences.StockItemKey
+        replaced_by: globalpurchase.dim.stock_item.stock_item_key INT GENERATED ALWAYS AS IDENTITY
+      - sequence: Sequences.LineageKey
+        replaced_by: lineage_key injected via dbutils.jobs.taskValues (see OB-003-EXT-P01 — not a Python counter)
+    transformation:
+      source: SQL Server CREATE SEQUENCE in sequences schema, or NEXT VALUE FOR expressions in T-SQL
+      target: No SEQUENCE object in target; surrogate key columns use GENERATED ALWAYS AS IDENTITY; lineage key uses taskValues injection
+      algorithm:
+        - Mark all three SEQUENCE objects as excluded — do not emit CREATE SEQUENCE DDL in target
+        - Replace supplier.supplier_key and stock_item.stock_item_key DEFAULT NEXT VALUE FOR with GENERATED ALWAYS AS IDENTITY
+        - Replace stg.lineage.lineage_key DEFAULT NEXT VALUE FOR with BIGINT GENERATED ALWAYS AS IDENTITY (lineage table)
+        - Remove all NEXT VALUE FOR expressions from translated SQL or Python code
+    validation:
+      success_criteria:
+        - Zero CREATE SEQUENCE statements exist in any target DDL
+        - Zero NEXT VALUE FOR references exist in any generated SQL or Python code
+        - supplier and stock_item surrogate key columns defined with GENERATED ALWAYS AS IDENTITY
+        - Lineage key injection uses taskValues pattern per OB-003-EXT-P01
+    inheritance:
+      level: project
+      product_customization: extended by OB-003-EXT-P01
+
+  - id: OB-003-EXT-P01
+    source: product
+    dimension: Objects
+    name: Purchase lineage_key injected from upstream task value, not Python counter
+    intent: >
+      For the Purchase product, lineage_key is passed from nb_extract_watermark to nb_load_fact_purchase via
+      dbutils.jobs.taskValues. This is more reliable and observable than an in-notebook Python counter.
+    transformation:
+      source: "EXEC Integration.GetLineageKey → returns open lineage row key"
+      target: "lineage_key = int(dbutils.jobs.taskValues.get(taskKey='nb_extract_watermark', key='lineage_key'))"
+      algorithm:
+        - nb_extract_watermark.py sets lineage_key via dbutils.jobs.taskValues.set(key='lineage_key', value=lineage_key)
+        - nb_load_fact_purchase.py retrieves it via dbutils.jobs.taskValues.get(taskKey='nb_extract_watermark', key='lineage_key')
+        - Raise RuntimeError if taskValues returns no value — no fallback to Python counter
+        - After fact MERGE completes, update stg.lineage inline:
+          spark.sql(f"UPDATE {TBL_LINEAGE} SET rows_loaded = {rows_merged} WHERE lineage_key = {lineage_key}")
+    applies_to: src/etl/facts/nb_load_fact_purchase.py, src/etl/ingestion/nb_extract_watermark.py
+
+  - id: OB-004
+    source: project
+    dimension: Objects
+    name: Do not migrate application.* objects — re-express as bootstrap scripts
+    intent: Objects in the application schema are excluded from object migration; any relevant behavior is re-expressed as idempotent Databricks bootstrap scripts.
+    purchase_application_objects:
+      - object: application.configuration_reseedetl
+        disposition: NOT MIGRATED
+        bootstrap_equivalent: >
+          If a full-reseed capability is needed in the target environment, implement as a bootstrap notebook
+          (e.g., bootstrap/reseed_purchase.py) that: (1) truncates purchase, (2) truncates purchase_staging,
+          (3) resets stg.etl_cutoff watermark for Purchase entity, (4) inserts key=0 Unknown sentinel rows into
+          supplier and stock_item. Mark as dev/test utility only — not part of the nightly Workflow.
+    transformation:
+      source: SQL Server objects in application schema
+      target: No application.* objects in globalpurchase; behavior re-expressed as bootstrap notebooks
+      algorithm:
+        - Mark application.configuration_reseedetl as excluded from standard object migration
+        - Author idempotent bootstrap_reseed_purchase.py if reseed capability is required
+        - Do not emit any CREATE TABLE, CREATE PROCEDURE, or CREATE VIEW DDL targeting an application schema
+    validation:
+      success_criteria:
+        - Zero application.* DDL objects exist in the globalpurchase target catalog
+        - Bootstrap notebook (if needed) is idempotent and parameterised for catalog name and environment
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: OB-005
+    source: project
+    dimension: Objects
+    name: Migrate in-scope views with v_ prefix; exclude out-of-scope views
+    intent: All in-scope SQL Server views are recreated in Databricks with a v_ name prefix; views explicitly listed as out of scope are not migrated.
+    purchase_view_inventory:
+      in_scope_views: none identified in the Purchase product scope (fact, dimension, and integration schemas contain no views in scope)
+      excluded_views:
+        - analytics.v_ordertoyearanalytics (cross-domain, driven by fact.order, explicitly out-of-scope for Purchase — see as-is Section 2.3)
+    transformation:
+      source: SQL Server CREATE VIEW in an in-scope schema
+      target: Databricks SQL CREATE OR REPLACE VIEW in the corresponding globalpurchase schema, with v_ prefix
+      algorithm:
+        - analytics.v_ordertoyearanalytics is logged as permanently excluded (reason: cross-domain, partial scope exclusion — Order product team owns rebuild)
+        - No in-scope views require migration for this product in the current scope
+    validation:
+      success_criteria:
+        - analytics.v_ordertoyearanalytics does not exist in globalpurchase target catalog
+        - Migration object inventory records analytics.v_ordertoyearanalytics as excluded with reason "cross-domain, out-of-scope — Order product team"
+    inheritance:
+      level: project
+      product_customization: none — analytics.v_ordertoyearanalytics exclusion aligns with OB-005 project rule

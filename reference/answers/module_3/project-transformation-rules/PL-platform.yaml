@@ -1,0 +1,176 @@
+rules:
+
+  - id: PL-001
+    dimension: Platform
+    name: Migrate all tables to Delta Lake format
+    intent: Every table created in the target Databricks environment must use the Delta Lake storage format by including the USING DELTA clause in its DDL.
+
+    activation:
+      preconditions:
+        - Source object is a SQL Server table (heap, clustered, or columnstore)
+        - Target environment is Databricks with Unity Catalog catalog `globalpurchase`
+      scope: project
+
+    transformation:
+      source: SQL Server table DDL (CREATE TABLE) with no explicit storage format
+      target: Databricks Delta Lake table DDL with USING DELTA clause and Unity Catalog three-part name (`globalpurchase.<schema>.<table>`)
+      algorithm:
+        - Identify all CREATE TABLE statements in the source DDL inventory.
+        - Rewrite each table name to the three-part Unity Catalog form: `globalpurchase.<schema>.<table>`.
+        - Append `USING DELTA` after the column definition block and before any PARTITIONED BY or TBLPROPERTIES clauses.
+        - Add `TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')` for any table participating in incremental ETL pipelines.
+        - Remove or translate any SQL Server-specific storage options (e.g., ON [PRIMARY], FILEGROUP references, COMPRESSION hints) that have no Delta Lake equivalent.
+        - Validate the resulting DDL with a Databricks SQL syntax check before deployment.
+
+    validation:
+      success_criteria:
+        - Every CREATE TABLE statement in the target codebase contains the USING DELTA clause.
+        - No SQL Server-specific storage options remain in the generated DDL.
+        - All table names conform to the `globalpurchase.<schema>.<table>` three-part naming pattern.
+        - Tables can be queried via both Databricks SQL and the Delta Lake API after creation.
+      test_cases:
+        - input: "CREATE TABLE dbo.DimCustomer (CustomerKey INT PRIMARY KEY, CustomerName NVARCHAR(100)) ON [PRIMARY]"
+          expected_output: "CREATE TABLE globalpurchase.dim.customer (customer_key INT NOT NULL, customer_name STRING) USING DELTA TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"
+        - input: "CREATE TABLE dbo.FactSale (SaleKey BIGINT, CustomerKey INT, SaleAmount DECIMAL(18,2))"
+          expected_output: "CREATE TABLE globalpurchase.fact.sale (sale_key BIGINT NOT NULL, customer_key INT, sale_amount DECIMAL(18,2)) USING DELTA TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"
+
+    inheritance:
+      level: project
+      override: Product-level rules may restrict TBLPROPERTIES or add partition columns for specific high-volume fact tables.
+      extend: Product rules may add PARTITIONED BY clauses or ZORDER optimization hints for large tables.
+      deactivate: Not eligible for deactivation — Delta Lake format is mandatory for all tables in the target platform.
+
+
+  - id: PL-002
+    dimension: Platform
+    name: Replace SSIS orchestration with Databricks Workflows
+    intent: All SSIS packages and their scheduling logic must be replaced by Databricks Workflow jobs that enforce the Staging → Dimensions/Facts → Mart task dependency ordering.
+
+    activation:
+      preconditions:
+        - Source orchestration layer is SQL Server Integration Services (SSIS) running nightly batch loads
+        - Target orchestration layer is Databricks Workflows (Jobs API)
+        - Medallion architecture layers stg, dim/fact, and mart are defined in the target catalog
+      scope: project
+
+    transformation:
+      source: SSIS package hierarchy with Control Flow tasks, precedence constraints, and SQL Agent schedules
+      target: Databricks Workflow job definition (JSON or Terraform) with task nodes, depends_on references, and cluster/library specifications
+      algorithm:
+        - Inventory all SSIS packages, recording their execution order and inter-package dependencies.
+        - Map each SSIS Data Flow Task to a corresponding Databricks notebook or Python wheel task.
+        - Map each SSIS Execute SQL Task to a Databricks SQL task or a notebook containing the equivalent Spark SQL.
+        - Construct a Databricks Workflow job with three mandatory dependency tiers in this order — Tier 1 Staging tasks (load from JDBC source into `globalpurchase.stg`), Tier 2 Dimension and Fact tasks (transform `stg` → `globalpurchase.dim` and `globalpurchase.fact`) with `depends_on` referencing all Tier 1 tasks, Tier 3 Mart tasks (aggregate `dim`/`fact` → `globalpurchase.mart`) with `depends_on` referencing all Tier 2 tasks.
+        - Replace SSIS connection managers that reference SQL Server credentials with Databricks Secrets scope lookups using `dbutils.secrets.get`.
+        - Replace SQL Agent schedule definitions with Databricks Workflow schedule blocks using cron syntax.
+        - Implement error handling and retry policies in the Workflow job definition to replace SSIS OnError event handlers.
+        - Remove all SSIS-specific constructs (dtsx XML, package configurations, environment variables stored in SSISDB).
+
+    validation:
+      success_criteria:
+        - No SSIS packages or SQL Agent jobs remain as active orchestration components.
+        - All Databricks Workflow jobs enforce the three-tier dependency order (Staging → Dimensions/Facts → Mart).
+        - Every task in the Workflow references a Databricks Secrets scope instead of hardcoded SQL Server credentials.
+        - End-to-end nightly batch completes within the agreed processing window.
+        - Failed tasks trigger retries and alert notifications equivalent to previous SSIS failure behaviour.
+      test_cases:
+        - input: "SSIS package LoadDimCustomer with precedence constraint requiring LoadStagingCustomer to succeed first"
+          expected_output: "Databricks Workflow task dim_load_customer with depends_on: [stg_load_customer], using Databricks Secret for source credentials"
+        - input: "SSIS package LoadMartSalesSummary depending on LoadFactSale and LoadDimDate"
+          expected_output: "Databricks Workflow task mart_load_sales_summary with depends_on: [fact_load_sale, dim_load_date]"
+
+    inheritance:
+      level: project
+      override: Product-level rules may specify dedicated job clusters or instance pool configurations for resource-intensive pipeline tasks.
+      extend: Product rules may add additional dependency tiers within a layer for intra-layer sequencing requirements.
+      deactivate: Not eligible for deactivation — SSIS is not supported in the target Databricks environment.
+
+
+  - id: PL-003
+    dimension: Platform
+    name: Adopt Medallion architecture schema layers
+    intent: The target Unity Catalog must be organized into three schema layers — stg (staging), dim/fact (conformed dimensions and facts), and mart (consumption-ready aggregates) — mapping to the source system's raw, integration, and presentation zones respectively.
+
+    activation:
+      preconditions:
+        - Target Unity Catalog catalog `globalpurchase` is provisioned
+        - Source database `wideworldimportersdw` schemas have been inventoried and classified
+      scope: project
+
+    transformation:
+      source: SQL Server `wideworldimportersdw` schemas (e.g., dbo, Integration, Reports, Fact, Dimension)
+      target: Databricks Unity Catalog schemas under `globalpurchase` — stg, dim, fact, mart
+      algorithm:
+        - Create schema `globalpurchase.stg` for all staging tables that land raw incremental extracts from the SQL Server JDBC source; these tables mirror source column names with minimal transformation.
+        - Create schema `globalpurchase.dim` for all conformed dimension tables (formerly in Dimension or dbo schemas); the schema name carries the architectural indicator — table names follow snake_case (NM-001) only, with no additional `dim_` prefix.
+        - Create schema `globalpurchase.fact` for all fact tables (formerly in Fact or dbo schemas); the schema name carries the architectural indicator — table names follow snake_case (NM-001) only, with no additional `fact_` prefix.
+        - Create schema `globalpurchase.mart` for all aggregated or presentation-layer views and tables (formerly in Reports or equivalent schemas); table/view names follow snake_case (NM-001) only, with no additional `mart_` prefix.
+        - Map each source table to exactly one target schema layer based on its classification: raw extract → stg, slowly changing or reference data → dim, transactional measurement data → fact, pre-aggregated reporting data → mart.
+        - Apply Unity Catalog GRANT statements to restrict schema access — stg is accessible only by ETL service principals, dim/fact by ETL and BI service principals, mart by BI service principals and end-user groups.
+        - Document the schema mapping in the project lineage catalogue.
+
+    validation:
+      success_criteria:
+        - Schemas `globalpurchase.stg`, `globalpurchase.dim`, `globalpurchase.fact`, and `globalpurchase.mart` exist in Unity Catalog.
+        - Every migrated table is assigned to exactly one schema layer with no cross-layer table duplication.
+        - All table and view names follow lowercase_snake_case (NM-001); the schema layer (stg, dim, fact, mart) is the sole architectural indicator — no layer prefix is added to the object name itself.
+        - Access control grants enforce layer-level permissions for ETL and BI service principals.
+      test_cases:
+        - input: "SQL Server table Dimension.Customer in wideworldimportersdw"
+          expected_output: "Target table globalpurchase.dim.customer in Unity Catalog"
+        - input: "SQL Server table Fact.Sale in wideworldimportersdw"
+          expected_output: "Target table globalpurchase.fact.sale in Unity Catalog"
+        - input: "SQL Server table Reports.SalesSummary in wideworldimportersdw"
+          expected_output: "Target table globalpurchase.mart.sales_summary in Unity Catalog"
+        - input: "Staging extract landing area for incremental Customer data"
+          expected_output: "Target table globalpurchase.stg.customer_staging in Unity Catalog with ETL service principal access only"
+
+    inheritance:
+      level: project
+      override: Product-level rules may introduce additional sub-schemas or virtual layers (e.g., a sandbox schema) for product-specific isolation requirements.
+      extend: Product rules may define additional naming conventions for product-specific entity types within the established schema layers.
+      deactivate: Not eligible for deactivation — the Medallion architecture is the mandated target design pattern for this project.
+
+
+  - id: PL-004
+    dimension: Platform
+    name: Replace SQL Server SEQUENCE objects with Delta Lake GENERATED ALWAYS AS IDENTITY
+    intent: All SQL Server SEQUENCE objects and NEXT VALUE FOR calls used to generate surrogate keys must be eliminated and replaced with Delta Lake column-level GENERATED ALWAYS AS IDENTITY definitions.
+
+    activation:
+      preconditions:
+        - Source database `wideworldimportersdw` contains one or more CREATE SEQUENCE objects
+        - Target tables require monotonically increasing surrogate key columns
+        - Target environment is Databricks Delta Lake (Unity Catalog)
+      scope: project
+
+    transformation:
+      source: SQL Server CREATE SEQUENCE statement and NEXT VALUE FOR <sequence> expressions in INSERT or DEFAULT constraints
+      target: Delta Lake column definition with GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1) in the CREATE TABLE DDL
+      algorithm:
+        - Inventory all CREATE SEQUENCE objects in `wideworldimportersdw`, recording name, data type, start value, increment, min/max values, and cycle behaviour.
+        - Identify every table column that references a SEQUENCE via DEFAULT (NEXT VALUE FOR) or via application-layer INSERT statements.
+        - For each identified surrogate key column, replace the column definition in the target Delta Lake DDL with `<column_name> BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)`.
+        - Remove the SEQUENCE object CREATE statements from the migration DDL script — do not create equivalent objects in Databricks.
+        - Update all ETL INSERT statements to omit the surrogate key column so that Delta Lake auto-populates it; do not pass explicit key values.
+        - If any source process explicitly sets sequence values (e.g., reseed operations), replace with Delta Lake `ALTER TABLE ... ALTER COLUMN ... SET START WITH <n>` as a one-time migration step.
+        - Validate that no NEXT VALUE FOR references remain in any generated SQL or notebook code.
+        - Document the sequence-to-identity mapping in the project lineage catalogue for auditability.
+
+    validation:
+      success_criteria:
+        - No CREATE SEQUENCE or NEXT VALUE FOR expressions exist in any target DDL or ETL code.
+        - All surrogate key columns in target tables are defined as GENERATED ALWAYS AS IDENTITY.
+        - Surrogate keys increment correctly and without gaps under concurrent Databricks Workflow task writes.
+        - ETL INSERT statements do not supply explicit values for identity columns.
+      test_cases:
+        - input: "CREATE SEQUENCE dbo.CustomerKeySequence AS INT START WITH 1 INCREMENT BY 1; INSERT INTO Dimension.Customer (CustomerKey, ...) VALUES (NEXT VALUE FOR dbo.CustomerKeySequence, ...)"
+          expected_output: "CREATE TABLE globalpurchase.dim.customer (customer_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1), ...) USING DELTA; INSERT INTO globalpurchase.dim.customer (...) VALUES (...) -- customer_key omitted"
+        - input: "ALTER SEQUENCE dbo.SaleKeySequence RESTART WITH 1000000"
+          expected_output: "ALTER TABLE globalpurchase.fact.sale ALTER COLUMN sale_key SET START WITH 1000000 -- one-time migration reseed step"
+
+    inheritance:
+      level: project
+      override: Product-level rules may specify non-default START WITH values for identity columns where historical key ranges must be preserved for referential integrity during cutover.
+      extend: Product rules may add hash-based surrogate key generation (SHA2) for dimensions that require deterministic keys across environments.
+      deactivate: Not eligible for deactivation — SQL Server SEQUENCE objects have no native equivalent in Databricks and must be replaced.

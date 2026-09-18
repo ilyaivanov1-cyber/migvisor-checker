@@ -1,0 +1,213 @@
+dimension: Naming
+prefix: NM
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+customizations: none — all project rules inherited as-is
+rule_count: 5
+
+rules:
+
+  - id: NM-001
+    source: project
+    dimension: Naming
+    name: Convert object names to lowercase_snake_case
+    intent: All source object names (tables, columns, views, stored procedures) must be converted to lowercase_snake_case in the target Databricks Unity Catalog.
+    activation:
+      preconditions:
+        - Source system is Microsoft SQL Server 2014 (wideworldimportersdw)
+        - Target system is Databricks Delta Lake with Unity Catalog (catalog globalpurchase)
+        - Object type is one of table, column, view, stored procedure
+      scope: project
+    transformation:
+      source: PascalCase, camelCase, or mixed-case identifiers (e.g. PurchaseKey, WWIPurchaseOrderID, OrderedOuters)
+      target: lowercase_snake_case identifiers (e.g. purchase_key, wwi_purchase_order_id, ordered_outers)
+      algorithm:
+        - Identify all word boundaries by detecting transitions from lowercase to uppercase, uppercase to lowercase (when preceded by multiple uppercase letters), digits adjacent to letters, and non-alphanumeric separator characters
+        - Insert an underscore at each detected word boundary
+        - Convert the entire string to lowercase
+        - Replace any sequence of two or more consecutive underscores with a single underscore
+        - Strip leading and trailing underscores
+        - Verify the result matches the pattern ^[a-z][a-z0-9_]*$ before applying
+      purchase_examples:
+        - input: "Purchase Key"
+          expected: purchase_key
+        - input: "WWI Purchase Order ID"
+          expected: wwi_purchase_order_id
+        - input: "Is Order Finalized"
+          expected: is_order_finalized
+        - input: "Ordered Outers"
+          expected: ordered_outers
+        - input: "Ordered Quantity"
+          expected: ordered_quantity
+        - input: "Received Outers"
+          expected: received_outers
+        - input: "Lineage Key"
+          expected: lineage_key
+        - input: "Stock Item Key"
+          expected: stock_item_key
+        - input: "Last Modified When"
+          expected: last_modified_when
+    validation:
+      success_criteria:
+        - Every object name in the target catalog contains only lowercase letters, digits, and underscores
+        - No object name begins or ends with an underscore
+        - No object name contains consecutive underscores
+        - The semantic meaning of the source name is preserved in the converted name
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: NM-002
+    source: project
+    dimension: Naming
+    name: Replace spaces in object names with underscores
+    intent: Any spaces embedded in source object or schema-qualified names must be replaced with underscores before the name is applied in the target system.
+    activation:
+      preconditions:
+        - Source object name or schema-qualified name contains one or more space characters
+        - Target system is Databricks Unity Catalog where spaces in identifiers are not permitted without quoting
+      scope: project
+    transformation:
+      source: Names containing spaces (e.g. "dimension.stock item", "integration.etl cutoff", "Is Order Finalized")
+      target: Names with spaces replaced by underscores, then lowercased (e.g. stock_item, etl_cutoff, is_order_finalized)
+      algorithm:
+        - Strip the schema prefix (if present) before processing the object name portion
+        - Replace every space character in the object name with an underscore
+        - Apply NM-001 lowercase_snake_case conversion to the result
+        - Ensure no double underscores remain after substitution
+        - Re-attach the mapped target schema prefix as determined by NM-005
+      purchase_examples:
+        - input: "Dimension.[Stock Item]"
+          expected: stock_item
+        - input: "Integration.[ETL Cutoff]"
+          expected: etl_cutoff
+        - input: "Purchase Staging Key"
+          expected: purchase_staging_key
+        - input: "WWI Purchase Order ID"
+          expected: wwi_purchase_order_id
+    validation:
+      success_criteria:
+        - No target object name contains a space character
+        - The semantic tokens originally separated by spaces are preserved, now separated by underscores
+    inheritance:
+      level: project
+      product_customization: none
+
+  - id: NM-003
+    source: project
+    dimension: Naming
+    name: Add v_ prefix to all view names in the target
+    intent: Every view created in the target Databricks Unity Catalog must carry the prefix v_ to distinguish views from base tables at a glance.
+    activation:
+      preconditions:
+        - The object being migrated or created in the target is classified as a view
+      scope: project
+    transformation:
+      source: View names in any casing without a mandatory v_ prefix
+      target: lowercase_snake_case view names prefixed with v_
+      algorithm:
+        - Apply NM-001 to convert the source view name to lowercase_snake_case
+        - Apply NM-002 if the name contains spaces
+        - Check whether the resulting name already begins with v_; if so, do not add a second prefix
+        - Prepend v_ to the converted name
+        - Confirm the final name matches ^v_[a-z][a-z0-9_]*$
+    validation:
+      success_criteria:
+        - Every view object registered in Unity Catalog has a name that starts with v_
+        - No view name starts with v_v_ (double prefix)
+        - Base tables and staging tables do not carry the v_ prefix
+    inheritance:
+      level: project
+      product_customization: none — analytics.v_ordertoyearanalytics is excluded per OB-005; it is not renamed or prefixed
+
+  - id: NM-004
+    source: project
+    dimension: Naming
+    name: Add _staging suffix to staging tables; except control table etl_cutoff
+    intent: All staging (stg-layer) tables must carry the _staging suffix, with the single exception of the etl_cutoff control table which must retain its bare name.
+    activation:
+      preconditions:
+        - The target table resides in the stg schema (mapped from source integration.* via NM-005)
+        - The table functions as a staging landing table (not a control or reference table)
+      scope: project
+    transformation:
+      source: Staging table names without a _staging suffix (e.g. Purchase_Staging, Lineage)
+      target: Staging table names with _staging suffix (e.g. purchase_staging); etl_cutoff and lineage retain bare names
+      algorithm:
+        - Apply NM-001 and NM-002 to obtain the base lowercase_snake_case name
+        - Check whether the base name equals etl_cutoff or lineage (control tables); if so, use the bare name
+        - Check whether the base name already ends with _staging; if so, do not add a second suffix
+        - Append _staging to the base name
+      purchase_examples:
+        - input: "integration.Purchase_Staging"
+          expected: purchase_staging
+          note: Already ends in Staging; apply NM-001 → purchase_staging (no double suffix)
+        - input: "integration.[ETL Cutoff]"
+          expected: etl_cutoff
+          note: Control table exception — no _staging suffix
+        - input: "integration.Lineage"
+          expected: lineage
+          note: Audit control table — no _staging suffix; see NM-004 exception list extension below
+    product_exception_extension: >
+      Extend the NM-004 exception list to include integration.Lineage (target name: globalpurchase.stg.lineage).
+      Lineage is an audit control table, not a transient staging table, and must not receive the _staging suffix.
+    validation:
+      success_criteria:
+        - purchase_staging ends with _staging
+        - etl_cutoff does not end with _staging
+        - lineage does not end with _staging
+    inheritance:
+      level: project
+      product_customization: exception list extended to include lineage (audit control table)
+
+  - id: NM-005
+    source: project
+    dimension: Naming
+    name: Map source schema names to target schema/layer names
+    intent: Each source SQL Server schema must be translated to the corresponding target Unity Catalog schema that reflects the target data architecture layer.
+    activation:
+      preconditions:
+        - The migrated object originates from one of the known source schemas: integration, dimension, fact, analytics
+        - The target catalog is globalpurchase in Databricks Unity Catalog
+      scope: project
+    transformation:
+      source: SQL Server schema-qualified names using integration.*, dimension.*, fact.*, analytics.*
+      target: Unity Catalog schema-qualified names using stg.*, dim.*, fact.*, mart.* respectively
+      algorithm:
+        - Parse the fully-qualified source name to extract the schema prefix and the object name
+        - "Schema mapping table: integration → stg | dimension → dim | fact → fact | analytics → mart"
+        - Apply NM-001 (and NM-002 if spaces exist) to the object name portion
+        - Apply NM-003 if the object is a view (prepend v_)
+        - Apply NM-004 if the object is a staging table in the stg target schema (append _staging, unless exception)
+        - Construct the fully-qualified target name as globalpurchase.<target_schema>.<converted_object_name>
+      purchase_examples:
+        - input: "Fact.Purchase"
+          expected: globalpurchase.fact.purchase
+        - input: "Dimension.Supplier"
+          expected: globalpurchase.dim.supplier
+        - input: "Dimension.[Stock Item]"
+          expected: globalpurchase.dim.stock_item
+        - input: "Dimension.Date"
+          expected: globalpurchase.dim.date
+        - input: "Integration.Purchase_Staging"
+          expected: globalpurchase.stg.purchase_staging
+        - input: "Integration.[ETL Cutoff]"
+          expected: globalpurchase.stg.etl_cutoff
+        - input: "Integration.Lineage"
+          expected: globalpurchase.stg.lineage
+    pl_003_vs_nm_005_resolution: >
+      PL-003 states "apply naming convention dim_<entity>" and "fact_<subject>" for table names.
+      NM-005 test cases do not apply this prefix (e.g. "fact.Sale" → "globalpurchase.fact.sale").
+      For this product, NM-005 test cases take precedence: the schema layer (dim, fact) carries the
+      architectural indicator; table names are the entity name only (snake_case, no layer prefix).
+      Confirmed: Option B — no dim_ or fact_ prefix on table names.
+    validation:
+      success_criteria:
+        - No object in the target catalog retains a source schema name (integration, dimension, analytics)
+        - All Purchase-domain objects are under globalpurchase with correct schema assignment
+        - No table name carries a dim_ or fact_ prefix — the schema name provides the layer context
+        - Sequences.* schema produces no target objects
+    inheritance:
+      level: project
+      product_customization: PL-003/NM-005 ambiguity resolved — table names use no layer prefix (Option B)

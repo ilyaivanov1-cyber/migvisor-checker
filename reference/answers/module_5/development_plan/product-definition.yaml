@@ -1,0 +1,243 @@
+schema: "https://open-data-product-initiative.github.io/open-data-product-specification/v4.1/schema"
+version: "4.1"
+
+product:
+  id: purchase
+  name: Purchase
+  description: >
+    Purchase order data product. Delivers the purchase order domain on Databricks Delta Lake
+    (catalog globalpurchase): purchase fact, supplier and stock-item dimensions, date calendar,
+    staging infrastructure, and mart-layer BI reports. Nightly batch pipeline replaces the
+    legacy SSIS purchase container. PRIMARY product in GlobalPurchase_Project.
+  version: "1.0.0"
+  status: draft
+  domain: procurement
+  owner: "[USER INPUT REQUIRED]"
+  tags:
+    - purchase
+    - fact
+    - delta-lake
+    - medallion
+    - procurement
+
+  details:
+    catalog: globalpurchase
+    schemas:
+      - name: stg
+        description: Staging layer — incremental extract landing tables and shared infrastructure
+        tables:
+          - name: purchase_staging
+            description: Transient landing for purchase incremental extracts; truncate+overwrite each run
+          - name: etl_cutoff
+            description: Watermark table tracking last successful extraction timestamp per entity (shared infra)
+          - name: lineage
+            description: Pipeline run log for lineage and observability (shared infra)
+          - name: dq_rejections
+            description: Data quality rejection records keyed by lineage_key
+      - name: dim
+        description: Dimension layer — SCD-2 dimensions and static reference tables
+        tables:
+          - name: supplier
+            description: Supplier dimension — SCD-2 with is_current_row; key=0 sentinel row required
+          - name: stock_item
+            description: Stock item dimension — SCD-2 with is_current_row; key=0 sentinel row required
+          - name: date
+            description: Date calendar dimension — static, pre-populated, date_key INT in YYYYMMDD format; no SCD-2
+      - name: fact
+        description: Fact layer — purchase order fact table
+        tables:
+          - name: purchase
+            description: Purchase order line items; MERGE-loaded; clustered by (date_key, supplier_key, stock_item_key)
+      - name: mart
+        description: Mart layer — BI views and materialized views over fact and dimension tables
+
+  inputPorts:
+    - id: jdbc-sql-server
+      name: SQL Server JDBC Source
+      description: >
+        Incremental JDBC read from wideworldimportersdw on SQL Server 2014.
+        Filtered by LastEditedWhen watermark per entity stored in stg.etl_cutoff.
+      type: jdbc
+      protocol: jdbc
+      location: "[USER INPUT REQUIRED — Databricks Secret scope: globalpurchase-<env>, key: jdbc_url]"
+      authenticationMethod: databricks-secrets
+      format: tabular
+      updateFrequency: nightly
+
+  outputPorts:
+    - id: fact-purchase
+      name: Purchase Fact Table
+      description: >
+        Purchase order line items — Delta Lake table in globalpurchase.fact.
+        Natural key: wwi_purchase_order_id. Loaded via Delta MERGE keyed on wwi_purchase_order_id.
+        Clustered by (date_key, supplier_key, stock_item_key).
+      type: deltaTable
+      location: globalpurchase.fact.purchase
+      format: delta
+      updateFrequency: nightly
+      schema:
+        fields:
+          - name: purchase_key
+            type: BIGINT
+            nullable: false
+            description: Surrogate key — GENERATED ALWAYS AS IDENTITY
+          - name: date_key
+            type: INT
+            nullable: false
+            description: FK to globalpurchase.dim.date.date_key (YYYYMMDD integer)
+          - name: supplier_key
+            type: INT
+            nullable: false
+            description: FK to globalpurchase.dim.supplier.supplier_key
+          - name: stock_item_key
+            type: INT
+            nullable: false
+            description: FK to globalpurchase.dim.stock_item.stock_item_key
+          - name: wwi_purchase_order_id
+            type: INT
+            nullable: true
+            description: Source purchase order identifier; natural/business key for MERGE
+          - name: ordered_outers
+            type: INT
+            nullable: true
+            description: Quantity ordered in outer packs
+          - name: ordered_quantity
+            type: INT
+            nullable: true
+            description: Total quantity ordered (individual units)
+          - name: received_outers
+            type: INT
+            nullable: true
+            description: Quantity received in outer packs
+          - name: package
+            type: STRING
+            nullable: true
+            description: Packaging type description
+          - name: is_order_finalized
+            type: BOOLEAN
+            nullable: true
+            description: Whether the purchase order is finalized
+          - name: lineage_key
+            type: BIGINT
+            nullable: false
+            description: FK to stg.lineage; identifies the pipeline run that loaded this row
+
+    - id: dim-supplier
+      name: Supplier Dimension Table
+      description: >
+        SCD Type-2 supplier dimension in globalpurchase.dim.
+        Includes is_current_row flag and row_effective/expiry dates.
+        key=0 Unknown sentinel row required before first fact load.
+      type: deltaTable
+      location: globalpurchase.dim.supplier
+      format: delta
+      updateFrequency: nightly
+
+    - id: dim-stock-item
+      name: Stock Item Dimension Table
+      description: >
+        SCD Type-2 stock item dimension in globalpurchase.dim.
+        Same SCD-2 pattern as supplier; key=0 sentinel row required.
+      type: deltaTable
+      location: globalpurchase.dim.stock_item
+      format: delta
+      updateFrequency: nightly
+
+    - id: dim-date
+      name: Date Dimension Table
+      description: >
+        Static calendar dimension in globalpurchase.dim.
+        date_key is INT in YYYYMMDD format. No SCD-2 columns.
+        Pre-populated once by bootstrap notebook; no daily reload.
+      type: deltaTable
+      location: globalpurchase.dim.date
+      format: delta
+      updateFrequency: once
+
+  pipeline:
+    orchestration: Databricks Workflows
+    schedule: nightly
+    layers:
+      - name: ingestion
+        description: Extract from SQL Server via JDBC; load purchase_staging; register dimension temp views
+        tasks:
+          - nb_extract_watermark
+          - nb_extract_dimensions
+          - nb_extract_purchase
+      - name: dimensions
+        description: SCD-2 MERGE for supplier and stock_item; static load for date (bootstrap only)
+        dependsOn: [ingestion]
+        tasks:
+          - nb_load_dim_supplier
+          - nb_load_dim_stock_item
+          - nb_populate_dim_date
+      - name: facts
+        description: Surrogate key resolution + Delta MERGE for fact.purchase
+        dependsOn: [dimensions]
+        tasks:
+          - nb_load_fact_purchase
+      - name: mart_and_dq
+        description: DQ assertions; mart view refresh; watermark commit; lineage close
+        dependsOn: [facts]
+        tasks:
+          - nb_dq_purchase
+          - nb_commit_watermark
+
+  dataQuality:
+    assertions:
+      - id: dq-row-count
+        description: Staging count must equal net delta in fact table for the batch. Zero tolerance; pipeline alert on mismatch.
+        severity: blocking
+      - id: dq-fk-integrity
+        description: All non-null FK columns (supplier_key, stock_item_key, date_key) must resolve in their respective dimension tables.
+        severity: informational
+      - id: dq-orphaned-keys
+        description: Orphaned FK keys (key=0 or NULL where unexpected) flagged for review; do not block load.
+        severity: informational
+    rejectionsTable: globalpurchase.stg.dq_rejections
+    traceability: lineage_key
+
+  migration:
+    sourceSystem: wideworldimportersdw (SQL Server 2014)
+    sourceMapping:
+      - source: fact.purchase
+        target: globalpurchase.fact.purchase
+        type: fact table
+      - source: dimension.supplier
+        target: globalpurchase.dim.supplier
+        type: SCD-2 dimension
+      - source: "dimension.stock item"
+        target: globalpurchase.dim.stock_item
+        type: SCD-2 dimension
+        notes: Source name contains space — renamed to stock_item
+      - source: dimension.date
+        target: globalpurchase.dim.date
+        type: static dimension
+      - source: integration.purchase_staging
+        target: globalpurchase.stg.purchase_staging
+        type: staging table
+      - source: "integration.etl cutoff"
+        target: globalpurchase.stg.etl_cutoff
+        type: control table
+        notes: Shared infrastructure
+      - source: integration.lineage
+        target: globalpurchase.stg.lineage
+        type: lineage table
+        notes: Shared infrastructure
+      - source: integration.migratestagedpurchasedata
+        target: "Python function migrate_staged_purchase_data() in src/etl/facts/"
+        type: stored procedure → Python function
+      - source: SSIS pipeline_dailyetlmain (purchase container)
+        target: Databricks Workflow (nightly)
+        type: orchestration
+    knownRisks:
+      - id: risk-1
+        description: "SSIS bug: pipeline_item_truncate purchase_staging executes DELETE FROM Order_Staging instead — purchase_staging never truncated. Must be corrected in Databricks replacement from day one."
+      - id: risk-2
+        description: "dimension.stock item table name contains a space — renamed to stock_item under snake_case convention."
+      - id: risk-3
+        description: "migratestagedpurchasedata uses DELETE+INSERT with inline SCD-2 correlated subqueries — rewritten as dimension key resolution join + Delta MERGE INTO."
+      - id: risk-4
+        description: "key=0 Unknown sentinel rows for dim.supplier and dim.stock_item must be inserted by bootstrap notebook before first fact load."
+      - id: risk-5
+        description: "Supplier and stock_item dimension ETL must complete before fact.purchase load — cross-product ETL ordering dependency."

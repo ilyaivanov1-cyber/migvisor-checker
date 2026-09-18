@@ -1,0 +1,256 @@
+rules:
+
+  - id: SX-001
+    dimension: Syntax
+    name: Remove T-SQL Transaction Blocks
+    intent: Eliminate BEGIN TRAN / COMMIT / ROLLBACK constructs because Delta Lake provides per-statement atomicity that makes explicit transaction wrapping unnecessary.
+
+    activation:
+      preconditions:
+        - Source dialect is T-SQL (SQL Server 2014)
+        - Code contains BEGIN TRAN, BEGIN TRANSACTION, COMMIT, COMMIT TRAN, COMMIT TRANSACTION, ROLLBACK, or ROLLBACK TRAN keywords
+        - Target platform is Databricks Delta Lake
+      scope: project
+
+    transformation:
+      source: T-SQL explicit transaction blocks wrapping DML statements (BEGIN TRAN ... COMMIT / ROLLBACK)
+      target: Delta Lake DML statements executed directly without transaction wrappers; each Delta write operation is atomic by default
+      algorithm:
+        - Identify all BEGIN TRAN / BEGIN TRANSACTION statements in stored procedures and scripts
+        - Identify the corresponding COMMIT or ROLLBACK statements that close each transaction block
+        - Remove BEGIN TRAN / BEGIN TRANSACTION lines entirely
+        - Remove COMMIT / COMMIT TRAN / COMMIT TRANSACTION lines entirely
+        - Remove ROLLBACK / ROLLBACK TRAN / ROLLBACK TRANSACTION lines and any associated IF @@ERROR <> 0 guard blocks
+        - Remove SAVE TRANSACTION and any ROLLBACK TO SAVEPOINT equivalents
+        - Remove SET XACT_ABORT ON / OFF statements that were used solely to control transaction behavior
+        - Verify that the remaining DML statements (MERGE, INSERT, UPDATE, DELETE) execute correctly as standalone atomic operations against Delta tables
+        - Add Python try/except blocks around notebook cell logic where error handling previously relied on ROLLBACK, to preserve error propagation behavior
+
+    validation:
+      success_criteria:
+        - No BEGIN TRAN, BEGIN TRANSACTION, COMMIT, or ROLLBACK keywords appear in generated Spark SQL or Python notebook code
+        - Delta table write operations complete atomically without explicit transaction wrappers
+        - Error handling is implemented via Python try/except rather than T-SQL ROLLBACK
+        - Data consistency is maintained for multi-step operations through Delta MERGE atomicity
+      test_cases:
+        - input: "BEGIN TRAN; INSERT INTO fact_sales VALUES (1, 100); COMMIT;"
+          expected_output: "INSERT INTO globalpurchase.fact_sales VALUES (1, 100)"
+        - input: "BEGIN TRAN; UPDATE dim_customer SET name = A; IF @@ERROR <> 0 ROLLBACK; ELSE COMMIT;"
+          expected_output: "UPDATE globalpurchase.dim_customer SET name = A  -- wrapped in try/except in Python cell"
+        - input: "SET XACT_ABORT ON; BEGIN TRAN; DELETE FROM staging WHERE id = 5; COMMIT;"
+          expected_output: "DELETE FROM globalpurchase.staging WHERE id = 5"
+
+    inheritance:
+      level: project
+      override: Product rules may retain explicit Delta transaction semantics using Python DeltaTable API if a product requires coordinated multi-table writes beyond a single MERGE
+      extend: Product rules may add Python try/except templates with specific exception types (e.g., AnalysisException) to replace ROLLBACK error-handling patterns
+      deactivate: Deactivate for any product that uses Databricks SQL connector with explicit BEGIN/COMMIT if the target warehouse requires transactional DDL coordination
+
+  - id: SX-002
+    dimension: Syntax
+    name: Replace Staging-Table and migratestaged* Procedure Pattern with Delta MERGE
+    intent: Replace the SQL Server pattern of loading data into a staging table and then calling a migratestaged* stored procedure with an equivalent Delta MERGE operation executed inside a Python or SQL notebook.
+
+    activation:
+      preconditions:
+        - Source code contains temporary or permanent staging tables used as intermediary landing zones
+        - Source code calls stored procedures named migratestaged* or following the staging-procedure naming convention
+        - The procedure pattern performs INSERT or UPDATE from staging into a target table
+        - Target platform is Databricks Delta Lake with Unity Catalog
+      scope: project
+
+    transformation:
+      source: T-SQL pattern - bulk insert into a staging table followed by EXEC migratestaged<TableName> stored procedure that merges staging data into the target table
+      target: Python notebook function or SQL notebook cell that performs a single Delta MERGE INTO the target Delta table, reading source data directly from the ingestion DataFrame or a transient Spark temporary view
+      algorithm:
+        - Identify all staging table definitions (CREATE TABLE #stage_*, CREATE TABLE stage_*) used as intermediary landing zones
+        - Identify all migratestaged* stored procedure calls (EXEC migratestaged<X>) and map each call to its corresponding target table
+        - Read the body of each migratestaged* procedure to understand the merge keys and column mappings it performs
+        - Replace the staging table creation with a Spark DataFrame or a transient temporary view registered via createOrReplaceTempView()
+        - Replace the EXEC migratestaged<X> call with a Spark SQL MERGE INTO statement targeting the corresponding Delta table in the globalpurchase catalog
+        - Define WHEN MATCHED and WHEN NOT MATCHED clauses based on the logic extracted from the migratestaged* procedure body
+        - Drop the staging table DDL from the migration artifacts; do not create permanent staging tables in the target schema
+        - Wrap the DataFrame registration and MERGE INTO call inside a Python function named after the original procedure (e.g., migrate_staged_table()) for traceability
+        - Register the Python function as a Databricks Workflow task replacing the SSIS package step that invoked the stored procedure
+
+    validation:
+      success_criteria:
+        - No migratestaged* stored procedure calls remain in generated code
+        - No permanent staging tables are created in the globalpurchase Unity Catalog schema
+        - Each former staging+procedure pair is replaced by exactly one Delta MERGE INTO statement
+        - MERGE keys match the business keys identified in the migratestaged* procedure
+        - Row counts after MERGE match expected counts validated against source SQL Server output
+      test_cases:
+        - input: "INSERT INTO stage_orders SELECT * FROM source; EXEC migratestagedOrders;"
+          expected_output: "source_df.createOrReplaceTempView(stage_orders) then MERGE INTO globalpurchase.fact_orders t USING stage_orders s ON t.order_id = s.order_id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"
+        - input: "TRUNCATE TABLE stage_customer; INSERT INTO stage_customer SELECT * FROM src; EXEC migratestagedCustomer;"
+          expected_output: "customer_df.createOrReplaceTempView(stage_customer) then MERGE INTO globalpurchase.dim_customer t USING stage_customer s ON t.customer_id = s.customer_id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"
+
+    inheritance:
+      level: project
+      override: Product rules may specify additional MERGE clauses (e.g., WHEN NOT MATCHED BY SOURCE THEN DELETE) for products that require full-refresh semantics
+      extend: Product rules may add pre-MERGE deduplication logic on the source DataFrame if the staging procedure included a DISTINCT or GROUP BY step
+      deactivate: Deactivate for products that intentionally retain a persistent Bronze/staging Delta table as part of a medallion architecture ingestion design
+
+  - id: SX-003
+    dimension: Syntax
+    name: Replace SCD-2 UPDATE Valid-To and INSERT Pattern with Delta MERGE INTO
+    intent: Convert the SQL Server SCD Type-2 pattern of issuing an UPDATE to close the current record's Valid To date followed by a separate INSERT for the new version into a single atomic Delta MERGE INTO statement with active/history logic and an is_current boolean flag.
+
+    activation:
+      preconditions:
+        - Source dimension table implements SCD Type-2 with ValidFrom / ValidTo (or EffectiveDate / ExpiryDate) date columns
+        - Source code contains an UPDATE statement that sets ValidTo to a close date for the current active record
+        - Source code contains a subsequent INSERT statement that adds the new version of the dimension record
+        - Target platform is Databricks Delta Lake with Unity Catalog
+      scope: project
+
+    transformation:
+      source: "T-SQL SCD-2 two-step pattern - UPDATE dim SET ValidTo = @closeDate WHERE key = @key AND ValidTo = 9999-12-31; INSERT INTO dim VALUES (@key, @newAttrs, @effectiveDate, 9999-12-31)"
+      target: Spark SQL MERGE INTO the target Delta dimension table with clauses to expire the current record (is_current = false, ValidTo = date_sub(current_date(), 1)) and insert the new active record (ValidFrom = current_date(), ValidTo = date 9999-12-31, is_current = true)
+      algorithm:
+        - Identify all dimension tables that use ValidFrom / ValidTo columns for SCD-2 versioning
+        - Add an is_current BOOLEAN column (DEFAULT true) to each identified dimension table DDL in the target schema if not already present
+        - For each dimension load procedure, identify the UPDATE SET ValidTo statement and the paired INSERT statement
+        - Construct a single MERGE INTO globalpurchase.<dim_table> USING <source_view> ON <business_key_join> statement
+        - "Add WHEN MATCHED AND t.is_current = true AND (changed_attribute_predicate) THEN UPDATE SET t.ValidTo = date_sub(current_date(), 1), t.is_current = false to expire the current record"
+        - "Add WHEN NOT MATCHED BY TARGET THEN INSERT (all_columns) VALUES (source_columns, current_date(), date 9999-12-31, true) to insert the new active version"
+        - Remove the original standalone UPDATE and INSERT T-SQL statements from the migrated code
+        - Ensure the source DataFrame or CTE passed to USING contains only the latest version of each business key (deduplicated)
+        - Validate that history records with is_current = false are not modified by subsequent MERGE runs
+
+    validation:
+      success_criteria:
+        - All SCD-2 dimension tables in the globalpurchase catalog contain an is_current BOOLEAN column
+        - No standalone UPDATE + INSERT SCD-2 pairs remain in generated code
+        - Each MERGE INTO contains at least a WHEN MATCHED (expire) clause and a WHEN NOT MATCHED (insert new) clause
+        - Historical records (is_current = false) remain unchanged across incremental loads
+        - Current record count per business key equals exactly one after each MERGE run
+        - ValidTo for expired records equals the day before the new record's ValidFrom
+      test_cases:
+        - input: "UPDATE dim_customer SET ValidTo = 2026-08-24 WHERE customer_id = 42 AND ValidTo = 9999-12-31; INSERT INTO dim_customer VALUES (42, New Name, 2026-08-25, 9999-12-31);"
+          expected_output: "MERGE INTO globalpurchase.dim_customer t USING source s ON t.customer_id = s.customer_id WHEN MATCHED AND t.is_current = true AND t.name <> s.name THEN UPDATE SET t.ValidTo = date_sub(current_date(), 1), t.is_current = false WHEN NOT MATCHED BY TARGET THEN INSERT (customer_id, name, ValidFrom, ValidTo, is_current) VALUES (s.customer_id, s.name, current_date(), date 9999-12-31, true)"
+        - input: "SELECT * FROM dim_customer WHERE is_current = 1"
+          expected_output: "SELECT * FROM globalpurchase.dim_customer WHERE is_current = true"
+
+    inheritance:
+      level: project
+      override: Product rules may change the SCD-2 close date logic from date_sub(current_date(), 1) to the exact load timestamp if intraday versioning is required
+      extend: "Product rules may add a WHEN NOT MATCHED BY SOURCE AND t.is_current = true THEN UPDATE SET t.ValidTo = current_date(), t.is_current = false clause for full-outer-join deletion handling"
+      deactivate: Deactivate for dimension tables that are designated SCD Type-1 at the product level, where history is not retained
+
+  - id: SX-004
+    dimension: Syntax
+    name: Replace Fact Table DELETE and INSERT Pattern with Delta MERGE INTO
+    intent: Convert the SQL Server fact table refresh pattern of issuing a DELETE for existing keys followed by a bulk INSERT into a single idempotent Delta MERGE INTO statement keyed on the business key.
+
+    activation:
+      preconditions:
+        - Source code contains a DELETE FROM fact_table WHERE business_key IN (...) or DELETE FROM fact_table WHERE date_partition = @date statement
+        - Source code contains a subsequent INSERT INTO fact_table SELECT ... statement that repopulates the deleted rows
+        - The target table is a fact table (not a dimension) in the globalpurchase schema
+        - Target platform is Databricks Delta Lake with Unity Catalog
+      scope: project
+
+    transformation:
+      source: T-SQL two-step fact refresh - DELETE FROM fact_x WHERE business_key IN (keys); INSERT INTO fact_x SELECT columns FROM source
+      target: Spark SQL MERGE INTO globalpurchase.fact_x USING source_view ON business_key_join WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *
+      algorithm:
+        - Identify all fact table DELETE + INSERT pairs in stored procedures and SSIS data flow tasks
+        - For each pair, extract the business key columns used in the DELETE WHERE clause - these become the MERGE join keys
+        - Construct a source DataFrame or CTE that produces the new fact rows to be loaded
+        - Register the source as a temporary view using createOrReplaceTempView() or inline it as a CTE in the MERGE statement
+        - Write a MERGE INTO globalpurchase.<fact_table> USING <source> ON <business_key_predicate> statement
+        - Add WHEN MATCHED THEN UPDATE SET * to overwrite existing fact rows whose keys appear in the source
+        - Add WHEN NOT MATCHED BY TARGET THEN INSERT * to append new fact rows not yet in the target
+        - Add WHEN NOT MATCHED BY SOURCE THEN DELETE only if the product requires full-partition replacement semantics; otherwise omit to preserve history
+        - Remove the original DELETE and INSERT T-SQL statements from the migrated artifacts
+        - If the original DELETE used a date partition filter, ensure the MERGE source DataFrame is filtered to the same partition range to avoid inadvertently matching out-of-scope rows
+
+    validation:
+      success_criteria:
+        - No DELETE + INSERT pairs targeting fact tables remain in generated code
+        - Each former DELETE + INSERT pair is replaced by exactly one MERGE INTO statement
+        - MERGE join keys match the business key columns from the original DELETE WHERE clause
+        - Idempotency is confirmed - running the MERGE twice produces the same target table state
+        - Row counts after MERGE match expected counts validated against source SQL Server output
+      test_cases:
+        - input: "DELETE FROM fact_sales WHERE sale_date = 2026-08-25; INSERT INTO fact_sales SELECT * FROM stage_sales WHERE sale_date = 2026-08-25;"
+          expected_output: "stage_df filtered to sale_date 2026-08-25 registered as temp view, then MERGE INTO globalpurchase.fact_sales t USING stage_sales s ON t.sale_id = s.sale_id AND t.sale_date = s.sale_date WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED BY TARGET THEN INSERT *"
+        - input: "DELETE FROM fact_orders WHERE order_id IN (SELECT order_id FROM staging_orders); INSERT INTO fact_orders SELECT * FROM staging_orders;"
+          expected_output: "MERGE INTO globalpurchase.fact_orders t USING staging_orders s ON t.order_id = s.order_id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED BY TARGET THEN INSERT *"
+
+    inheritance:
+      level: project
+      override: Product rules may add WHEN NOT MATCHED BY SOURCE THEN DELETE for products that implement full-partition replacement and require removal of stale fact rows not present in the source
+      extend: Product rules may add partition pruning hints (e.g., filtering on a date column before the MERGE) to improve performance on large fact tables
+      deactivate: Deactivate for fact tables that are append-only and will never require update or delete semantics in the target platform
+
+  - id: SX-005
+    dimension: Syntax
+    name: Convert T-SQL Syntax to Spark SQL and Python
+    intent: Translate T-SQL-specific functions, operators, data types, and DML constructs to their Spark SQL or Python equivalents so that all generated code executes correctly on Databricks without SQL Server dependencies.
+
+    activation:
+      preconditions:
+        - Source code is written in T-SQL targeting SQL Server 2014
+        - Target execution environment is Databricks Runtime with Spark SQL and Python (PySpark)
+        - Code contains T-SQL-specific syntax not natively supported by Spark SQL
+      scope: project
+
+    transformation:
+      source: "T-SQL syntax including SQL Server-specific functions: GETDATE, ISNULL, CONVERT with style codes, DATEADD, DATEDIFF, CHARINDEX, LEN, TOP n, NOLOCK hints, PRINT, RAISERROR, @@ROWCOUNT, @@ERROR, IDENTITY columns, square-bracket identifiers, GO batch separators"
+      target: "Spark SQL and Python equivalents: current_timestamp() / current_date(), COALESCE(), CAST or date_format, date_add / datediff, instr(), length(), LIMIT n, no query hints, Python print() / logging, Python raise / try/except, Python variable for row count, backtick identifiers, no GO separators"
+      algorithm:
+        - Scan all T-SQL source files for SQL Server-specific function calls and replace each with its Spark SQL equivalent
+        - "GETDATE() / SYSDATETIME() -> current_timestamp() for datetime, current_date() for date-only usage"
+        - "ISNULL(expr, replacement) -> COALESCE(expr, replacement)"
+        - "CONVERT(VARCHAR, expr, style) -> CAST(expr AS STRING) or date_format(expr, pattern) based on the style code"
+        - "DATEADD(unit, n, date) -> date_add(date, n) for days; add_months(date, n) for months"
+        - "DATEDIFF(unit, start, end) -> datediff(end, start) for day difference; months_between for month difference"
+        - "CHARINDEX(substr, str) -> instr(str, substr) noting that argument order is reversed"
+        - "LEN(str) -> length(str)"
+        - "SELECT TOP n ... -> SELECT ... LIMIT n"
+        - "WITH (NOLOCK) table hints -> remove entirely; Delta Lake snapshot isolation makes them unnecessary"
+        - "PRINT message -> Python print() or logger.info()"
+        - "RAISERROR(msg, 16, 1) -> raise Exception(msg) in Python"
+        - "@@ROWCOUNT -> spark.sql query result .count() assigned to a Python variable"
+        - "@@ERROR -> Python try/except AnalysisException"
+        - "IDENTITY(1,1) -> BIGINT GENERATED ALWAYS AS IDENTITY or monotonically_increasing_id() per product design decision"
+        - "Square-bracket identifiers [col] -> backtick identifiers col (using backticks)"
+        - "GO batch separator -> remove and split into individual notebook cells or Python function calls"
+        - "USE [database] -> remove; Unity Catalog three-part naming catalog.schema.table used throughout"
+        - "String concatenation with + operator -> concat() function in Spark SQL or Python f-strings"
+        - "CASE WHEN ... END -> retained as-is; Spark SQL supports standard CASE expressions natively"
+        - Verify converted code compiles without syntax errors using Databricks notebook cell execution
+
+    validation:
+      success_criteria:
+        - No T-SQL-only functions (GETDATE, ISNULL, CONVERT with style codes, CHARINDEX, LEN, DATEADD, DATEDIFF as T-SQL forms) appear in generated Spark SQL
+        - No TOP n clauses remain in generated code; all row-limiting uses LIMIT n
+        - No NOLOCK or other SQL Server query hints appear in generated code
+        - No GO batch separators appear in generated SQL files
+        - No USE database statements appear; Unity Catalog three-part names are used throughout
+        - Square-bracket identifiers are replaced with backtick identifiers
+        - Generated notebooks execute without AnalysisException or ParseException on Databricks Runtime
+      test_cases:
+        - input: "SELECT TOP 10 * FROM dbo.Orders WITH (NOLOCK) WHERE OrderDate >= DATEADD(day, -30, GETDATE())"
+          expected_output: "SELECT * FROM globalpurchase.orders WHERE order_date >= date_add(current_date(), -30) LIMIT 10"
+        - input: "ISNULL(customer_name, Unknown)"
+          expected_output: "COALESCE(customer_name, Unknown)"
+        - input: "CONVERT(VARCHAR(10), order_date, 120)"
+          expected_output: "date_format(order_date, yyyy-MM-dd)"
+        - input: "CHARINDEX(search, column_value)"
+          expected_output: "instr(column_value, search)"
+        - input: "SELECT [order_id], [customer_name] FROM [dbo].[orders]"
+          expected_output: "SELECT `order_id`, `customer_name` FROM globalpurchase.orders"
+        - input: "PRINT Loading complete; GO"
+          expected_output: "print(Loading complete)  -- GO removed; split into separate notebook cell"
+        - input: "RAISERROR(Load failed, 16, 1)"
+          expected_output: "raise Exception(Load failed)"
+
+    inheritance:
+      level: project
+      override: Product rules may specify alternative date format patterns (e.g., date_format with custom masks) if a product consumes dates in a non-ISO format required by downstream BI tools
+      extend: Product rules may add product-specific function mappings for proprietary SQL Server scalar UDFs that have direct Python or Spark SQL replacements defined in that product scope
+      deactivate: Deactivate individual sub-mappings (e.g., the IDENTITY column mapping) for products where surrogate key generation strategy is defined differently in the product-transformation-rules

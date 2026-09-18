@@ -1,0 +1,62 @@
+dimension: Lineage
+prefix: LN
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+customizations: 1 new product-only rule (LN-P01)
+rule_count: 1
+note: No corresponding project-level LN dimension file — this is a product-only dimension for Purchase.
+
+rules:
+
+  - id: LN-P01
+    source: product
+    dimension: Lineage
+    name: Preserve package column name and type for cross-domain view compatibility
+    intent: >
+      The out-of-scope analytical view analytics.v_ordertoyearanalytics joins fact.purchase on the Package column
+      using string equality (fo.Package = p.Package). The column must retain its migrated name (package) and STRING
+      type in the target to avoid breaking this cross-domain join when the Order product team rebuilds the view.
+      Additionally, the case-sensitivity difference between SQL Server (CI collation) and Databricks (CS by default)
+      must be documented as a cross-product risk.
+    activation:
+      preconditions:
+        - purchase DDL is being authored for globalpurchase.fact
+        - analytics.v_ordertoyearanalytics may be rebuilt by the Order product team in a future migration phase
+        - Order product team migration timeline overlaps with Purchase product go-live planning
+      scope: product
+    transformation:
+      source: "Fact.Purchase.[Package] nvarchar(100) COLLATE Latin1_General_100_CI_AS NOT NULL"
+      target: "globalpurchase.fact.purchase.package STRING NOT NULL"
+      algorithm:
+        - Apply NM-001 snake_case conversion to [Package]: result is 'package'. No further rename.
+        - Map nvarchar(100) → STRING per TY-003.
+        - Do NOT apply any alias, prefix, or suffix to this column — the downstream view references it by the exact name 'package'.
+        - Confirm that the column name in purchase DDL is 'package' (not 'packaging', 'package_type', or any other variant).
+        - Document in docs/data_dictionary.md:
+            "package (STRING NOT NULL): Free-text packaging descriptor denormalized at extraction time from
+            Warehouse.PackageTypes.PackageTypeName. Column name is deliberately preserved as 'package' to maintain
+            compatibility with analytics.v_ordertoyearanalytics (Order product team, cross-domain, out-of-scope for
+            Purchase), which references this column by name in a correlated subquery (fo.Package = p.Package).
+            Do not rename this column without coordinating with the Order product team."
+        - Document case-sensitivity risk in docs/data_dictionary.md:
+            "CASE-SENSITIVITY RISK: SQL Server Latin1_General_100_CI_AS collation treats 'Each', 'each', and 'EACH'
+            as equal. Databricks defaults to case-sensitive string comparison. If package values in Purchase and Order
+            domains contain mixed-case variants, the correlated subquery in analytics.v_ordertoyearanalytics may produce
+            different results on Databricks than on SQL Server. The Order product team must apply UPPER() or LOWER()
+            normalization in the rebuilt view to match behavior."
+    consumer_impact:
+      - consumer: analytics.v_ordertoyearanalytics
+        object_id: b942748e-163b-4919-92de-fd51f4ba2d52
+        ownership: Order product team (cross-domain, out-of-scope for Purchase)
+        join_predicate: fo.Package = p.Package (string equality on free-text column)
+        risk_on_rename: Join breaks entirely if 'package' is renamed
+        risk_on_case_change: Join misses rows if case normalization is not applied in the rebuilt view
+        coordination_action: Notify Order product team of package column name contract and case-sensitivity risk before Purchase go-live
+    validation:
+      success_criteria:
+        - globalpurchase.fact.purchase contains a column named exactly 'package' (snake_case, no rename)
+        - Column type is STRING NOT NULL
+        - docs/data_dictionary.md documents the cross-domain dependency, the preservation rationale, and the case-sensitivity risk
+        - Order product team has been formally notified of the column name contract before Purchase production cutover
+        - docs/go_live_checklist.md includes a gate: "Order product team notified of package column name contract: YES/NO"

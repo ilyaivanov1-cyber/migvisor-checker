@@ -1,0 +1,53 @@
+# CFG-005: DQ assertion rule configuration consumed by dq_engine.py (DQ-001).
+# All six DQRs defined. BLOCKING rules halt mart promotion; Informational rules are logged only.
+
+rules:
+
+  - rule_id: DQR-001
+    description: >
+      Row count reconciliation: fact.purchase delta for this lineage_key must match
+      stg.purchase_staging row count within the configured tolerance.
+    severity: BLOCKING
+    enabled: true
+    parameters:
+      tolerance_pct: 0.0   # Zero tolerance — staging and fact counts must match exactly
+
+  - rule_id: DQR-002
+    description: >
+      FK integrity check: every supplier_key, stock_item_key, and date_key in fact.purchase
+      must resolve to an existing row in the corresponding dimension table.
+    severity: Informational
+    enabled: true
+    parameters: {}
+
+  - rule_id: DQR-003
+    description: >
+      Orphaned key check: any fact row with supplier_key = 0 or stock_item_key = 0
+      (sentinel fallback) is flagged as an unresolved dimension reference.
+    severity: Informational
+    enabled: true
+    parameters: {}
+
+  - rule_id: DQR-004
+    description: >
+      Rejection write integrity: every DQ violation must produce a row in stg.dq_rejections
+      with all required columns populated. Failure to write is itself a BLOCKING error.
+    severity: BLOCKING
+    enabled: true
+    parameters: {}
+
+  - rule_id: DQR-005
+    description: >
+      Mart promotion gate: mart views must not be refreshed if any BLOCKING DQ rule failed.
+      Enforced by dq_passed task value propagation in the Workflow DAG.
+    severity: BLOCKING
+    enabled: true
+    parameters: {}
+
+  - rule_id: DQR-006
+    description: >
+      Null lineage_key check: no row in fact.purchase for the current batch may have
+      a null lineage_key value.
+    severity: BLOCKING
+    enabled: true
+    parameters: {}

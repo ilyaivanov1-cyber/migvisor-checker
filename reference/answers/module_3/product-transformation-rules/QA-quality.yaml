@@ -1,0 +1,108 @@
+dimension: Quality
+prefix: QA
+product: Purchase
+project: GlobalPurchase_Project
+date: "2026-08-25"
+customizations: 1 new product-only rule (QA-P01)
+rule_count: 1
+note: No corresponding project-level QA dimension file — this is a product-only dimension for Purchase.
+
+rules:
+
+  - id: QA-P01
+    source: product
+    dimension: Quality
+    name: Purchase-specific DQ assertions for purchase
+    intent: >
+      Define data quality assertions specific to the Purchase fact table that validate business invariants implied
+      by the source schema design and procurement domain logic. All assertions run after purchase is loaded
+      and before any mart promotion task in the Workflow.
+    activation:
+      preconditions:
+        - purchase has been loaded with the current incremental batch
+        - dq_engine.py is implemented and capable of writing to stg.dq_rejections
+        - nb_dq_purchase.py is registered as a Workflow task that depends on nb_load_fact_purchase
+      scope: product
+    transformation:
+      source: "Implicit constraints in Fact.Purchase (NOT NULL columns, procurement domain business rules)"
+      target: "Explicit DQ assertions in src/etl/dq/nb_dq_purchase.py, executed via dq_engine.py"
+      assertions:
+        - id: QA-P01-A
+          name: received_outers_lte_ordered_outers
+          severity: WARNING
+          blocking: false
+          sql: >
+            SELECT purchase_key, date_key, supplier_key, stock_item_key,
+                   ordered_outers, received_outers
+            FROM globalpurchase.fact.purchase
+            WHERE lineage_key = {lineage_key}
+              AND received_outers > ordered_outers
+          description: >
+            Received outers must not exceed ordered outers for any purchase order line.
+            Violations indicate data quality issues in the source OLTP system.
+            Written to stg.dq_rejections with severity WARNING — does not block load.
+
+        - id: QA-P01-B
+          name: positive_measure_values
+          severity: WARNING
+          blocking: false
+          sql: >
+            SELECT purchase_key, date_key, ordered_outers, ordered_quantity, received_outers
+            FROM globalpurchase.fact.purchase
+            WHERE lineage_key = {lineage_key}
+              AND (ordered_quantity <= 0 OR ordered_outers <= 0)
+          description: >
+            ordered_quantity and ordered_outers must be positive integers. Zero or negative values
+            are anomalous given source NOT NULL constraints and procurement context.
+            Written to stg.dq_rejections with severity WARNING — does not block load.
+
+        - id: QA-P01-C
+          name: staging_to_fact_row_count_reconciliation
+          severity: ERROR
+          blocking: true
+          description: >
+            Row count in stg.purchase_staging must equal rows inserted into purchase for the current
+            batch (after the two-phase delete+insert). Zero tolerance — pipeline alert and halt on mismatch.
+            staging_count = spark.table(TBL_STAGING).count()
+            rows_merged (returned by apply_fact_merge or counted after Phase 2 INSERT)
+            Assert staging_count == rows_merged; raise RuntimeError if not.
+
+        - id: QA-P01-D
+          name: unknown_member_key_fraction
+          severity: WARNING
+          blocking: false
+          threshold_config: config/dq_assertions_fact_purchase.yaml key=0_fraction_threshold (default 0.05)
+          description: >
+            Fraction of rows in the current batch with supplier_key=0 OR stock_item_key=0 must be below
+            the configured threshold (default 5%). Alert if exceeded — do not block the pipeline.
+            This assertion supplements the per-row DQ rejection writing in CX-P02 (sk_resolver.py).
+            Expressed as: key_zero_count / staging_count > threshold → WARNING alert.
+
+        - id: QA-P01-E
+          name: is_order_finalized_not_null
+          severity: ERROR
+          blocking: true
+          sql: >
+            SELECT COUNT(*) AS null_count
+            FROM globalpurchase.fact.purchase
+            WHERE lineage_key = {lineage_key}
+              AND is_order_finalized IS NULL
+          description: >
+            is_order_finalized is mapped from BIT NOT NULL in the source schema and must never be NULL
+            in the target. A non-zero null_count indicates a type mapping or ETL logic error.
+            Pipeline halt on detection.
+
+    configuration:
+      config_file: config/dq_assertions_fact_purchase.yaml
+      configurable_thresholds:
+        - key: key_zero_fraction_threshold
+          default: 0.05
+          description: Maximum acceptable fraction of rows with Unknown member keys (supplier_key=0 or stock_item_key=0)
+
+    validation:
+      success_criteria:
+        - nb_dq_purchase.py runs after nb_load_fact_purchase and before any mart promotion task
+        - Assertions QA-P01-A, QA-P01-B, QA-P01-D write to stg.dq_rejections without blocking the pipeline
+        - Assertions QA-P01-C and QA-P01-E halt the Workflow on failure and fire an alert
+        - DQ assertion definitions and thresholds are stored in config/dq_assertions_fact_purchase.yaml
+        - All rejection rows in stg.dq_rejections reference the same lineage_key as the current batch load
