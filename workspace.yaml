@@ -1,5 +1,5 @@
 # migvisor-as-is-checker workspace configuration
-trainee_workspace: "./Inventory_Stock_Project"
-reference_workspace: "./reference/answers"
-product: "Purchase"
-checks_dir: "./checks"
+trainee_workspace: auto        # auto = scan root for any folder with products/ + project/ structure
+reference_workspace: ./reference/answers
+product: Purchase
+checks_dir: ./checks

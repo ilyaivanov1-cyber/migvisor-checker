@@ -74,28 +74,34 @@ Auto-detection fallback order for reference:
 
 ### Workspace-aware resolution (preferred)
 
-Read `workspace.yaml` at the project root to resolve all paths:
+Read `workspace.yaml` at the project root:
 
 ```yaml
-trainee_workspace: ./Inventory_Stock_Project   # root of trainee's migVisor project
-reference_workspace: ./reference/answers        # root of reference answer files
-product: Purchase                               # product folder name
-checks_dir: ./checks                            # where reports are written
+trainee_workspace: auto        # auto-detect OR explicit path e.g. ./Inventory_Stock_Project
+reference_workspace: ./reference/answers
+product: Purchase
+checks_dir: ./checks
 ```
 
-Resolved paths (substitute values from workspace.yaml):
+**Auto-detection** (when `trainee_workspace: auto`):
+- Scan the project root for any folder that contains both `products/` and `project/` subdirectories.
+- If exactly one such folder is found → use it automatically (trainee name = folder name).
+- If multiple are found → list them and ask: "Multiple trainee workspaces found: [list]. Run with `trainee=<name>` to select one."
+- If none found → ask the user to provide the path explicitly.
+
+Resolved paths after detection:
 
 | | Path |
 |---|---|
 | Trainee file | `{trainee_workspace}/products/{product}/current/specifications/development_plan/requirements.md` |
 | Reference file | `{reference_workspace}/module_5/development_plan/requirements.md` |
-| Trainee name | basename of `{trainee_workspace}` (e.g. `Inventory_Stock_Project`) |
+| Trainee name | folder name of `{trainee_workspace}` |
 | Output dir | `{checks_dir}/{trainee_name}/requirements/` |
 
-**Resolution order:**
-1. Explicit `participant=<path>` / `reference=<path>` flags — always win.
-2. Paths derived from `workspace.yaml` above — used when no flags given.
-3. Legacy fallback — `trainees/<name>/<file>` + `reference/<file>` (if `workspace.yaml` is missing).
+**Override at any time** with explicit flags:
+```
+participant=path/to/file  reference=path/to/ref
+```
 
 ---
 
