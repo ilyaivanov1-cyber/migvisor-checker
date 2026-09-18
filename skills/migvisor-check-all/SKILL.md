@@ -86,6 +86,8 @@ If a trainee file is missing, mark that check as **[MISSING] — 0/100** and con
 After all 21 checks, write a summary file to:
 `{checks_dir}/{trainee_name}/SUMMARY.md`
 
+Overwrite if it already exists.
+
 ```markdown
 ---
 trainee: <trainee_name>
@@ -96,6 +98,8 @@ grade: <grade>
 ---
 
 # Check Summary — <trainee_name> / <product>
+
+## Score Table
 
 | # | Skill | Task ID | Score | Grade |
 |---|---|---|---|---|
@@ -122,14 +126,30 @@ grade: <grade>
 | 21 | secrets-config | TASK-SC-001 | .../100 | ... |
 | | **Average** | | **<avg>/100** | **<grade>** |
 
-## Top scores
-<list top 3>
+---
 
-## Lowest scores
-<list bottom 3>
+## Skill Summaries
 
-## Main gaps
-<2-3 sentences on the most common issues across all checks>
+For each skill write a **4-5 sentence summary** in this format:
+
+### 1. scope — .../100 (Grade)
+[Sentence 1: final score and grade.] [Sentence 2: what was done well — best-scoring section or strongest element.] [Sentence 3: main gap — most critical missing or weak element.] [Sentence 4: top priority fix with estimated points recoverable.] [Sentence 5 optional: second priority fix.]
+
+### 2. as-is — .../100 (Grade)
+[4-5 sentences following the same pattern]
+
+... repeat for all 21 skills ...
+
+For MISSING skills (0/100): state the file was not submitted, name the reference file expected, and note the impact on overall score.
+
+---
+
+## Overall Verdict
+
+**Top 3:** <skill> (score), <skill> (score), <skill> (score)
+**Bottom 3:** <skill> (score), <skill> (score), <skill> (score)
+
+<2-3 sentences: overall grade, most common gap across all checks, highest-impact action to raise the average score.>
 ```
 
 ---
