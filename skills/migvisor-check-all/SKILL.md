@@ -1,6 +1,6 @@
 ---
 name: migvisor-check-all
-description: Runs all 21 MigVisor deliverable checks in sequence against the auto-detected trainee workspace and writes a summary score table. Single command — no file paths needed.
+description: Runs all 21 MigVisor deliverable checks in sequence against the auto-detected trainee workspace and writes a summary score table with per-skill narratives. Single command — no file paths needed.
 ---
 
 # Skill: migvisor-check-all
@@ -21,7 +21,7 @@ description: Runs all 21 MigVisor deliverable checks in sequence against the aut
 
 Run all 21 MigVisor deliverable skills in sequence against one trainee workspace.
 No file paths needed — everything is resolved from `workspace.yaml`.
-At the end, print a single summary score table.
+After every run, write `SUMMARY.md` with the score table AND a 4-5 sentence narrative for every skill.
 
 ---
 
@@ -44,16 +44,43 @@ checks_dir: ./checks
 
 ---
 
-## Step 2 — Run all checks in sequence
+## Step 2 — Run all checks and collect results
 
-Run each skill below in order. For each:
+Run each skill below in order. **For each skill, you MUST complete ALL three sub-steps before moving to the next skill — do not skip sub-step C.**
+
+### Per-skill procedure (repeat for all 21):
+
+**A. Score the deliverable**
 1. Read the skill's SKILL.md to get the full rubric.
 2. Resolve the trainee file and reference file using the workspace paths.
-3. Score the deliverable.
-4. Write the check report to `{checks_dir}/{trainee_name}/{task-group}/`.
-5. Print a one-line progress update: `✓ [N/21] <skill-name> — <score>/100 (<grade>)`
+3. If the trainee file is missing → score = 0/100, grade = Incomplete, go to sub-step C.
+4. Score the deliverable following the rubric.
+5. Write the check report to `{checks_dir}/{trainee_name}/{task-group}/` (increment suffix if file exists).
 
-If a trainee file is missing, mark that check as **[MISSING] — 0/100** and continue to the next.
+**B. Print progress line**
+```
+✓ [N/21] <skill-name> — <score>/100 (<grade>)
+```
+
+**C. Write the 4-5 sentence summary (MANDATORY — do not skip)**
+
+Immediately after scoring, write the summary for this skill into your working notes using exactly this format:
+
+```
+SKILL_N_SUMMARY:
+### N. <skill-name> — <score>/100 (<Grade>)
+<Sentence 1: final score and grade.> <Sentence 2: what was done well — best-scoring section or strongest element.> <Sentence 3: main gap — most critical missing or weak element.> <Sentence 4: top priority fix with estimated points recoverable.> <Sentence 5: second priority fix or encouraging note.>
+```
+
+For MISSING files use:
+```
+### N. <skill-name> — 0/100 (Incomplete)
+This file was not submitted. Expected at `{trainee_workspace}/<relative-path>`. Reference answer is at `{reference_workspace}/<ref-path>`. Submitting this deliverable would add approximately 4.8 points to the overall average score. Create the file using the reference as a guide.
+```
+
+---
+
+### Skill table
 
 | # | Skill | Trainee file (relative to trainee_workspace) | Reference file (relative to reference_workspace) | Output dir |
 |---|---|---|---|---|
@@ -81,98 +108,70 @@ If a trainee file is missing, mark that check as **[MISSING] — 0/100** and con
 
 ---
 
-## Step 3 — Write summary report
+## Step 3 — Write SUMMARY.md
 
-After all 21 checks, write a summary file to:
-`{checks_dir}/{trainee_name}/SUMMARY.md`
+After all 21 checks are complete, write `{checks_dir}/{trainee_name}/SUMMARY.md` (overwrite if exists).
 
-Overwrite if it already exists.
+Use the scores and SKILL_N_SUMMARY notes collected in Step 2.
 
 ```markdown
 ---
 trainee: <trainee_name>
 product: <product>
 generated: <YYYY-MM-DD>
-total_score: <avg>/100
-grade: <grade>
 ---
 
 # Check Summary — <trainee_name> / <product>
 
 ## Score Table
 
-| # | Skill | Task ID | Score | Grade |
-|---|---|---|---|---|
-| 1 | scope | TASK-SC-001 | .../100 | ... |
-| 2 | as-is | TASK-AI-001 | .../100 | ... |
-| 3 | transformation-rules | TASK-TR-001 | .../100 | ... |
-| 4 | project-rules | TASK-PR-001 | .../100 | ... |
-| 5 | to-be | TASK-TB-001 | .../100 | ... |
-| 6 | design | TASK-DE-001 | .../100 | ... |
-| 7 | requirements | TASK-RE-001 | .../100 | ... |
-| 8 | tasks | TASK-TA-001 | .../100 | ... |
-| 9 | product-definition | TASK-PD-001 | .../100 | ... |
-| 10 | build-plan | TASK-BP-001 | .../100 | ... |
-| 11 | data-dictionary | TASK-DD-001 | .../100 | ... |
-| 12 | pipeline-runbook | TASK-RB-001 | .../100 | ... |
-| 13 | validation-report | TASK-VR-001 | .../100 | ... |
-| 14 | architecture-diagram | TASK-AD-001 | .../100 | ... |
-| 15 | go-live-checklist | TASK-GL-001 | .../100 | ... |
-| 16 | bi-connections | TASK-BI-001 | .../100 | ... |
-| 17 | secrets-setup | TASK-SS-001 | .../100 | ... |
-| 18 | secrets-rotation-runbook | TASK-SR-001 | .../100 | ... |
-| 19 | uc-permission-audit | TASK-UC-001 | .../100 | ... |
-| 20 | uc-setup | TASK-UC-002 | .../100 | ... |
-| 21 | secrets-config | TASK-SC-001 | .../100 | ... |
-| | **Average** | | **<avg>/100** | **<grade>** |
+| # | Skill | Score | Grade |
+|---|---|---|---|
+| 1 | scope | .../100 | ... |
+| 2 | as-is | .../100 | ... |
+| 3 | transformation-rules | .../100 | ... |
+| 4 | project-rules | .../100 | ... |
+| 5 | to-be | .../100 | ... |
+| 6 | design | .../100 | ... |
+| 7 | requirements | .../100 | ... |
+| 8 | tasks | .../100 | ... |
+| 9 | product-definition | .../100 | ... |
+| 10 | build-plan | .../100 | ... |
+| 11 | data-dictionary | .../100 | ... |
+| 12 | pipeline-runbook | .../100 | ... |
+| 13 | validation-report | .../100 | ... |
+| 14 | architecture-diagram | .../100 | ... |
+| 15 | go-live-checklist | .../100 | ... |
+| 16 | bi-connections | .../100 | ... |
+| 17 | secrets-setup | .../100 | ... |
+| 18 | secrets-rotation-runbook | .../100 | ... |
+| 19 | uc-permission-audit | .../100 | ... |
+| 20 | uc-setup | .../100 | ... |
+| 21 | secrets-config | .../100 | ... |
+| | **Average (submitted)** | **<avg>/100** | **<grade>** |
+| | **Average (all 21)** | **<avg>/100** | **<grade>** |
 
 ---
 
 ## Skill Summaries
 
-For each skill write a **4-5 sentence summary** in this format:
-
-### 1. scope — .../100 (Grade)
-[Sentence 1: final score and grade.] [Sentence 2: what was done well — best-scoring section or strongest element.] [Sentence 3: main gap — most critical missing or weak element.] [Sentence 4: top priority fix with estimated points recoverable.] [Sentence 5 optional: second priority fix.]
-
-### 2. as-is — .../100 (Grade)
-[4-5 sentences following the same pattern]
-
-... repeat for all 21 skills ...
-
-For MISSING skills (0/100): state the file was not submitted, name the reference file expected, and note the impact on overall score.
+[Paste all 21 SKILL_N_SUMMARY blocks collected in Step 2 here, in order.]
 
 ---
 
 ## Overall Verdict
 
-**Top 3:** <skill> (score), <skill> (score), <skill> (score)
-**Bottom 3:** <skill> (score), <skill> (score), <skill> (score)
+**Top 3:** <skill> (<score>), <skill> (<score>), <skill> (<score>)
+**Bottom 3 (submitted):** <skill> (<score>), <skill> (<score>), <skill> (<score>)
 
-<2-3 sentences: overall grade, most common gap across all checks, highest-impact action to raise the average score.>
+<2-3 sentences: overall grade, most common gap, highest-impact action.>
 ```
 
 ---
 
-## Step 4 — Console summary
+## Step 4 — Console output
 
-Print the final score table in the conversation:
-
-```
-╔══════════════════════════════════════════════════════════════════╗
-║  migvisor-check-all · <trainee_name> · <product> · <date>        ║
-╠══════════════════════════════════════════════════════════════════╣
-║  Score: <avg>/100 · Grade: <grade>                               ║
-╚══════════════════════════════════════════════════════════════════╝
-
-| #  | Skill                    | Score    | Grade      |
-|----|--------------------------|----------|------------|
-| 1  | scope                    | .../100  | ...        |
-...
-|    | Average                  | .../100  | ...        |
-```
-
-Follow with 3–4 sentences: overall grade, strongest deliverable, weakest deliverable, top priority fix.
+Print the score table in the conversation followed by 3-4 sentences: overall grade, strongest deliverable, weakest submitted deliverable, top priority fix.
 
 ---
 
