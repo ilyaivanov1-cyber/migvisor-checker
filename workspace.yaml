@@ -1,11 +1,5 @@
 # migvisor-as-is-checker workspace configuration
-#
-# trainee_workspace : root of the trainee's submitted project
-# reference_workspace: root of the reference answer project (migVisor_workspace)
-# product           : product folder name inside products/
-# checks_dir        : where check reports are written
-
 trainee_workspace: "./Inventory_Stock_Project"
-reference_workspace: "C:/Users/IlyaIvanov1/Documents/migvisor_2.1.1_training/migVisor_workspace/Inventory_Stock_Project"
+reference_workspace: "./reference/answers"
 product: "Purchase"
 checks_dir: "./checks"
