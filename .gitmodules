@@ -1,0 +1,3 @@
+[submodule "Inventory_Stock_Project"]
+	path = Inventory_Stock_Project
+	url = https://git.epam.com/ilya_ivanov1/inventory_stock_project.git
