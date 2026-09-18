@@ -74,6 +74,28 @@ Auto-detection fallback order for reference:
 
 ### Step 1 — Resolve Files
 
+### Workspace-aware resolution (preferred)
+
+This skill supports **workspace mode** — it resolves files automatically from the
+migVisor project structure instead of requiring explicit paths.
+
+| Setting | Value |
+|---|---|
+| Trainee workspace | `./Inventory_Stock_Project` |
+| Reference workspace | `C:/Users/IlyaIvanov1/Documents/migvisor_2.1.1_training/migVisor_workspace/Inventory_Stock_Project` |
+| Trainee file | `./Inventory_Stock_Project/products/Purchase/current/specifications/development_plan/product-definition.yaml` |
+| Reference file | `C:/Users/IlyaIvanov1/Documents/migvisor_2.1.1_training/migVisor_workspace/Inventory_Stock_Project/products/Purchase/current/specifications/development_plan/product-definition.yaml` |
+
+**Resolution order:**
+1. Explicit `participant=<path>` / `reference=<path>` flags — always win.
+2. Workspace paths above — used when no explicit flags are given.
+3. Legacy fallback — `trainees/<name>/<file>` + `reference/<file>` (if workspace paths do not exist).
+
+---
+
+### Legacy resolution
+
+
 1. Apply override paths if provided via `participant=` / `reference=` flags. If `trainee=<name>` is provided and `participant=` is not, resolve participant as `trainees/<name>/product-definition.yaml`.
 2. Otherwise run auto-detection sequences above. If multiple `trainees/` subdirectories are found and no `trainee=` flag is given, abort with: *"Multiple trainee folders found: [list]. Specify with `trainee=<name>`."*
 3. Record the resolved trainee name from the participant path (`trainees/<name>/...` → `<name>`; use `unknown_trainee` if not under `trainees/`).

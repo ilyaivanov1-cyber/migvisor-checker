@@ -59,6 +59,26 @@ All arguments are optional. Examples:
 
 ### Step 1 — Resolve files and project name
 
+### Workspace-aware resolution (preferred)
+
+This skill supports **workspace mode** — it resolves files automatically from the
+migVisor project structure instead of requiring explicit paths.
+
+| Setting | Value |
+|---|---|
+| Trainee workspace | `./Inventory_Stock_Project` |
+| Reference workspace | `C:/Users/IlyaIvanov1/Documents/migvisor_2.1.1_training/migVisor_workspace/Inventory_Stock_Project` |
+| Trainee file | `./Inventory_Stock_Project/project/current/project-transformation-rules/project-transformation-rules.md` |
+| Reference file | `C:/Users/IlyaIvanov1/Documents/migvisor_2.1.1_training/migVisor_workspace/Inventory_Stock_Project/project/current/project-transformation-rules/project-transformation-rules.md` |
+
+**Resolution order:**
+1. Explicit `participant=<path>` / `reference=<path>` flags — always win.
+2. Workspace paths above — used when no explicit flags are given.
+3. Legacy fallback — `trainees/<name>/<file>` + `reference/<file>` (if workspace paths do not exist).
+
+---
+
+
 **1A — Participant file**
 
 If a path was supplied as argument 1, use it. Otherwise apply trainee-aware auto-detection:

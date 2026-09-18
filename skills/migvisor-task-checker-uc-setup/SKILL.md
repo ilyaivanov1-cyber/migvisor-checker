@@ -27,6 +27,28 @@ Catalog/schema names differ between reference (globalpurchase) and participant (
 
 ## Step 1 — Resolve files
 
+### Workspace-aware resolution (preferred)
+
+This skill supports **workspace mode** — it resolves files automatically from the
+migVisor project structure instead of requiring explicit paths.
+
+| Setting | Value |
+|---|---|
+| Trainee workspace | `./Inventory_Stock_Project` |
+| Reference workspace | `C:/Users/IlyaIvanov1/Documents/migvisor_2.1.1_training/migVisor_workspace/Inventory_Stock_Project` |
+| Trainee file | `./Inventory_Stock_Project/project/current/catalog.md` |
+| Reference file | `<reference_workspace>/project/current/catalog.md` |
+
+**Resolution order:**
+1. Explicit `participant=<path>` / `reference=<path>` flags — always win.
+2. Workspace paths above — used when no explicit flags are given.
+3. Legacy fallback — `trainees/<name>/<file>` + `reference/<file>` (if workspace paths do not exist).
+
+---
+
+### Legacy resolution
+
+
 1. Identify the trainee name:
    - If only one subfolder exists under `trainees/`, use it automatically.
    - If multiple exist, use the `trainee=<name>` argument or ask.
