@@ -1,0 +1,721 @@
+dimension: Naming
+prefix: NM
+product: Purchase
+project: Inventory_Stock_Project
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-07"
+scope: product
+product_note: >
+  All 9 Naming dimension rules are fully inherited from the project-level
+  NM-naming.yaml. No Purchase-specific overrides, extensions, or deactivations apply.
+  NM-002 (space-containing names) is of particular importance to the Purchase product:
+  `dimension.[stock item]` → `inventory_stock.silver_dim.stock_item` and all
+  space-bearing fact/staging column names (Date Key, Supplier Key, WWI Purchase Order ID,
+  etc.) must be resolved per the explicit column_mapping table in NM-002.
+
+rules:
+
+  - id: NM-001
+    dimension: Naming
+    name: General Case Conversion to lowercase_snake_case
+    intent: >
+      Convert all SQL Server object names (tables, columns, views, schemas) that use
+      PascalCase, camelCase, or mixed case into Databricks-compliant lowercase_snake_case.
+      Databricks identifiers are case-folded to lowercase by default; enforcing
+      snake_case at migration time prevents silent collision bugs and improves
+      readability in the inventory_stock Unity Catalog.
+    activation:
+      preconditions:
+        - Source object name contains one or more uppercase letters
+        - Source object name does not already match the pattern ^[a-z][a-z0-9_]*$
+        - Object type is one of: table, view, column, schema, database, index, constraint
+      scope: project
+    transformation:
+      source:
+        pattern: "Any identifier using PascalCase or camelCase (e.g., PurchaseKey, StockItemKey, IsOrderFinalized)"
+        examples:
+          - "PurchaseKey"
+          - "StockItemKey"
+          - "SupplierKey"
+          - "IsOrderFinalized"
+          - "LastModifiedWhen"
+      target:
+        pattern: "Equivalent identifier in lowercase_snake_case"
+        examples:
+          - "purchase_key"
+          - "stock_item_key"
+          - "supplier_key"
+          - "is_order_finalized"
+          - "last_modified_when"
+      algorithm: |
+        1. Insert an underscore before each uppercase letter that is immediately preceded
+           by a lowercase letter or digit (boundary detection: camelCase → camel_case).
+        2. Insert an underscore before an uppercase letter followed by a lowercase letter
+           when the preceding character is also uppercase (handles acronyms: WWIPurchaseOrderID → wwi_purchase_order_id).
+        3. Convert the entire resulting string to lowercase.
+        4. Collapse any consecutive underscores into a single underscore.
+        5. Strip leading and trailing underscores.
+        Pseudo-regex steps:
+          s/([a-z0-9])([A-Z])/\1_\2/g
+          s/([A-Z]+)([A-Z][a-z])/\1_\2/g
+          lowercase()
+          s/__+/_/g
+          strip('_')
+    validation:
+      success_criteria:
+        - All migrated identifiers match the pattern ^[a-z][a-z0-9_]*$
+        - No two distinct source identifiers produce the same target identifier (collision check)
+        - Column names in generated DDL contain no uppercase characters
+      quality_dimensions:
+        - Correctness
+        - Consistency
+      test_cases:
+        - source: "PurchaseKey"
+          expected: "purchase_key"
+        - source: "WWIPurchaseOrderID"
+          expected: "wwi_purchase_order_id"
+        - source: "IsOrderFinalized"
+          expected: "is_order_finalized"
+        - source: "StockItemKey"
+          expected: "stock_item_key"
+        - source: "LastModifiedWhen"
+          expected: "last_modified_when"
+        - source: "OrderedOuters"
+          expected: "ordered_outers"
+    inheritance:
+      level: project
+      product_status: INHERITED
+
+  - id: NM-002
+    dimension: Naming
+    name: Space-Containing Object Names to snake_case with Explicit Mapping
+    intent: >
+      Rename SQL Server table and object names that contain literal space characters
+      to valid Databricks snake_case identifiers. Spaces are illegal in unquoted
+      Databricks identifiers and cause pipeline failures unless resolved at migration
+      time. This is the TOP-PRIORITY naming issue in Inventory_Stock_Project: two
+      confirmed space-bearing table names exist — `dimension.stock item` and
+      `integration.etl cutoff` — and multiple fact/staging columns carry spaces
+      (e.g., `Date Key`, `Stock Item Key`, `WWI Purchase Order ID`, `Is Order Finalized`).
+      An explicit mapping table is provided for all known space-bearing names.
+    activation:
+      preconditions:
+        - Source object name or column name contains one or more space characters
+        - Object type is one of: table, view, schema, column
+      scope: project
+    transformation:
+      source:
+        pattern: "Object or column name containing space characters"
+        examples:
+          - "dimension.stock item"
+          - "integration.etl cutoff"
+          - "Date Key"
+          - "Stock Item Key"
+          - "Supplier Key"
+          - "WWI Purchase Order ID"
+          - "Is Order Finalized"
+          - "Ordered Outers"
+          - "Ordered Quantity"
+          - "Received Outers"
+          - "Last Modified When"
+          - "WWI Supplier ID"
+          - "WWI Stock Item ID"
+          - "Lineage Key"
+      target:
+        pattern: "Lowercase snake_case name derived by replacing spaces with underscores, then applying NM-001"
+        table_mapping:
+          - source_schema: "dimension"
+            source_name: "stock item"
+            target_catalog: "inventory_stock"
+            target_schema: "silver_dim"
+            target_name: "stock_item"
+            note: "Space in table name — must be quoted in source T-SQL; renamed without quotes in target"
+          - source_schema: "integration"
+            source_name: "etl cutoff"
+            target_catalog: "inventory_stock"
+            target_schema: "bronze"
+            target_name: "etl_cutoff"
+            note: "Control table; space in table name; renamed to etl_cutoff in bronze layer"
+        column_mapping:
+          - source_column: "Date Key"
+            target_column: "date_key"
+          - source_column: "Stock Item Key"
+            target_column: "stock_item_key"
+          - source_column: "Supplier Key"
+            target_column: "supplier_key"
+          - source_column: "WWI Purchase Order ID"
+            target_column: "wwi_purchase_order_id"
+          - source_column: "Is Order Finalized"
+            target_column: "is_order_finalized"
+          - source_column: "Ordered Outers"
+            target_column: "ordered_outers"
+          - source_column: "Ordered Quantity"
+            target_column: "ordered_quantity"
+          - source_column: "Received Outers"
+            target_column: "received_outers"
+          - source_column: "Last Modified When"
+            target_column: "last_modified_when"
+          - source_column: "WWI Supplier ID"
+            target_column: "wwi_supplier_id"
+          - source_column: "WWI Stock Item ID"
+            target_column: "wwi_stock_item_id"
+          - source_column: "Lineage Key"
+            target_column: "lineage_key"
+      algorithm: |
+        1. Look up the source (schema, name) pair in the explicit table_mapping above.
+        2. If found, use the mapped target_catalog, target_schema, and target_name directly.
+        3. For columns: replace all space characters with underscores, then apply NM-001.
+        4. If a table name is not found in the mapping (handles future discoveries), replace
+           all space characters with underscores, then apply NM-001 case conversion.
+        5. Log any unmapped space-bearing names as a migration warning for human review.
+        Note: in source T-SQL, space-bearing table names appear inside square brackets
+        (e.g., Dimension.[Stock Item]). All such bracket-quoted references must be
+        located in source code and replaced with the unquoted snake_case target name.
+    validation:
+      success_criteria:
+        - No generated DDL or ETL references contain quoted or unquoted identifiers with spaces
+        - Both known space-bearing table names resolve to the identifiers in the table_mapping
+        - All space-bearing column names resolve to the identifiers in the column_mapping
+        - Migration log contains zero warnings for unmapped space-bearing names (initial baseline)
+      quality_dimensions:
+        - Correctness
+        - Completeness
+      test_cases:
+        - source_schema: "dimension"
+          source_name: "stock item"
+          expected_target: "inventory_stock.silver_dim.stock_item"
+        - source_schema: "integration"
+          source_name: "etl cutoff"
+          expected_target: "inventory_stock.bronze.etl_cutoff"
+        - source_column: "Is Order Finalized"
+          expected_target_column: "is_order_finalized"
+        - source_column: "WWI Purchase Order ID"
+          expected_target_column: "wwi_purchase_order_id"
+        - source_column: "Stock Item Key"
+          expected_target_column: "stock_item_key"
+    inheritance:
+      level: project
+      product_status: INHERITED
+
+  - id: NM-003
+    dimension: Naming
+    name: Schema to Catalog.Schema Mapping (inventory_stock Unity Catalog)
+    intent: >
+      Map each SQL Server schema in the WideWorldImportersDW source database to the
+      corresponding three-part Databricks Unity Catalog identifier
+      (catalog.schema.table). The target catalog is `inventory_stock`. Each source
+      schema aligns with a semantic layer in the target lakehouse; preserving that
+      layering in the catalog hierarchy makes lineage, governance, and BI connectivity
+      consistent and predictable, and aligns with the four-layer architecture:
+      bronze, silver_dim, silver_fact, gold.
+    activation:
+      preconditions:
+        - Source object uses any of the Inventory_Stock_Project schemas: fact, dimension,
+          integration, application, sequences
+        - Target environment is Databricks Unity Catalog
+      scope: project
+    transformation:
+      source:
+        pattern: "<source_schema>.<object_name>"
+        schemas:
+          - "fact"
+          - "dimension"
+          - "integration"
+          - "application"
+          - "sequences"
+      target:
+        pattern: "<catalog>.<target_schema>.<object_name>"
+        catalog: "inventory_stock"
+        schema_mapping:
+          - source_schema: "fact"
+            target_schema: "silver_fact"
+            rationale: "Fact tables land in the silver_fact layer — cleansed, conformed, Delta format"
+          - source_schema: "dimension"
+            target_schema: "silver_dim"
+            rationale: "Conformed dimensions land in the silver_dim layer — SCD-2 rows, Delta format"
+          - source_schema: "integration"
+            target_schema: "bronze"
+            rationale: >
+              Integration/staging area maps to the bronze (raw landing) layer where incremental
+              extracts are buffered before key resolution and fact load; control tables
+              (etl_cutoff, lineage) also reside here
+          - source_schema: "application"
+            target_schema: "bronze"
+            rationale: >
+              Application configuration/utility objects (e.g., configuration_reseedetl)
+              are placed in the bronze schema as operational utilities; no separate app schema
+              is warranted for the limited set of purchase-domain application objects in scope
+          - source_schema: "sequences"
+            target_schema: null
+            rationale: >
+              Sequence objects are not migrated (see NM-007); this schema has no
+              target counterpart. Any reference to sequences must be replaced per
+              the sequences disposition rule.
+      algorithm: |
+        1. Parse the source two-part (schema.object) or three-part (database.schema.object)
+           identifier.
+        2. Look up the source schema in the schema_mapping table above.
+        3. If target_schema is null (sequences), apply rule NM-007 instead and
+           emit a migration warning.
+        4. Prepend the catalog name `inventory_stock` to form the full three-part
+           Unity Catalog identifier: inventory_stock.<target_schema>.<object_name_after_NM-001>.
+        5. Apply NM-001 to the object_name component and NM-002 to any space-bearing name.
+    validation:
+      success_criteria:
+        - Every generated DDL statement uses a three-part `inventory_stock.<schema>.<table>` identifier
+        - No two source schemas map to the same target schema (bronze is shared by integration
+          and application — verified as intentional; no collision exists on object names)
+        - No object from the `sequences` schema appears in generated DDL without a NM-007 warning
+      quality_dimensions:
+        - Correctness
+        - Consistency
+        - Completeness
+      test_cases:
+        - source: "fact.purchase"
+          expected: "inventory_stock.silver_fact.purchase"
+        - source: "dimension.supplier"
+          expected: "inventory_stock.silver_dim.supplier"
+        - source: "dimension.stock item"
+          expected: "inventory_stock.silver_dim.stock_item"
+        - source: "integration.purchase_staging"
+          expected: "inventory_stock.bronze.purchase_staging"
+        - source: "integration.etl cutoff"
+          expected: "inventory_stock.bronze.etl_cutoff"
+        - source: "application.configuration_reseedetl"
+          expected: "inventory_stock.bronze.configuration_reseedetl"
+        - source: "sequences.lineagekey"
+          expected: "NM-007 disposition — not migrated"
+    inheritance:
+      level: project
+      product_status: INHERITED
+
+  - id: NM-004
+    dimension: Naming
+    name: Staging Table Naming Convention (_staging Suffix)
+    intent: >
+      Preserve and standardise the `_staging` suffix convention used in the SQL Server
+      integration schema for all staging (landing) tables in the Databricks bronze layer.
+      Consistent suffixing distinguishes raw landing tables from control and conformed
+      objects, supports automated pipeline discovery, and aligns with the existing
+      pattern already applied in the source (e.g., integration.purchase_staging).
+      The single control table `etl_cutoff` is a named exception — it does not receive
+      the suffix because it is a watermark control table, not a staging buffer.
+    activation:
+      preconditions:
+        - Source object resides in the `integration` schema AND is identified as a staging/landing table
+        - Object type is TABLE (not view or procedure)
+      scope: project
+    transformation:
+      source:
+        pattern: "Tables in integration schema used as staging buffers"
+        examples:
+          - "integration.purchase_staging"
+          - "integration.etl cutoff"
+          - "integration.lineage"
+      target:
+        pattern: "Staging buffer tables in inventory_stock.bronze carry `_staging` suffix in snake_case; control tables do not"
+        examples:
+          - source: "integration.purchase_staging"
+            target: "inventory_stock.bronze.purchase_staging"
+            note: "Already correctly suffixed — no change needed"
+          - source: "integration.etl cutoff"
+            target: "inventory_stock.bronze.etl_cutoff"
+            note: "Named exception — control/watermark table; space resolved by NM-002; no _staging suffix"
+          - source: "integration.lineage"
+            target: "inventory_stock.bronze.lineage_run"
+            note: "Named exception — ETL run-audit control table; no _staging suffix"
+      algorithm: |
+        1. Apply NM-001 (case conversion) and NM-002 (space removal) to the source table name.
+        2. Apply NM-003 schema mapping (integration → inventory_stock.bronze).
+        3. If the resulting snake_case name already ends with `_staging`, keep it unchanged.
+        4. If it does not end with `_staging` and is not a named control-table exception
+           (etl_cutoff, lineage), append `_staging`.
+        5. Named exceptions are explicitly listed in the examples above; do not append
+           `_staging` to these control tables under any circumstance.
+    validation:
+      success_criteria:
+        - All Delta tables in inventory_stock.bronze that serve as staging buffers end with `_staging`
+        - Re-running the rule on an already-suffixed name does not produce `_staging_staging`
+        - `inventory_stock.bronze.etl_cutoff` carries no `_staging` suffix (control table exception)
+        - `inventory_stock.bronze.lineage_run` carries no `_staging` suffix (control table exception)
+      quality_dimensions:
+        - Correctness
+        - Consistency
+      test_cases:
+        - source: "integration.purchase_staging"
+          expected: "inventory_stock.bronze.purchase_staging"
+          note: "Already suffixed — no change"
+        - source: "integration.etl cutoff"
+          expected: "inventory_stock.bronze.etl_cutoff"
+          note: "Named exception — control table; space resolved; no suffix"
+        - source: "integration.lineage"
+          expected: "inventory_stock.bronze.lineage_run"
+          note: "Named exception — audit log table; no suffix"
+    inheritance:
+      level: project
+      product_status: INHERITED
+
+  - id: NM-005
+    dimension: Naming
+    name: View Naming Convention (v_ Prefix)
+    intent: >
+      Standardise view naming in Databricks by applying a consistent `v_` prefix to
+      all views created in any target schema within the inventory_stock catalog.
+      This makes views immediately distinguishable from base Delta tables in catalog
+      browsers and BI tool connections. The Purchase product does not currently expose
+      named SQL views in the source (BI reports connect directly to fact and dimension
+      tables), but views may be introduced in the gold layer during migration to
+      simplify BI connectivity; this rule governs their naming when created.
+    activation:
+      preconditions:
+        - Source or target object type is VIEW (SQL CREATE VIEW)
+        - Object is being migrated to or created within any target schema in the inventory_stock catalog
+      scope: project
+    transformation:
+      source:
+        pattern: "Any SQL view in the source or newly created view in the target"
+        examples:
+          - "analytics.v_PurchaseSummary (hypothetical source view)"
+          - "gold presentation view created during migration"
+      target:
+        pattern: "All views in target use lowercase `v_` prefix followed by snake_case base name"
+        examples:
+          - source_view: "analytics.v_PurchaseSummary"
+            target: "inventory_stock.gold.v_purchase_summary"
+          - new_view: "purchase summary gold view"
+            target: "inventory_stock.gold.v_purchase_summary"
+      algorithm: |
+        1. Apply NM-001 to the source view name to get a snake_case base.
+        2. If the snake_case base already starts with `v_`, retain it as-is.
+        3. If the snake_case base does not start with `v_`, prepend `v_`.
+        4. Combine with the NM-003 catalog.schema prefix.
+        Note: `v_` prefix is applied ONLY to SQL views (CREATE VIEW statements),
+        not to Delta tables, materialized views, or notebooks.
+    validation:
+      success_criteria:
+        - All CREATE VIEW statements in generated DDL reference names matching ^v_[a-z][a-z0-9_]*$
+        - No base Delta table names carry a `v_` prefix
+        - Re-running the rule on an already-prefixed name does not produce `v_v_` double prefix
+      quality_dimensions:
+        - Correctness
+        - Consistency
+      test_cases:
+        - source_type: "VIEW"
+          source_name: "analytics.v_PurchaseSummary"
+          expected: "inventory_stock.gold.v_purchase_summary"
+        - source_type: "VIEW"
+          source_name: "analytics.SupplierPerformance"
+          expected: "inventory_stock.gold.v_supplier_performance"
+        - source_type: "TABLE"
+          source_name: "fact.purchase"
+          expected: "inventory_stock.silver_fact.purchase"
+          note: "No v_ prefix applied — object is a table, not a view"
+    inheritance:
+      level: project
+      product_status: INHERITED
+
+  - id: NM-006
+    dimension: Naming
+    name: Stored Procedure and ETL Task Naming (SQL Server → Databricks Notebooks / Python)
+    intent: >
+      Map SQL Server stored procedures to their Databricks equivalents — Python
+      notebook tasks or Python module functions. Databricks has no native stored
+      procedure object; procedural logic is re-expressed as Python functions
+      (or SQL notebooks) following a consistent lowercase_snake_case naming scheme.
+      Two procedures are central to the Purchase product:
+      `integration.migratestagedpurchasedata` (the core ETL merge procedure) and
+      `integration.getlastetlcutofftime` / `integration.getlineagekey` (utilities).
+      All-lowercase concatenated procedure names require heuristic word-boundary
+      splitting and must be flagged for human review.
+    activation:
+      preconditions:
+        - Source object type is PROCEDURE or FUNCTION
+        - Source platform is SQL Server
+        - Source schema is one of: integration, application
+      scope: project
+    transformation:
+      source:
+        pattern: "SQL Server stored procedures (all-lowercase concatenated names) and utility functions"
+        examples:
+          - "integration.migratestagedpurchasedata"
+          - "integration.getlastetlcutofftime"
+          - "integration.getlineagekey"
+          - "application.configuration_reseedetl"
+      target:
+        pattern: >
+          Python function or Databricks SQL notebook task with snake_case name; procedures
+          map to Python functions in an ETL module; the core migrate procedure maps to a
+          Databricks Workflow task (notebook or Python wheel task).
+        naming_convention:
+          etl_procedures: "Python function or notebook task named <snake_case_procedure_name>() in module matching source schema"
+          utility_functions: "Python helper function named <snake_case_function_name>() in a shared utilities module"
+        examples:
+          - source: "integration.migratestagedpurchasedata"
+            target_type: "Databricks Workflow task / Python notebook"
+            target_name: "migrate_staged_purchase_data"
+            target_module: "inventory_stock.bronze.etl_purchase"
+            note: "Core ETL task; heuristic split — review required"
+          - source: "integration.getlastetlcutofftime"
+            target_type: "Python helper function"
+            target_name: "get_last_etl_cutoff_time"
+            target_module: "inventory_stock.bronze.etl_utils"
+            note: "Heuristic split — review required"
+          - source: "integration.getlineagekey"
+            target_type: "Python helper function"
+            target_name: "get_lineage_key"
+            target_module: "inventory_stock.bronze.etl_utils"
+            note: "Heuristic split — review required; lineage key generation redesigned per NM-007"
+          - source: "application.configuration_reseedetl"
+            target_type: "Python utility function / notebook"
+            target_name: "configuration_reseed_etl"
+            target_module: "inventory_stock.bronze.etl_admin"
+            note: "Partial split on existing underscore; confirm drop vs retain with scope owner"
+      algorithm: |
+        1. Detect word boundaries in the source procedure/function name using NM-001 logic
+           (handles both camelCase and all-lowercase names).
+        2. Apply NM-001 case conversion to get a snake_case base name.
+        3. For all-lowercase concatenated names (e.g., migratestagedpurchasedata,
+           getlastetlcutofftime), apply best-effort word-boundary splitting using a
+           SQL/English vocabulary list; log the result for human review.
+        4. Map the source schema to a Python module name using NM-003 schema mapping.
+        5. Record the mapping in the project's procedure-inventory artifact for traceability.
+    validation:
+      success_criteria:
+        - All source procedure/function names have a documented target Python name in the inventory
+        - No target Python name contains uppercase letters or spaces
+        - All-lowercase source names that were split by heuristic are flagged for human review
+      quality_dimensions:
+        - Correctness
+        - Traceability
+      test_cases:
+        - source: "integration.migratestagedpurchasedata"
+          expected: "migrate_staged_purchase_data"
+          split_method: "heuristic"
+          review_required: true
+        - source: "integration.getlastetlcutofftime"
+          expected: "get_last_etl_cutoff_time"
+          split_method: "heuristic"
+          review_required: true
+        - source: "integration.getlineagekey"
+          expected: "get_lineage_key"
+          split_method: "heuristic"
+          review_required: true
+        - source: "application.configuration_reseedetl"
+          expected: "configuration_reseed_etl"
+          split_method: "underscore boundary + heuristic"
+          review_required: true
+    inheritance:
+      level: project
+      product_status: INHERITED
+
+  - id: NM-007
+    dimension: Naming
+    name: Sequence Object Disposition — sequences.lineagekey Not Migrated
+    intent: >
+      Declare that the SQL Server SEQUENCE object `sequences.lineagekey` is not migrated
+      to Databricks. Delta Lake uses alternative mechanisms for generating monotonically
+      increasing run identifiers: either a `BIGINT GENERATED ALWAYS AS IDENTITY` column
+      on the lineage control table, or a UUID/timestamp-based run ID generated in Python.
+      Lineage tracking is retained in the target as a lineage control Delta table
+      (inventory_stock.bronze.lineage_run), but the sequence mechanism itself is retired.
+      All references to `NEXT VALUE FOR Sequences.LineageKey` in source T-SQL
+      (specifically in `integration.getlineagekey` and `integration.migratestagedpurchasedata`)
+      must be flagged for MANUAL_REWRITE.
+    activation:
+      preconditions:
+        - Source object type is SEQUENCE
+        - Source object resides in the `sequences` schema
+      scope: project
+    transformation:
+      source:
+        pattern: "SQL Server SEQUENCE objects in the sequences schema"
+        examples:
+          - "sequences.lineagekey"
+          - "NEXT VALUE FOR Sequences.LineageKey (T-SQL expression in getlineagekey / migratestagedpurchasedata)"
+      target:
+        pattern: "No target SEQUENCE object is created; lineage key generation is redesigned"
+        disposition: NOT_MIGRATED
+        replacement_strategy: |
+          - For the lineage run identifier: generate a UUID in Python at the start of each
+            ETL run (uuid.uuid4()) or use a Delta table IDENTITY column on
+            inventory_stock.bronze.lineage_run as the surrogate run key.
+          - The `NEXT VALUE FOR Sequences.LineageKey` expression in all source T-SQL procedures
+            must be rewritten as a Python uuid / IDENTITY lookup before ETL notebook execution.
+          - All NEXT VALUE FOR <sequences.*> calls in source T-SQL must be rewritten in ETL
+            code per the TY (Type Mapping) and LN (Logic) dimension rules.
+          - Reseed sequence utilities (`sequences.reseedallsequences`,
+            `sequences.reseedsequencebeyondtablevalues`) are out of scope and are dropped.
+      algorithm: |
+        1. Scan all source objects for references to NEXT VALUE FOR sequences.lineagekey.
+        2. For each reference, emit a migration task flagged as MANUAL_REWRITE with
+           the recommended replacement strategy above.
+        3. Do NOT emit any CREATE SEQUENCE or equivalent DDL in the target.
+        4. Log the count of sequence references in the migration report.
+        5. The `sequences` schema has no mapped target schema (confirmed by NM-003).
+    validation:
+      success_criteria:
+        - Zero CREATE SEQUENCE statements appear in any generated target DDL
+        - All NEXT VALUE FOR Sequences.LineageKey references in source have a
+          corresponding MANUAL_REWRITE task
+        - The `sequences` schema has no mapped target schema (confirmed by NM-003)
+      quality_dimensions:
+        - Correctness
+        - Completeness
+      test_cases:
+        - source: "sequences.lineagekey"
+          expected_ddl: "none"
+          expected_action: >
+            MANUAL_REWRITE task created; replace NEXT VALUE FOR with uuid.uuid4() or
+            IDENTITY column on inventory_stock.bronze.lineage_run.lineage_key
+        - source: "NEXT VALUE FOR Sequences.LineageKey in integration.getlineagekey"
+          expected_ddl: "none"
+          expected_action: >
+            MANUAL_REWRITE task: rewrite get_lineage_key() Python function to insert a
+            new row into inventory_stock.bronze.lineage_run and return the generated IDENTITY key
+        - source: "NEXT VALUE FOR Sequences.LineageKey in integration.migratestagedpurchasedata"
+          expected_ddl: "none"
+          expected_action: >
+            MANUAL_REWRITE task: replace sequence call with Python uuid or
+            IDENTITY key retrieved from bronze.lineage_run at run start
+    inheritance:
+      level: project
+      product_status: INHERITED
+
+  - id: NM-008
+    dimension: Naming
+    name: Index and Constraint Naming Convention
+    intent: >
+      Establish a consistent naming convention for primary key and unique constraints
+      in Databricks Delta Lake DDL. SQL Server uses varied patterns
+      (PK_TableName, IX_TableName_Column, FK_Child_Parent). Delta Lake does not enforce
+      foreign keys or traditional indexes; PRIMARY KEY and UNIQUE constraints are
+      supported in Unity Catalog as informational constraints. Naming them consistently
+      aids documentation, audit, and future-proofing. Foreign key relationships between
+      fact.purchase and dimension tables are documented as informational lineage only.
+    activation:
+      preconditions:
+        - Source object is an index or constraint (PRIMARY KEY, UNIQUE, CHECK, FOREIGN KEY)
+        - Target environment is Databricks Unity Catalog
+      scope: project
+    transformation:
+      source:
+        pattern: "SQL Server constraint/index names in PascalCase with type prefix"
+        examples:
+          - "PK_Fact_Purchase (primary key on fact.purchase)"
+          - "PK_Integration_Purchase_Staging (primary key on purchase_staging)"
+          - "FK_Fact_Purchase_Supplier (foreign key to dimension.supplier)"
+          - "FK_Fact_Purchase_StockItem (foreign key to dimension.stock item)"
+          - "IX_Fact_Purchase_SupplierKey (index)"
+      target:
+        pattern: "Lowercase snake_case with type prefix, table name, and column(s)"
+        naming_templates:
+          primary_key: "pk_<table_name>"
+          unique_constraint: "uq_<table_name>_<column_name>"
+          check_constraint: "chk_<table_name>_<column_name>"
+          foreign_key: "NOT MIGRATED — Delta Lake does not enforce foreign keys; document as informational lineage only"
+          index: "NOT MIGRATED — Delta Lake uses Z-ORDER and liquid clustering instead; index strategy handled by the PT (Partitioning) dimension"
+        examples:
+          - source: "PK_Fact_Purchase"
+            target: "pk_purchase"
+          - source: "PK_Integration_Purchase_Staging"
+            target: "pk_purchase_staging"
+          - source: "FK_Fact_Purchase_Supplier"
+            target: "NOT_MIGRATED — informational lineage: inventory_stock.silver_fact.purchase → inventory_stock.silver_dim.supplier"
+          - source: "FK_Fact_Purchase_StockItem"
+            target: "NOT_MIGRATED — informational lineage: inventory_stock.silver_fact.purchase → inventory_stock.silver_dim.stock_item"
+      algorithm: |
+        1. Identify the constraint type from the source name prefix or DDL keyword.
+        2. Apply NM-001 to the table name and column name components.
+        3. Build the target name using the appropriate naming_template above.
+        4. For FOREIGN KEY constraints: emit a documentation record only (no DDL);
+           record the relationship in the to-be.md lineage section.
+        5. For indexes: defer to the PT (Partitioning) dimension rule for Z-ORDER /
+           liquid clustering decisions; do not generate CREATE INDEX DDL.
+    validation:
+      success_criteria:
+        - All PRIMARY KEY constraint names in generated DDL match ^pk_[a-z][a-z0-9_]*$
+        - All UNIQUE constraint names in generated DDL match ^uq_[a-z][a-z0-9_]*_[a-z][a-z0-9_]*$
+        - No CREATE INDEX or CREATE FOREIGN KEY statements appear in generated DDL
+      quality_dimensions:
+        - Correctness
+        - Consistency
+      test_cases:
+        - source: "PK_Fact_Purchase"
+          expected: "pk_purchase"
+        - source: "PK_Integration_Purchase_Staging"
+          expected: "pk_purchase_staging"
+        - source: "IX_Fact_Purchase_SupplierKey"
+          expected: "NOT_MIGRATED (index)"
+        - source: "FK_Fact_Purchase_Supplier"
+          expected: "NOT_MIGRATED (foreign key — informational lineage)"
+    inheritance:
+      level: project
+      product_status: INHERITED
+
+  - id: NM-009
+    dimension: Naming
+    name: Temporary and Work Table Naming Convention
+    intent: >
+      Define a naming convention for temporary, work, or intermediate tables and
+      variables created during ETL processing in Databricks. SQL Server
+      `migratestagedpurchasedata` may use #temp tables or intermediate result sets
+      internally; Databricks uses Delta cache tables or session-scoped views.
+      Consistent naming prevents namespace collisions across concurrent pipeline runs
+      and makes lifecycle management predictable. The primary intermediate structure
+      in the Purchase product is the `purchase_staging` Delta table itself, which
+      serves as the persistent staging buffer; any transient intra-procedure work
+      tables are addressed by this rule.
+    activation:
+      preconditions:
+        - Source object is a SQL Server temporary table (#table or ##table) or
+          a work/intermediate table used only within an ETL procedure
+        - Object is not a permanent dimension, fact, or staging table
+      scope: project
+    transformation:
+      source:
+        pattern: "SQL Server local (#) or global (##) temp tables, or intermediate result sets within migratestagedpurchasedata"
+        examples:
+          - "#TempPurchaseResolved"
+          - "##GlobalTempPurchase"
+          - "integration.WorkPurchaseStagingKeys"
+      target:
+        pattern: "Databricks session-scoped Delta temp views or Python DataFrame variables"
+        naming_convention:
+          temp_view: "tmp_<snake_case_base_name> (registered as CREATE OR REPLACE TEMP VIEW)"
+          dataframe_variable: "df_<snake_case_base_name> (Python variable in notebook/module)"
+        examples:
+          - source: "#TempPurchaseResolved"
+            target_temp_view: "tmp_purchase_resolved"
+            target_dataframe: "df_purchase_resolved"
+          - source: "integration.WorkPurchaseStagingKeys"
+            target_temp_view: "tmp_purchase_staging_keys"
+            target_dataframe: "df_purchase_staging_keys"
+      algorithm: |
+        1. Strip leading # or ## characters from source temp table names.
+        2. Strip leading `Work` or `Temp` prefixes from work table names (case-insensitive).
+        3. Apply NM-001 case conversion to obtain snake_case base.
+        4. Prepend `tmp_` for SQL temp views or `df_` for Python DataFrame variables,
+           depending on the migration target artifact type (SQL notebook vs. Python module).
+        5. Temp views have session scope and do not persist; document lifecycle in ETL comments.
+    validation:
+      success_criteria:
+        - No #temp or ##temp syntax appears in generated Databricks SQL
+        - All temp view names match ^tmp_[a-z][a-z0-9_]*$
+        - All DataFrame variable names match ^df_[a-z][a-z0-9_]*$
+      quality_dimensions:
+        - Correctness
+        - Consistency
+      test_cases:
+        - source: "#TempPurchaseResolved"
+          expected_view: "tmp_purchase_resolved"
+          expected_df: "df_purchase_resolved"
+        - source: "##GlobalTempPurchase"
+          expected_view: "tmp_purchase"
+          expected_df: "df_purchase"
+        - source: "integration.WorkPurchaseStagingKeys"
+          expected_view: "tmp_purchase_staging_keys"
+          expected_df: "df_purchase_staging_keys"
+    inheritance:
+      level: project
+      product_status: INHERITED

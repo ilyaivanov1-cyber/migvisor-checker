@@ -1,0 +1,81 @@
+{
+  "name": "nightly_etl_purchase",
+  "schedule": {
+    "quartz_cron_expression": "0 0 2 * * ?",
+    "timezone_id": "UTC",
+    "pause_status": "UNPAUSED"
+  },
+  "max_concurrent_runs": 1,
+  "tags": {
+    "product": "Purchase",
+    "project": "Inventory_Stock_Project"
+  },
+  "job_clusters": [
+    {
+      "job_cluster_key": "purchase_etl_cluster",
+      "new_cluster": {
+        "spark_version": "13.3.x-scala2.12",
+        "node_type_id": "{{CLUSTER_NODE_TYPE}}",
+        "num_workers": "{{CLUSTER_NUM_WORKERS}}",
+        "spark_conf": {
+          "spark.databricks.delta.preview.enabled": "true"
+        },
+        "custom_tags": {
+          "product": "Purchase",
+          "project": "Inventory_Stock_Project"
+        }
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task_key": "nb_extract_watermark",
+      "description": "Load and validate the high-watermark record from the control table. Publishes the prior and current watermark values via taskValues for downstream extraction tasks. Rule: FR-002.",
+      "notebook_task": {
+        "notebook_path": "src/etl/nb_extract_watermark",
+        "source": "WORKSPACE"
+      },
+      "job_cluster_key": "purchase_etl_cluster",
+      "max_retries": 2,
+      "min_retry_interval_millis": 60000,
+      "retry_on_timeout": false,
+      "timeout_seconds": 1800,
+      "depends_on": []
+    },
+    {
+      "task_key": "nb_extract_purchase",
+      "description": "Incremental extraction of purchase order rows from the source system using the watermark published by nb_extract_watermark. Writes raw data to the bronze staging table and opens a lineage_run record. Rule: FR-002, FR-003.",
+      "notebook_task": {
+        "notebook_path": "src/etl/nb_extract_purchase",
+        "source": "WORKSPACE"
+      },
+      "job_cluster_key": "purchase_etl_cluster",
+      "max_retries": 2,
+      "min_retry_interval_millis": 60000,
+      "retry_on_timeout": false,
+      "timeout_seconds": 3600,
+      "depends_on": [
+        {
+          "task_key": "nb_extract_watermark"
+        }
+      ]
+    },
+    {
+      "task_key": "migrate_staged_purchase_data",
+      "description": "Applies SK resolution, QA assertion chain (QA-P001 through QA-P005), and MERGE INTO to promote staged rows from bronze to silver_fact.fact_purchase. Closes the lineage_run record on success or failure. Rule: FR-003.",
+      "notebook_task": {
+        "notebook_path": "src/etl/migrate_staged_purchase_data",
+        "source": "WORKSPACE"
+      },
+      "job_cluster_key": "purchase_etl_cluster",
+      "max_retries": 0,
+      "retry_on_timeout": false,
+      "timeout_seconds": 7200,
+      "depends_on": [
+        {
+          "task_key": "nb_extract_purchase"
+        }
+      ]
+    }
+  ]
+}

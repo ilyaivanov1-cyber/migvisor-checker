@@ -1,0 +1,922 @@
+dimension: Performance
+prefix: PE
+product: "Purchase"
+inherits_from: "Inventory_Stock_Project"
+generated: "2026-09-07"
+
+# ── INHERITED PROJECT RULES (Inventory_Stock_Project) ──
+# All 9 project PE rules are active for Purchase.
+# Project PE rules carry no inheritance: block; all are reproduced verbatim below.
+# PE-002 is extended by PE-P001 (alternative partitioning strategy for pre-DBR 13.3).
+# PE-003 is extended by PE-P002 (conditional OPTIMIZE threshold for fact_purchase).
+# All other rules are inherited without modification.
+
+rules:
+
+  - id: PE-001
+    dimension: Performance
+    name: Columnstore Index Disposition — No Action Required
+    intent: >
+      SQL Server columnstore indexes (clustered and non-clustered) provide columnar
+      compression and batch-mode execution for analytics workloads. Delta Lake stores
+      all data in Parquet columnar format by default, so columnstore index definitions
+      must be dropped and no equivalent DDL object is created. The
+      `application.configuration_applypartitionedcolumnstoreindexing` configuration
+      object is likewise retired with no migration target.
+    activation:
+      preconditions:
+        - Source table carries a CLUSTERED COLUMNSTORE INDEX or NONCLUSTERED COLUMNSTORE INDEX definition
+        - OR source object is `application.configuration_applypartitionedcolumnstoreindexing`
+      scope: project
+    transformation:
+      source: >
+        CREATE CLUSTERED COLUMNSTORE INDEX [cci_<table>] ON [<schema>].[<table>];
+        -- or --
+        CREATE NONCLUSTERED COLUMNSTORE INDEX [ncci_<table>] ON [<schema>].[<table>] (<cols>);
+        -- or --
+        application.configuration_applypartitionedcolumnstoreindexing (configuration table)
+      target: >
+        No DDL emitted. Delta Lake persists all data as Parquet columnar files
+        natively. Columnar compression and vectorised reads are automatic.
+        The configuration object is decommissioned with a migration note recorded
+        in the product transformation rules for the affected schema.
+      algorithm: >
+        1. Identify all COLUMNSTORE INDEX definitions in source DDL scripts for
+           fact.purchase, dimension.supplier, and dimension.[stock item].
+        2. Flag each for suppression — do not emit CREATE INDEX statements in Delta DDL.
+        3. Log suppressed index names in the migration artefact manifest for audit.
+        4. Identify `application.configuration_applypartitionedcolumnstoreindexing`;
+           record its retirement in the product scope document.
+        5. Validate that the target Delta table shows Parquet columnar storage via
+           DESCRIBE DETAIL or storage inspection.
+    validation:
+      success_criteria:
+        - No COLUMNSTORE INDEX DDL statements present in any generated Delta Lake schema scripts
+        - `application.configuration_applypartitionedcolumnstoreindexing` is not migrated to any target object
+        - Generated Delta tables confirmed to use Parquet columnar format (DESCRIBE DETAIL)
+        - Query scan benchmarks on Delta tables meet or exceed columnstore scan throughput baselines
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - id: PE-001-T01
+          description: Verify no CREATE INDEX DDL appears in any generated Delta Lake DDL file
+          method: Static analysis — grep generated DDL files for COLUMNSTORE INDEX keyword
+          expected: Zero matches
+        - id: PE-001-T02
+          description: Confirm Delta table uses columnar Parquet storage
+          method: Run DESCRIBE DETAIL <table>; inspect `format` field
+          expected: format = "delta"; files are Parquet columnar
+        - id: PE-001-T03
+          description: Confirm configuration object is not present in target workspace
+          method: Search target schema catalog for any object named after the configuration table
+          expected: No matching object found in Databricks catalog
+
+  - id: PE-002
+    dimension: Performance
+    name: Liquid Clustering for Fact and Dimension Tables — Primary Clustering Strategy
+    intent: >
+      Delta Lake liquid clustering (Databricks Runtime 13.3+) is the preferred
+      data layout strategy for this project, replacing SQL Server columnstore
+      indexes and partition schemes. For `fact.purchase` — the primary fact table,
+      which is date-range driven and queried by supplier and stock item — liquid
+      clustering on `(date_key, supplier_key)` eliminates the need for a static
+      PARTITIONED BY boundary and avoids over-partitioning by supplier. For
+      `dimension.supplier` and `dimension.stock_item` (SCD-2 tables), liquid
+      clustering on their surrogate key supports efficient current-row view
+      (`_current` suffix) lookups and MERGE key resolution without full-table
+      scans. Bronze staging tables use the OVERWRITE pattern and must not carry
+      any clustering directive.
+    activation:
+      preconditions:
+        - Target Databricks Runtime is >= 13.3 LTS
+        - Table is fact.purchase, dimension.supplier, or dimension.stock_item
+        - Table does not require strict date-directory partitioning for downstream consumers
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: columnstore index or partition scheme on fact table
+        CREATE TABLE [fact].[purchase] (
+          PurchaseKey  BIGINT NOT NULL,
+          Date_Key     DATE   NOT NULL,
+          Supplier_Key INT    NOT NULL,
+          ...
+        );
+        CREATE CLUSTERED COLUMNSTORE INDEX [cci_purchase] ON [fact].[purchase];
+      target: >
+        -- fact.purchase — liquid clustering on date key and supplier key
+        CREATE TABLE IF NOT EXISTS inventory_stock.silver_fact.purchase (
+          purchase_key       BIGINT    NOT NULL,
+          date_key           DATE      NOT NULL,
+          supplier_key       INT       NOT NULL,
+          stock_item_key     INT       NOT NULL,
+          wwidw_purchase_order_id INT  NOT NULL,
+          ordered_outers     INT       NOT NULL,
+          ordered_quantity   INT       NOT NULL,
+          received_outers    INT       NOT NULL,
+          package            STRING    NOT NULL,
+          is_order_finalized BOOLEAN   NOT NULL,
+          lineage_key        INT       NOT NULL
+        )
+        USING DELTA
+        CLUSTER BY (date_key, supplier_key)
+        TBLPROPERTIES (
+          'delta.autoOptimize.optimizeWrite' = 'true',
+          'delta.autoOptimize.autoCompact'   = 'true'
+        )
+        LOCATION 'abfss://<container>@<storage>.dfs.core.windows.net/silver/fact/purchase';
+
+        -- dimension.supplier — liquid clustering on surrogate key
+        CREATE TABLE IF NOT EXISTS inventory_stock.silver_dim.supplier (
+          supplier_key   INT       NOT NULL,
+          wwidw_supplier_id INT    NOT NULL,
+          supplier       STRING    NOT NULL,
+          category       STRING,
+          valid_from     TIMESTAMP NOT NULL,
+          valid_to       TIMESTAMP NOT NULL,
+          lineage_key    INT       NOT NULL
+        )
+        USING DELTA
+        CLUSTER BY (supplier_key)
+        TBLPROPERTIES (
+          'delta.autoOptimize.optimizeWrite' = 'true',
+          'delta.autoOptimize.autoCompact'   = 'true'
+        )
+        LOCATION 'abfss://<container>@<storage>.dfs.core.windows.net/silver/dim/supplier';
+
+        -- dimension.stock_item — liquid clustering on surrogate key
+        CREATE TABLE IF NOT EXISTS inventory_stock.silver_dim.stock_item (
+          stock_item_key   INT       NOT NULL,
+          wwidw_stock_item_id INT    NOT NULL,
+          stock_item       STRING    NOT NULL,
+          valid_from       TIMESTAMP NOT NULL,
+          valid_to         TIMESTAMP NOT NULL,
+          lineage_key      INT       NOT NULL,
+          ...
+        )
+        USING DELTA
+        CLUSTER BY (stock_item_key)
+        TBLPROPERTIES (
+          'delta.autoOptimize.optimizeWrite' = 'true',
+          'delta.autoOptimize.autoCompact'   = 'true'
+        )
+        LOCATION 'abfss://<container>@<storage>.dfs.core.windows.net/silver/dim/stock_item';
+      algorithm: >
+        1. For fact.purchase: emit CLUSTER BY (date_key, supplier_key); omit PARTITIONED BY.
+        2. For dimension.supplier and dimension.stock_item: emit CLUSTER BY (<surrogate_key>).
+        3. Do not emit ZORDER BY in any ETL post-load script for liquid-clustered tables;
+           plain OPTIMIZE (no ZORDER) is acceptable for manual compaction.
+        4. Bronze staging tables (purchase_staging, etl_cutoff, lineage) must not carry
+           any CLUSTER BY or PARTITIONED BY — they use the OVERWRITE pattern.
+        5. Record the cluster key columns in each product transformation rules document.
+        6. Confirm Databricks Runtime >= 13.3 in the infrastructure specification before
+           deploying liquid-clustered tables.
+    validation:
+      success_criteria:
+        - fact.purchase DDL contains CLUSTER BY (date_key, supplier_key) and no PARTITIONED BY
+        - dimension.supplier DDL contains CLUSTER BY (supplier_key) and no PARTITIONED BY
+        - dimension.stock_item DDL contains CLUSTER BY (stock_item_key) and no PARTITIONED BY
+        - No ZORDER BY clause appears in any ETL post-load script for these tables
+        - Databricks Runtime version confirmed >= 13.3 for all ETL clusters
+        - Bronze staging DDL contains no CLUSTER BY, PARTITIONED BY, or ZORDER BY
+      quality_dimensions:
+        - conformity
+        - validity
+        - timeliness
+      test_cases:
+        - id: PE-002-T01
+          description: Confirm CLUSTER BY clause present in fact.purchase DDL
+          method: Static analysis of generated CREATE TABLE for fact.purchase
+          expected: DDL contains CLUSTER BY (date_key, supplier_key); no PARTITIONED BY
+        - id: PE-002-T02
+          description: Confirm CLUSTER BY (supplier_key) in dimension.supplier DDL
+          method: Static analysis of generated CREATE TABLE for dimension.supplier
+          expected: DDL contains CLUSTER BY (supplier_key); no PARTITIONED BY
+        - id: PE-002-T03
+          description: Validate no ZORDER BY in ETL post-load scripts for liquid-clustered tables
+          method: Grep generated ETL scripts for ZORDER BY; scope to silver_fact and silver_dim tables
+          expected: Zero matches for ZORDER BY in silver-layer ETL scripts
+        - id: PE-002-T04
+          description: Runtime version gate check
+          method: Query cluster runtime version; confirm >= 13.3 before deploying liquid-clustered tables
+          expected: Runtime version check passes; deployment proceeds only if gate is satisfied
+
+  - id: PE-003
+    dimension: Performance
+    name: Delta OPTIMIZE Schedule for Silver-Layer Tables After Nightly Batch
+    intent: >
+      Small-file accumulation degrades query performance over time for incrementally
+      loaded Delta tables. The nightly batch pipelines that load silver_fact.purchase,
+      silver_dim.supplier, and silver_dim.stock_item must include a post-load OPTIMIZE
+      step to compact small files after all writes for the batch window complete. For
+      liquid-clustered tables (PE-002), OPTIMIZE is run without ZORDER. Bronze staging
+      tables use the OVERWRITE pattern at run start and must never receive an OPTIMIZE
+      step — compaction on overwrite-only tables wastes compute with no query benefit.
+    activation:
+      preconditions:
+        - Target table is a silver-layer Delta table (silver_fact.purchase, silver_dim.supplier, silver_dim.stock_item)
+        - Table receives incremental nightly batch writes (MERGE INTO or INSERT)
+        - ETL pipeline is batch-oriented (nightly window), not micro-batch streaming
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: index rebuild/reorganize jobs in SQL Server Agent
+        EXEC sys.sp_executesql N'ALTER INDEX ALL ON [fact].[purchase] REBUILD WITH (ONLINE = ON)';
+      target: >
+        -- Databricks ETL pipeline post-load step (PySpark / SQL notebook or job task)
+        -- Step N-1: MERGE INTO (fact) or SCD-2 upsert (dimension) completes
+        -- Step N  : OPTIMIZE without ZORDER (liquid clustering maintains layout)
+
+        -- fact.purchase (liquid-clustered — plain OPTIMIZE, no ZORDER)
+        spark.sql("OPTIMIZE inventory_stock.silver_fact.purchase")
+
+        -- dimension.supplier (liquid-clustered — plain OPTIMIZE, no ZORDER)
+        spark.sql("OPTIMIZE inventory_stock.silver_dim.supplier")
+
+        -- dimension.stock_item (liquid-clustered — plain OPTIMIZE, no ZORDER)
+        spark.sql("OPTIMIZE inventory_stock.silver_dim.stock_item")
+
+        -- Schedule: run OPTIMIZE as the final task in the nightly ETL Databricks Workflow job,
+        -- after all MERGE INTO writes for that batch window are complete.
+        -- Recommended maintenance window: after 02:00 local, before 06:00 BI query start.
+
+        -- Bronze staging tables — NO OPTIMIZE (overwrite pattern; see PE-007)
+      algorithm: >
+        1. Identify all silver-layer Delta tables receiving nightly incremental writes:
+           silver_fact.purchase, silver_dim.supplier, silver_dim.stock_item.
+        2. Append a plain OPTIMIZE task (no ZORDER BY) to the end of each table's ETL job,
+           because all silver tables use liquid clustering (PE-002).
+        3. Bronze/staging tables (bronze.purchase_staging, bronze.etl_cutoff, bronze.lineage_run)
+           are explicitly excluded from the OPTIMIZE schedule.
+        4. Configure Databricks Workflow task dependencies so OPTIMIZE runs only after the
+           MERGE INTO step for the same table has completed successfully.
+        5. Document the OPTIMIZE step in the ETL design document under the
+           "Post-Load Maintenance" section.
+        6. Configure Databricks job cluster auto-termination to fire after OPTIMIZE
+           completes to control compute costs.
+    validation:
+      success_criteria:
+        - Every nightly-loaded silver-layer Delta table has a plain OPTIMIZE step in its ETL job
+        - Bronze staging tables have no OPTIMIZE step
+        - No OPTIMIZE ZORDER BY appears in any ETL script (liquid clustering supersedes ZORDER)
+        - Post-OPTIMIZE file counts (DESCRIBE HISTORY) show reduction in numFiles after each run
+      quality_dimensions:
+        - conformity
+        - timeliness
+        - coverage
+      test_cases:
+        - id: PE-003-T01
+          description: Confirm OPTIMIZE task presence in all nightly ETL job definitions for silver tables
+          method: Inspect generated ETL pipeline scripts/job YAMLs for OPTIMIZE calls per silver table
+          expected: Each nightly-loaded silver table has an OPTIMIZE step (no ZORDER BY) at end of job
+        - id: PE-003-T02
+          description: Verify bronze/staging tables are excluded from OPTIMIZE
+          method: Inspect ETL scripts for staging/bronze tables; confirm no OPTIMIZE call
+          expected: No OPTIMIZE step present in bronze/staging table ETL scripts
+        - id: PE-003-T03
+          description: Validate OPTIMIZE reduces small-file count post-nightly-load
+          method: Query DESCRIBE HISTORY <table>; compare numFiles before and after OPTIMIZE run
+          expected: numFiles decreases after OPTIMIZE; no persistent small-file accumulation over 5 consecutive nights
+
+  - id: PE-004
+    dimension: Performance
+    name: SCD-2 Dimension Lookup Performance — Current-Row View and Surrogate Key Clustering
+    intent: >
+      The SCD-2 surrogate key resolution for `dimension.supplier` and
+      `dimension.stock_item` is the most performance-critical step in the Purchase
+      ETL. In the source system this is implemented as a correlated TOP-1 subquery
+      per staging row scanning the full dimension table with a `Valid From` / `Valid To`
+      date-window predicate. In Databricks, the equivalent MERGE key resolution query
+      must avoid full-table scans on the dimension. Two complementary optimizations
+      apply: (1) a `_current` view on each SCD-2 dimension that exposes only active
+      rows (`valid_to = '9999-12-31'`) eliminates history rows from the lookup path
+      when only the current version is needed; (2) liquid clustering on the surrogate
+      key column (PE-002) co-locates rows by key, enabling data skipping during
+      MERGE target reads. Together these patterns replace the TOP-1 correlated
+      subquery pattern with an efficient join-based resolution.
+    activation:
+      preconditions:
+        - Source dimension is SCD Type-2 with Valid From / Valid To columns
+        - Dimension is a read dependency of fact.purchase ETL (dimension.supplier, dimension.stock_item)
+        - Fact ETL performs surrogate key resolution against the dimension during staging update
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: correlated TOP-1 subquery per staging row (full dimension scan)
+        UPDATE stg
+        SET stg.[Supplier Key] = COALESCE(
+            (SELECT TOP(1) s.[Supplier Key]
+             FROM Dimension.Supplier s
+             WHERE s.[WWI Supplier ID]      = stg.[WWI Supplier ID]
+               AND stg.[Last Modified When] > s.[Valid From]
+               AND stg.[Last Modified When] <= s.[Valid To]
+             ORDER BY s.[Valid From]),
+            0)
+        FROM Integration.Purchase_Staging stg;
+      target: >
+        -- Databricks Delta: join-based resolution using the _current view for active rows
+        -- (when historical accuracy is not required, use _current view for performance)
+
+        -- Step 1: Create _current view on each SCD-2 dimension (one-time DDL)
+        CREATE OR REPLACE VIEW inventory_stock.silver_dim.supplier_current AS
+        SELECT * FROM inventory_stock.silver_dim.supplier
+        WHERE valid_to = '9999-12-31 00:00:00';
+
+        CREATE OR REPLACE VIEW inventory_stock.silver_dim.stock_item_current AS
+        SELECT * FROM inventory_stock.silver_dim.stock_item
+        WHERE valid_to = '9999-12-31 00:00:00';
+
+        -- Step 2: Historical SCD-2 key resolution (join with temporal predicate)
+        -- Replace correlated subquery with a set-based join in the staging UPDATE
+        -- equivalent (PySpark DataFrame join or SQL JOIN on staging temp view)
+        SELECT
+          stg.*,
+          COALESCE(s.supplier_key, 0) AS resolved_supplier_key,
+          COALESCE(si.stock_item_key, 0) AS resolved_stock_item_key
+        FROM purchase_staging_view stg
+        LEFT JOIN inventory_stock.silver_dim.supplier s
+          ON s.wwidw_supplier_id = stg.wwidw_supplier_id
+          AND stg.last_modified_when > s.valid_from
+          AND stg.last_modified_when <= s.valid_to
+        LEFT JOIN inventory_stock.silver_dim.stock_item si
+          ON si.wwidw_stock_item_id = stg.wwidw_stock_item_id
+          AND stg.last_modified_when > si.valid_from
+          AND stg.last_modified_when <= si.valid_to;
+
+        -- Liquid clustering on supplier_key / stock_item_key (PE-002) enables
+        -- data skipping on the dimension side of these joins automatically.
+      algorithm: >
+        1. For each SCD-2 dimension in scope (supplier, stock_item), create a
+           `_current` view filtering to valid_to = '9999-12-31' for use when
+           only the active version is needed (e.g., BI joins, report queries).
+        2. For historical ETL key resolution, replace the correlated TOP-1 subquery
+           with a set-based LEFT JOIN on the full dimension table using the
+           temporal predicate (last_modified_when between valid_from and valid_to).
+        3. Apply COALESCE(..., 0) fallback for unresolved rows — surrogate key 0
+           is the unknown-member sentinel, pre-seeded in each dimension table.
+        4. Liquid clustering on supplier_key and stock_item_key (PE-002) enables
+           automatic data skipping on the MERGE target read path — no additional
+           hints are required for the dimension join.
+        5. Monitor resolved vs. unresolved (key=0) row counts after each ETL run
+           as a data quality metric; alert if the unknown-member rate exceeds threshold.
+    validation:
+      success_criteria:
+        - A `_current` view exists for both silver_dim.supplier and silver_dim.stock_item
+        - ETL key resolution queries use set-based LEFT JOINs, not correlated subqueries
+        - COALESCE(..., 0) fallback is present in every key resolution query
+        - EXPLAIN on key resolution queries shows data skipping (numFiles reduced) due to liquid clustering
+        - Unknown-member (key=0) row rate is monitored and alerted per ETL run
+      quality_dimensions:
+        - conformity
+        - timeliness
+        - validity
+      test_cases:
+        - id: PE-004-T01
+          description: Confirm _current views exist for both SCD-2 dimensions
+          method: Query Unity Catalog for views named supplier_current and stock_item_current
+          expected: Both views exist and return only rows where valid_to = '9999-12-31'
+        - id: PE-004-T02
+          description: Verify ETL key resolution uses set-based JOIN, not correlated subquery
+          method: Inspect generated ETL SQL/PySpark for correlated subquery patterns (SELECT TOP(1))
+          expected: No correlated subquery pattern; resolution uses LEFT JOIN with temporal predicate
+        - id: PE-004-T03
+          description: Confirm COALESCE fallback to key=0 in key resolution logic
+          method: Static analysis of generated key resolution code
+          expected: COALESCE(<supplier_key>, 0) and COALESCE(<stock_item_key>, 0) present
+        - id: PE-004-T04
+          description: Validate data skipping on dimension join via EXPLAIN
+          method: Run EXPLAIN on key resolution query; inspect numFiles for supplier and stock_item
+          expected: numFiles for dimension side is less than total file count (clustering skipping active)
+
+  - id: PE-005
+    dimension: Performance
+    name: MERGE INTO Performance — Date-Windowed Predicate Pushdown on Fact Table
+    intent: >
+      The `fact.purchase` MERGE INTO operation (replacing the source DELETE + INSERT
+      pattern in `migratestagedpurchasedata`) must limit its target scan to the
+      relevant date window to avoid a full-table read on every incremental run.
+      Without a predicate on the cluster key, Delta must scan all files in the
+      fact table to identify matching rows by `wwidw_purchase_order_id`. Adding a
+      date-range predicate that matches the incremental window enables liquid
+      clustering data skipping on `date_key`, dramatically reducing the number
+      of files scanned during the MERGE. The source (staging) side must be kept
+      small — the incremental load only carries rows modified since the last ETL
+      cutoff — to ensure the MERGE engine can broadcast or stream-join efficiently.
+    activation:
+      preconditions:
+        - Target table is silver_fact.purchase (liquid-clustered on date_key, supplier_key)
+        - MERGE INTO operation performs upsert of incremental purchase rows from bronze staging
+        - An ETL high-watermark (cutoff date) is available from the bronze.etl_cutoff control table
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: order-level re-load via DELETE + INSERT (no date predicate needed —
+        -- staging is small and SQL Server optimizer handles it via statistics)
+        DELETE FROM Fact.Purchase
+        WHERE [WWI Purchase Order ID] IN (
+            SELECT [WWI Purchase Order ID] FROM Integration.Purchase_Staging);
+
+        INSERT INTO Fact.Purchase (...)
+        SELECT ..., @LineageKey
+        FROM Integration.Purchase_Staging;
+      target: >
+        -- Databricks Delta: MERGE INTO with date-windowed predicate on liquid-clustered column
+        -- @batch_date_min / @batch_date_max bound the incremental ETL window (from cutoff table)
+
+        MERGE INTO inventory_stock.silver_fact.purchase AS target
+        USING (
+          SELECT * FROM inventory_stock.bronze.purchase_staging
+        ) AS source
+        ON target.wwidw_purchase_order_id = source.wwidw_purchase_order_id
+           AND target.date_key >= DATE_SUB(source.date_key, 1)  -- narrow target scan window
+           AND target.date_key <= CURRENT_DATE()                -- predicate pushdown on cluster key
+        WHEN MATCHED THEN UPDATE SET
+          target.supplier_key       = source.supplier_key,
+          target.stock_item_key     = source.stock_item_key,
+          target.ordered_outers     = source.ordered_outers,
+          target.ordered_quantity   = source.ordered_quantity,
+          target.received_outers    = source.received_outers,
+          target.is_order_finalized = source.is_order_finalized,
+          target.lineage_key        = source.lineage_key
+        WHEN NOT MATCHED THEN INSERT (
+          date_key, supplier_key, stock_item_key, wwidw_purchase_order_id,
+          ordered_outers, ordered_quantity, received_outers,
+          package, is_order_finalized, lineage_key
+        ) VALUES (
+          source.date_key, source.supplier_key, source.stock_item_key,
+          source.wwidw_purchase_order_id, source.ordered_outers,
+          source.ordered_quantity, source.received_outers,
+          source.package, source.is_order_finalized, source.lineage_key
+        );
+      algorithm: >
+        1. At the start of each ETL run, read the current ETL cutoff from
+           bronze.etl_cutoff to determine the incremental date window
+           (@batch_date_min, @batch_date_max).
+        2. Include a date-range predicate on the MERGE ON clause that constrains
+           the target scan to the incremental window (predicate pushdown on
+           date_key, the primary liquid clustering column).
+        3. The source staging table (bronze.purchase_staging) carries only the
+           incremental rows for the current run window — kept small by the
+           OVERWRITE-at-run-start pattern (PE-007).
+        4. Avoid full-table MERGE without a date predicate; document the predicate
+           requirement in the ETL design document.
+        5. After MERGE completes, run plain OPTIMIZE on silver_fact.purchase
+           (PE-003) to compact any new small files produced by the MERGE write.
+        6. For any purchase order whose date spans the watermark boundary,
+           widen the date predicate by one day to avoid missed matches.
+    validation:
+      success_criteria:
+        - MERGE INTO statement for silver_fact.purchase includes a date-range predicate on date_key in the ON clause
+        - EXPLAIN on the MERGE query shows data skipping (numFiles reduced) on the target side
+        - Bronze staging table contains only incremental rows for the current batch window (not cumulative)
+        - Post-MERGE OPTIMIZE step is present in the ETL job (PE-003)
+      quality_dimensions:
+        - conformity
+        - timeliness
+        - validity
+      test_cases:
+        - id: PE-005-T01
+          description: Confirm MERGE ON clause includes date_key predicate
+          method: Static analysis of generated MERGE INTO ETL script for silver_fact.purchase
+          expected: ON clause includes AND target.date_key >= <lower_bound> AND target.date_key <= <upper_bound>
+        - id: PE-005-T02
+          description: Validate predicate pushdown reduces target scan in EXPLAIN
+          method: Run EXPLAIN on the MERGE INTO statement; inspect numFiles for the target table
+          expected: numFiles scanned on target side is a fraction of total files (date skipping confirmed)
+        - id: PE-005-T03
+          description: Confirm staging table size is bounded to incremental rows only
+          method: After ETL run, query COUNT(*) on bronze.purchase_staging; compare to expected incremental row count
+          expected: Row count matches the incremental extract window; no cumulative stale rows present
+
+  - id: PE-006
+    dimension: Performance
+    name: Broadcast Join for Small SCD-2 Dimension Tables
+    intent: >
+      `dimension.supplier` and `dimension.stock_item` are small SCD-2 tables
+      relative to `fact.purchase`. Spark's default sort-merge join is inefficient
+      when one side fits in executor memory. Setting `spark.sql.autoBroadcastJoinThreshold`
+      at the cluster or session level, or applying an explicit BROADCAST hint, ensures
+      that dimension tables are broadcast to all executors during MERGE key resolution
+      queries and BI-layer star-schema joins, eliminating the shuffle phase and
+      reducing join latency. This optimization is especially important during the
+      SCD-2 surrogate key resolution step (PE-004), where each staging row is joined
+      to both dimension tables simultaneously.
+    activation:
+      preconditions:
+        - Table is classified as a dimension table (dimension.supplier, dimension.stock_item)
+        - Estimated table size in Delta Lake is below the broadcast threshold (default 10 MB; configurable up to 8 GB)
+        - Table is joined to fact.purchase or purchase_staging in ETL or BI queries
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: hash or nested-loop joins guided by statistics; no explicit hint needed
+        SELECT s.Supplier_Key, SUM(p.Ordered_Outers)
+        FROM fact.purchase p
+        JOIN dimension.Supplier s ON p.Supplier_Key = s.Supplier_Key
+        GROUP BY s.Supplier_Key;
+      target: >
+        -- Option A: Auto-broadcast via session/cluster config (preferred project default)
+        spark.conf.set("spark.sql.autoBroadcastJoinThreshold", 536870912)  -- 512 MB
+
+        -- Option B: Explicit broadcast hint in SQL (use when auto-broadcast threshold not raised)
+        SELECT p.date_key, s.supplier, SUM(p.ordered_outers) AS total_outers
+        FROM inventory_stock.silver_fact.purchase p
+        JOIN /*+ BROADCAST(s) */ inventory_stock.silver_dim.supplier s
+          ON p.supplier_key = s.supplier_key
+        GROUP BY p.date_key, s.supplier;
+
+        -- Key resolution query with broadcast hints on both dimension tables:
+        SELECT
+          stg.*,
+          COALESCE(s.supplier_key, 0)     AS resolved_supplier_key,
+          COALESCE(si.stock_item_key, 0)  AS resolved_stock_item_key
+        FROM purchase_staging_view stg
+        LEFT JOIN /*+ BROADCAST(s) */  inventory_stock.silver_dim.supplier s
+          ON s.wwidw_supplier_id = stg.wwidw_supplier_id
+          AND stg.last_modified_when > s.valid_from
+          AND stg.last_modified_when <= s.valid_to
+        LEFT JOIN /*+ BROADCAST(si) */ inventory_stock.silver_dim.stock_item si
+          ON si.wwidw_stock_item_id = stg.wwidw_stock_item_id
+          AND stg.last_modified_when > si.valid_from
+          AND stg.last_modified_when <= si.valid_to;
+      algorithm: >
+        1. Enumerate all dimension tables from the star-schema model:
+           dimension.supplier and dimension.stock_item.
+        2. Estimate each dimension table's row count and projected Delta size.
+        3. For tables expected to be < 512 MB (both supplier and stock_item qualify):
+           set `spark.sql.autoBroadcastJoinThreshold` in the cluster/session config.
+        4. For the SCD-2 key resolution query (PE-004), add explicit BROADCAST hints
+           on both dimension tables to guarantee broadcast join regardless of session config.
+        5. For BI-layer views or notebooks that join fact.purchase to dimensions,
+           document the broadcast hint pattern as the default join strategy.
+        6. Record the broadcast threshold setting in the cluster configuration
+           specification within the product design document.
+    validation:
+      success_criteria:
+        - Cluster/session config sets `spark.sql.autoBroadcastJoinThreshold` >= 512 MB
+        - EXPLAIN on representative star-schema queries shows BroadcastHashJoin for dimension tables
+        - No SortMergeJoin appears for dimension.supplier or dimension.stock_item joins in query plans
+        - ETL key resolution scripts include BROADCAST hints for both dimension tables
+      quality_dimensions:
+        - conformity
+        - timeliness
+        - coverage
+      test_cases:
+        - id: PE-006-T01
+          description: Confirm autoBroadcastJoinThreshold is set in cluster/session config
+          method: Inspect cluster init script or ETL session config for the Spark config setting
+          expected: spark.sql.autoBroadcastJoinThreshold >= 536870912 (512 MB)
+        - id: PE-006-T02
+          description: Validate broadcast join in query plan for dimension table joins
+          method: Run EXPLAIN on SELECT joining silver_fact.purchase to silver_dim.supplier; inspect physical plan
+          expected: Physical plan shows BroadcastHashJoin, not SortMergeJoin, for supplier side
+        - id: PE-006-T03
+          description: Confirm BROADCAST hint present in SCD-2 key resolution ETL query
+          method: Static analysis of generated ETL key resolution SQL for BROADCAST hint keyword
+          expected: Both supplier and stock_item JOIN clauses carry explicit BROADCAST hints
+
+  - id: PE-007
+    dimension: Performance
+    name: Bronze Staging Table Lifecycle — OVERWRITE Pattern, No Optimization
+    intent: >
+      `integration.purchase_staging` is a write-once-read-once intermediate buffer
+      in the source SSIS pipeline that was never correctly truncated before each run
+      due to a confirmed staging-truncation bug (the truncate dataflow targeted
+      `Integration.Order_Staging` instead of `Integration.Purchase_Staging`).
+      In the Databricks target, the bronze staging table (`bronze.purchase_staging`)
+      must be written using OVERWRITE mode at the start of each nightly run — not
+      APPEND — to both correct the legacy bug and ensure idempotency. No OPTIMIZE,
+      CLUSTER BY, PARTITIONED BY, or Z-ORDER should be applied to the staging table,
+      as the overwrite-per-run pattern eliminates the small-file accumulation problem
+      that these optimizations address.
+    activation:
+      preconditions:
+        - Source object is `integration.purchase_staging` (the Purchase domain staging table)
+        - Object is used exclusively as an intermediate buffer in the nightly ETL load sequence
+        - No BI or analytics queries read directly from the staging object
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server staging table (Integration schema) — NEVER correctly truncated due to bug
+        -- Integration.Purchase_Staging: 14 columns, IDENTITY PK
+        -- Intended: TRUNCATE Integration.Purchase_Staging each run
+        -- Actual:   DELETE FROM Integration.Order_Staging (wrong target — bug)
+        -- Result:   stale rows accumulate in Purchase_Staging across runs
+      target: >
+        -- Databricks: bronze.purchase_staging — OVERWRITE mode corrects the legacy bug
+
+        -- Option A: OVERWRITE mode in PySpark (preferred — idempotent, corrects bug)
+        (
+          spark.read
+            .format("jdbc")
+            .option("dbtable", incremental_query)
+            .load()
+            .write
+            .format("delta")
+            .mode("overwrite")
+            .saveAsTable("inventory_stock.bronze.purchase_staging")
+        )
+
+        -- Option B: CREATE OR REPLACE TABLE in SQL (equivalent OVERWRITE semantic)
+        CREATE OR REPLACE TABLE inventory_stock.bronze.purchase_staging AS
+        SELECT ... FROM <incremental_extract_query>;
+
+        -- Bronze staging DDL — no CLUSTER BY, no PARTITIONED BY, no OPTIMIZE
+        CREATE TABLE IF NOT EXISTS inventory_stock.bronze.purchase_staging (
+          purchase_staging_key  BIGINT    NOT NULL,
+          date_key              DATE      NOT NULL,
+          wwidw_purchase_order_id INT     NOT NULL,
+          ordered_outers        INT       NOT NULL,
+          ordered_quantity      INT       NOT NULL,
+          received_outers       INT       NOT NULL,
+          package               STRING    NOT NULL,
+          is_order_finalized    BOOLEAN   NOT NULL,
+          wwidw_supplier_id     INT       NOT NULL,
+          wwidw_stock_item_id   INT       NOT NULL,
+          last_modified_when    TIMESTAMP NOT NULL,
+          lineage_key           INT       NOT NULL
+        ) USING DELTA
+        LOCATION 'abfss://<container>@<storage>.dfs.core.windows.net/bronze/purchase_staging';
+        -- No TBLPROPERTIES for autoOptimize — OVERWRITE eliminates small-file accumulation
+      algorithm: >
+        1. Classify bronze.purchase_staging as a transient Bronze staging table.
+        2. At the start of each nightly ETL run, write to bronze.purchase_staging
+           using OVERWRITE (or CREATE OR REPLACE TABLE) mode — not APPEND.
+        3. This OVERWRITE replaces the legacy SSIS truncate step and corrects the
+           staging-truncation bug, ensuring no stale rows persist between runs.
+        4. Do not emit CLUSTER BY, PARTITIONED BY, or ZORDER BY in staging DDL.
+        5. Do not add an OPTIMIZE step for the staging table in ETL scripts.
+        6. Do not enable autoOptimize TBLPROPERTIES on the staging table.
+        7. Document the OVERWRITE-at-run-start pattern and the corrected bug in the
+           ETL design document under the "Staging Lifecycle" section.
+        8. Exclude bronze.purchase_staging from the OPTIMIZE schedule (PE-003).
+    validation:
+      success_criteria:
+        - bronze.purchase_staging DDL contains no CLUSTER BY, PARTITIONED BY, or ZORDER BY
+        - bronze.purchase_staging DDL contains no autoOptimize TBLPROPERTIES
+        - ETL extract step writes to bronze.purchase_staging using OVERWRITE mode (not APPEND)
+        - No OPTIMIZE step appears in any ETL script for bronze.purchase_staging
+        - Post-run row count on bronze.purchase_staging equals incremental extract row count (no stale rows)
+      quality_dimensions:
+        - conformity
+        - validity
+        - timeliness
+      test_cases:
+        - id: PE-007-T01
+          description: Confirm absence of optimization directives in bronze.purchase_staging DDL
+          method: Static analysis — grep staging table DDL for CLUSTER BY, PARTITIONED BY, ZORDER, autoOptimize
+          expected: Zero matches in staging DDL
+        - id: PE-007-T02
+          description: Verify OVERWRITE mode is used at ETL run start for bronze.purchase_staging
+          method: Inspect generated ETL extract script for write mode parameter
+          expected: Write mode is "overwrite" or CREATE OR REPLACE TABLE; not "append"
+        - id: PE-007-T03
+          description: Confirm staging table row count equals incremental extract only (no stale rows)
+          method: Run ETL job in test environment; query COUNT(*) on bronze.purchase_staging post-load
+          expected: Row count matches current incremental window only; re-running ETL produces identical count (idempotent)
+        - id: PE-007-T04
+          description: Verify bronze.purchase_staging is excluded from OPTIMIZE schedule
+          method: Cross-check OPTIMIZE step inventory (PE-003) against staging table name
+          expected: bronze.purchase_staging does not appear in any OPTIMIZE statement
+
+  - id: PE-008
+    dimension: Performance
+    name: Auto-Optimization Settings — Silver Tables Enabled, Bronze Staging Excluded
+    intent: >
+      Databricks Delta Lake provides two auto-optimization features that reduce
+      manual maintenance overhead for incrementally loaded tables: (1) Optimized Writes —
+      automatically coalesces shuffle output into appropriately sized files before
+      writing, reducing small-file accumulation during nightly MERGE loads; (2) Auto
+      Compaction — automatically runs a lightweight OPTIMIZE after each write if the
+      table has accumulated enough small files. Both settings must be enabled via
+      TBLPROPERTIES on all silver-layer Delta tables (silver_fact.purchase,
+      silver_dim.supplier, silver_dim.stock_item). Bronze staging tables are
+      explicitly excluded — they use the OVERWRITE pattern (PE-007), so
+      auto-compaction overhead provides no benefit and should not be applied.
+    activation:
+      preconditions:
+        - Target object is a silver-layer Delta table (not a bronze staging table or control table)
+        - Table receives incremental writes (nightly ETL batch MERGE INTO or SCD-2 upsert)
+        - Databricks Runtime >= 9.1 (optimized writes on Delta tables)
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: no equivalent auto-optimization; index maintenance handled
+        -- by scheduled SQL Server Agent jobs (index rebuild/reorganize)
+      target: >
+        -- Enable at table creation time via TBLPROPERTIES (silver-layer tables only)
+        CREATE TABLE IF NOT EXISTS inventory_stock.silver_fact.purchase (
+          ...
+        )
+        USING DELTA
+        CLUSTER BY (date_key, supplier_key)
+        TBLPROPERTIES (
+          'delta.autoOptimize.optimizeWrite' = 'true',
+          'delta.autoOptimize.autoCompact'   = 'true'
+        )
+        LOCATION '...';
+
+        -- Same for silver_dim.supplier and silver_dim.stock_item
+
+        -- Enable on existing tables via ALTER TABLE
+        ALTER TABLE inventory_stock.silver_fact.purchase
+        SET TBLPROPERTIES (
+          'delta.autoOptimize.optimizeWrite' = 'true',
+          'delta.autoOptimize.autoCompact'   = 'true'
+        );
+
+        -- Cluster-level default (Databricks cluster spark config, optional):
+        -- spark.databricks.delta.optimizeWrite.enabled true
+        -- spark.databricks.delta.autoCompact.enabled   true
+
+        -- Bronze staging — NO autoOptimize TBLPROPERTIES (OVERWRITE pattern)
+      algorithm: >
+        1. For all silver-layer Delta tables (silver_fact.purchase, silver_dim.supplier,
+           silver_dim.stock_item), emit TBLPROPERTIES with both autoOptimize settings
+           set to 'true' in CREATE TABLE DDL.
+        2. For tables created without these properties, emit ALTER TABLE SET TBLPROPERTIES
+           in the migration DDL correction scripts.
+        3. Set cluster-level Spark config defaults in the Databricks cluster init scripts
+           as a fallback for any tables not explicitly configured.
+        4. Bronze staging tables and control tables (bronze.etl_cutoff, bronze.lineage_run,
+           bronze.purchase_staging) are explicitly excluded — they use OVERWRITE writes.
+        5. Auto compaction complements the manually scheduled OPTIMIZE (PE-003) between
+           scheduled runs; both should remain enabled on silver tables.
+        6. Document the settings and runtime version prerequisites in the product
+           infrastructure configuration document.
+    validation:
+      success_criteria:
+        - All silver-layer Delta table DDL includes TBLPROPERTIES for both autoOptimize settings
+        - Bronze/staging table DDL does not include autoOptimize TBLPROPERTIES
+        - Databricks Runtime version confirmed >= 9.1 for all clusters running ETL pipelines
+        - Post-load file counts for silver incremental tables show no persistent small-file growth over 7 nightly runs
+      quality_dimensions:
+        - conformity
+        - validity
+        - timeliness
+      test_cases:
+        - id: PE-008-T01
+          description: Verify TBLPROPERTIES for auto-optimization in all silver-layer DDL
+          method: Static analysis — grep all generated silver CREATE TABLE DDL for autoOptimize properties
+          expected: Both 'delta.autoOptimize.optimizeWrite' and 'delta.autoOptimize.autoCompact' set to 'true'
+        - id: PE-008-T02
+          description: Confirm bronze/staging tables lack autoOptimize properties
+          method: Static analysis — grep bronze/staging table DDL for autoOptimize
+          expected: No autoOptimize properties in any bronze or staging table DDL
+        - id: PE-008-T03
+          description: Validate runtime version prerequisite
+          method: Query cluster Databricks Runtime version in deployment checklist
+          expected: Runtime >= 9.1 confirmed for all ETL clusters
+        - id: PE-008-T04
+          description: Monitor small-file accumulation over 7 nightly loads on silver_fact.purchase
+          method: Query DESCRIBE DETAIL inventory_stock.silver_fact.purchase after each nightly ETL run; track numFiles
+          expected: numFiles remains stable (< 20% growth) over 7 consecutive nightly loads without manual OPTIMIZE
+
+  - id: PE-009
+    dimension: Performance
+    name: SQL Server Query Hint Removal — NOLOCK, FORCESEEK
+    intent: >
+      T-SQL query hints such as NOLOCK and FORCESEEK are SQL Server–specific directives
+      with no equivalent in Databricks SQL or PySpark. NOLOCK is used in SQL Server
+      to perform dirty reads under high-concurrency workloads; in Delta Lake, ACID
+      snapshot isolation guarantees that reads always see a consistent committed snapshot,
+      making NOLOCK semantically unnecessary and syntactically invalid. FORCESEEK forces
+      the SQL Server optimizer to use an index seek; Delta Lake's query optimizer
+      handles all access paths automatically via statistics and data skipping. Both
+      hint types must be stripped from all migrated queries with no replacement.
+    activation:
+      preconditions:
+        - Source SQL contains WITH (NOLOCK) or FORCESEEK table hint
+        - Query is being migrated to Databricks SQL or PySpark
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: NOLOCK hint on dimension and staging table reads (common in high-concurrency DW)
+        SELECT s.[Supplier Key], s.[Supplier]
+        FROM Dimension.Supplier s WITH (NOLOCK)
+        WHERE s.[WWI Supplier ID] = @SupplierID;
+
+        -- SQL Server: FORCESEEK hint on indexed lookup
+        SELECT TOP(1) si.[Stock Item Key]
+        FROM Dimension.[Stock Item] si WITH (FORCESEEK)
+        WHERE si.[WWI Stock Item ID] = @StockItemID
+          AND @LastModifiedWhen > si.[Valid From]
+          AND @LastModifiedWhen <= si.[Valid To]
+        ORDER BY si.[Valid From];
+      target: >
+        -- Databricks SQL: hints removed entirely — Delta ACID isolation and optimizer handle both concerns
+        SELECT supplier_key, supplier
+        FROM inventory_stock.silver_dim.supplier
+        WHERE wwidw_supplier_id = :supplier_id;
+
+        -- Correlated TOP-1 replaced by set-based join (PE-004); FORCESEEK removed
+        SELECT stock_item_key
+        FROM inventory_stock.silver_dim.stock_item
+        WHERE wwidw_stock_item_id = :stock_item_id
+          AND :last_modified_when > valid_from
+          AND :last_modified_when <= valid_to
+        ORDER BY valid_from
+        LIMIT 1;
+      algorithm: >
+        1. Scan all migrated T-SQL queries for WITH (NOLOCK) and WITH (FORCESEEK) table hints.
+        2. Strip both hint clauses entirely — do not replace with any Databricks equivalent.
+        3. For NOLOCK removals: document in the migration log that Delta ACID snapshot isolation
+           provides read consistency without dirty-read semantics.
+        4. For FORCESEEK removals: document that Delta query optimizer uses column statistics
+           and data skipping (liquid clustering, PE-002) to determine access paths automatically.
+        5. Validate that queries execute correctly after hint removal using the same test data set.
+        6. Add a static analysis check in the code review gate to flag any residual SQL Server
+           hints in generated Databricks SQL files.
+    validation:
+      success_criteria:
+        - No WITH (NOLOCK) or WITH (FORCESEEK) clauses present in any generated Databricks SQL file
+        - All hint-stripped queries return identical results to source queries on the same test data
+        - Migration log documents the reason for each hint removal
+        - Static analysis code review gate flags any residual SQL Server hints in generated SQL files
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - id: PE-009-T01
+          description: Verify no NOLOCK or FORCESEEK hints in generated Databricks SQL
+          method: Static analysis — grep all generated .sql and ETL notebook files for NOLOCK and FORCESEEK
+          expected: Zero matches
+        - id: PE-009-T02
+          description: Confirm hint-stripped queries return correct results
+          method: Run hint-stripped query against target Delta tables; compare output to source query output on matching test data
+          expected: Row counts and values match between source and target query results
+        - id: PE-009-T03
+          description: Verify migration log entries for each removed hint
+          method: Inspect migration artefact manifest for NOLOCK and FORCESEEK removal records
+          expected: Each removed hint has a corresponding entry in the migration log with justification
+
+# ── PRODUCT-SPECIFIC RULES (Purchase) ──
+
+product_rules:
+
+  - id: PE-P001
+    action: extend
+    extends_rule: PE-002
+    dimension: Performance
+    intent: "Add an alternative partitioning strategy for date-heavy fact tables: PARTITIONED BY (date_col) combined with ZORDER BY (fk_cols) as a row-store B-tree equivalent for cases where Liquid Clustering is not available or not optimal."
+    rationale: >
+      Project rule PE-002 prescribes CLUSTER BY as the sole strategy and explicitly
+      prohibits ZORDER for liquid-clustered tables. However, the Purchase product may
+      encounter runtimes earlier than DBR 13.3 or scenarios where a date-partitioned
+      layout with ZORDER provides better query plan selectivity for large date-range
+      scans combined with high-cardinality FK predicates. This extension defines the
+      alternative strategy and the conditions under which it is applied.
+    scope: "fact_purchase and any future fact tables in the Purchase product scope where the runtime is < DBR 13.3 or where the alternative strategy is explicitly selected."
+    extended_behavior: |
+      When Liquid Clustering (CLUSTER BY) is not available (runtime < DBR 13.3) or
+      when a date-column row-store partitioning is explicitly required, apply:
+
+        PARTITIONED BY (date_col)
+        -- followed by post-load OPTIMIZE with ZORDER:
+        OPTIMIZE inventory_stock.silver_fact.fact_purchase
+          ZORDER BY (supplier_key, stock_item_key)
+
+      Selection criteria:
+        - date_col must be a DATE or DATE-derived column with reasonable cardinality
+          (e.g., date_key: daily granularity, ~365 partitions per year — acceptable)
+        - fk_cols for ZORDER must be the high-cardinality FK columns most frequently
+          used in WHERE or JOIN predicates (supplier_key, stock_item_key for fact_purchase)
+
+      This alternative strategy is MUTUALLY EXCLUSIVE with CLUSTER BY on the same table.
+      Document the chosen strategy and the selection rationale in the table DDL header
+      comment. Default to CLUSTER BY (PE-002) when DBR >= 13.3 is confirmed.
+
+  - id: PE-P002
+    action: extend
+    extends_rule: PE-003
+    dimension: Performance
+    intent: "Make the OPTIMIZE step conditional: run only when the number of rows merged in the current ETL run exceeds FACT_OPTIMIZE_ROW_THRESHOLD, avoiding unnecessary compute on low-volume nights."
+    rationale: >
+      Project rule PE-003 mandates an unconditional OPTIMIZE after every nightly merge.
+      The Purchase product operates on variable nightly volumes — some nights only a
+      handful of orders are modified. Running OPTIMIZE unconditionally wastes cluster
+      compute on near-zero-change nights. The conditional threshold pattern preserves
+      the compaction benefit on high-volume nights while eliminating wasted compute on
+      low-volume nights.
+    scope: "fact_purchase OPTIMIZE step in the Purchase nightly ETL Workflow task."
+    extended_behavior: |
+      Replace the unconditional OPTIMIZE call for fact_purchase with a conditional block:
+
+        # In src/etl/migrate_staged_purchase_data.py
+        FACT_OPTIMIZE_ROW_THRESHOLD = 10_000  # configurable via config/environment.yaml
+
+        rows_merged = <count returned by fact_merge.py MERGE step>
+
+        if rows_merged > FACT_OPTIMIZE_ROW_THRESHOLD:
+            spark.sql("OPTIMIZE inventory_stock.silver_fact.fact_purchase")
+            logger.info(f"OPTIMIZE executed: rows_merged={rows_merged} exceeded threshold={FACT_OPTIMIZE_ROW_THRESHOLD}")
+        else:
+            logger.info(f"OPTIMIZE skipped: rows_merged={rows_merged} below threshold={FACT_OPTIMIZE_ROW_THRESHOLD}")
+
+      FACT_OPTIMIZE_ROW_THRESHOLD must be:
+        - Defined in config/environment.yaml (externalised, not hard-coded)
+        - Readable via the constants.py module
+        - Documented in the ETL design document under "Post-Load Maintenance"
+
+      The unconditional OPTIMIZE rule (PE-003) continues to apply to silver_dim tables
+      (supplier, stock_item) — the conditional threshold applies only to fact_purchase.

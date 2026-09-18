@@ -1,0 +1,26 @@
+overrides:
+  - rule_id: "TY-012"
+    action: override
+    dimension: "TY"
+    product_rule_id: "TY-P001"
+    original_intent: "Map DATETIME2(n) to TIMESTAMP_NTZ to preserve wall-clock semantics and no-time-zone semantics."
+    override_intent: "Map SCD-2 validity columns (Valid From, Valid To) from DATETIME2 to DATE rather than TIMESTAMP_NTZ, because the Purchase product treats SCD-2 boundaries as calendar dates, not sub-day timestamps."
+    rationale: >
+      The Purchase product introduces a fully specified SCD-2 control column pattern where
+      valid_from and valid_to carry business effective dates with no intraday component.
+      Storing these as DATE (not TIMESTAMP_NTZ) eliminates spurious sub-second boundary
+      comparison issues in key resolution predicates and aligns with the explicit product
+      design decision to use DATE for all SCD-2 validity boundaries on Purchase-scope
+      dimension tables.
+    scope: "SCD-2 validity columns (valid_from, valid_to) on Purchase-scope dimension tables (supplier, stock_item). Does NOT affect non-validity DATETIME2 columns such as data_load_started, cutoff_time, or last_modified_when, which continue to map to TIMESTAMP_NTZ per TY-012."
+    product_behavior: |
+      For columns identified as SCD-2 validity window boundaries in Purchase-scope dimension tables:
+        [Valid From] DATETIME2(7) NOT NULL  →  valid_from DATE NOT NULL
+        [Valid To]   DATETIME2(7) NOT NULL  →  valid_to   DATE NOT NULL
+
+      SCD-2 temporal range predicates in Purchase ETL must be rewritten to compare
+      DATE values:
+        stg.last_modified_when::DATE > dim.valid_from AND stg.last_modified_when::DATE <= dim.valid_to
+
+      All other DATETIME2 columns (DataLoadStarted, DataLoadCompleted, CutoffTime,
+      LastModifiedWhen, SourceSystemCutoffTime) continue to map to TIMESTAMP_NTZ per TY-012.

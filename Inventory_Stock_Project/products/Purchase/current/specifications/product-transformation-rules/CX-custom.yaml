@@ -1,0 +1,318 @@
+dimension: Custom
+prefix: CX
+product: Purchase
+project: "Inventory_Stock_Project"
+scope: product
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-07"
+
+# ── PRODUCT-ONLY DIMENSION ─────────────────────────────────────────────────────
+# CX is not present in the project-level rules.
+# All rules below are new product-specific rules for the Purchase product.
+# No inherited project rules exist for this dimension.
+# ──────────────────────────────────────────────────────────────────────────────
+
+product_rules:
+
+  - id: CX-P001
+    action: new
+    dimension: Custom
+    name: Externalise hard-coded date filters to config/environment.yaml
+    intent: "Replace hard-coded date filters with externalised configuration values read from config/environment.yaml."
+    rationale: >
+      The Purchase product source contains hard-coded date literals used as extract
+      window lower bounds and filter boundaries. Externalising these to
+      config/environment.yaml eliminates brittle hard-codes, enables environment-specific
+      overrides (dev/test/prod), and makes batch re-runs with alternative date windows
+      possible without code changes.
+    scope: "Any hard-coded date literal used as a filter or window boundary in Purchase ETL notebooks or SQL."
+    behavior: |
+      Identify all hard-coded date literals in Purchase ETL code (e.g., '2020-01-01',
+      '1900-01-01' used as lower bounds, GETDATE()-365 style fixed offsets).
+
+      Externalise each to config/environment.yaml under the [purchase.etl] section:
+        purchase:
+          etl:
+            initial_load_date: "1900-01-01"
+            batch_lookback_days: 1
+            fact_optimize_row_threshold: 10000
+
+      Load at notebook startup via:
+        import yaml
+        with open("/dbfs/config/environment.yaml") as f:
+            cfg = yaml.safe_load(f)
+        INITIAL_LOAD_DATE = cfg["purchase"]["etl"]["initial_load_date"]
+
+      Replace all hard-coded date literals in ETL code with the corresponding
+      config variable. Document each externalised value with a comment citing the
+      original hard-coded value and the config key that replaces it.
+    validation:
+      success_criteria:
+        - No hard-coded date literals exist in Purchase ETL notebooks after migration
+        - config/environment.yaml contains all externalised date values under purchase.etl
+        - ETL notebooks load config at startup and reference config variables
+      test_cases:
+        - name: No hard-coded date literals in ETL
+          description: Static scan of Purchase ETL notebooks for hard-coded ISO date literals
+          assertion: "grep -r \"'[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}'\" src/etl/ = 0 matches"
+        - name: Config loads correctly in notebook
+          description: Unit test that loads environment.yaml and asserts initial_load_date key is present
+          assertion: "cfg['purchase']['etl']['initial_load_date'] is not None"
+
+  - id: CX-P002
+    action: new
+    dimension: Custom
+    name: Externalise hard-coded business factors with NULL guards and DQ bound assertions
+    intent: "Replace hard-coded business factors (e.g., multipliers, thresholds, rate constants) with externalised config values, add NULL guards, and add DQ bound assertions."
+    rationale: >
+      Hard-coded business factors (tax rates, conversion factors, quantity thresholds)
+      embedded in ETL or transformation logic are fragile and untraceable. Externalising
+      them enables governance review and change tracking. NULL guards prevent silent
+      calculation errors when a factor is not configured. DQ bound assertions catch
+      out-of-range values before they propagate downstream.
+    scope: "All numeric literals used as business-semantic multipliers, rates, or thresholds in Purchase ETL and SQL."
+    behavior: |
+      For each identified hard-coded business factor:
+
+      1. Add an entry to config/environment.yaml under purchase.business_rules:
+           purchase:
+             business_rules:
+               <factor_name>: <value>
+
+      2. In Python, load and apply a NULL guard:
+           factor_val = cfg["purchase"]["business_rules"].get("<factor_name>")
+           if factor_val is None:
+               raise ValueError("CX-P002: <factor_name> is not configured in environment.yaml")
+
+      3. After loading the factor, assert it is within expected bounds:
+           assert <lower_bound> <= factor_val <= <upper_bound>, (
+               f"CX-P002: <factor_name>={factor_val} is outside expected range [{lower_bound}, {upper_bound}]"
+           )
+
+      Document each factor with its business meaning, expected range, and the ETL
+      location where it is applied.
+    validation:
+      success_criteria:
+        - All business factors are defined in config/environment.yaml under purchase.business_rules
+        - NULL guard raises ValueError when a factor is missing from config
+        - Bound assertion raises AssertionError when a factor is outside its expected range
+      test_cases:
+        - name: NULL guard fires on missing factor
+          description: Remove a factor from config and assert ValueError raised on load
+          assertion: "ValueError raised: 'CX-P002: <factor_name> is not configured in environment.yaml'"
+        - name: Bound assertion fires on out-of-range value
+          description: Set a factor outside its documented range; assert AssertionError raised
+          assertion: "AssertionError raised: 'CX-P002: <factor_name>=<bad_value> is outside expected range'"
+
+  - id: CX-P003
+    action: new
+    dimension: Custom
+    name: Consolidate duplicate scalar functions into NULL-guarded Python UDFs in src/common/udfs.py
+    intent: "Consolidate duplicate scalar functions that appear multiple times in source stored procedures into a single NULL-guarded Python UDF or SQL function."
+    rationale: >
+      The Purchase product source contains repeated scalar function patterns (e.g.,
+      date-format transforms, string normalisation, numeric coercion) that are
+      copy-pasted across multiple stored procedures. Consolidating these into a
+      single, NULL-guarded UDF reduces maintenance surface and ensures consistent
+      NULL handling across all call sites.
+    scope: "Duplicate scalar function patterns identified across Purchase-scope stored procedures."
+    behavior: |
+      For each repeated scalar function pattern:
+
+      1. Identify all occurrences across source stored procedures
+      2. Create a single Python UDF or Spark SQL function in src/common/udfs.py:
+
+           from pyspark.sql.functions import udf
+           from pyspark.sql.types import StringType
+
+           @udf(returnType=StringType())
+           def <function_name>(val):
+               """<docstring citing original T-SQL function and all call sites>"""
+               if val is None:
+                   return None  # NULL guard
+               return <transformation logic>
+
+      3. Register as a Spark SQL function if needed in SQL notebooks:
+           spark.udf.register("<function_name>", <function_name>)
+
+      4. Replace all occurrences in ETL notebooks with the UDF call
+      5. Add a unit test in tests/common/test_udfs.py covering: None input (NULL guard),
+         empty string input, boundary values, and representative valid input
+    validation:
+      success_criteria:
+        - Each identified duplicate scalar pattern appears exactly once in src/common/udfs.py
+        - All call sites in ETL notebooks reference the UDF instead of inline logic
+        - Unit tests in tests/common/test_udfs.py cover None input, empty string, boundary values
+      test_cases:
+        - name: NULL guard returns None on None input
+          description: Call each UDF with None; assert return value is None
+          assertion: "<function_name>(None) == None"
+        - name: No duplicate scalar logic in ETL notebooks
+          description: Static scan of src/etl/ for inline copy of any pattern consolidated in udfs.py
+          assertion: "No duplicated scalar function body found in src/etl/ notebooks"
+
+  - id: CX-P004
+    action: new
+    dimension: Custom
+    name: Enforce standard Purchase product codebase layout
+    intent: "Enforce the standard Purchase product codebase layout: all generated artifacts must be placed in the prescribed directory structure."
+    rationale: >
+      The Purchase product introduces a multi-module codebase with shared helpers,
+      ETL notebooks, database DDL, configuration, documentation, and tests. Without
+      a standard layout, artifacts become scattered and tooling (CI, import resolution,
+      documentation generation) breaks. A canonical layout rule ensures all code
+      generators and manual contributors produce artifacts in the correct locations.
+    scope: "All files and directories produced for the Purchase product codebase."
+    behavior: |
+      All generated and hand-written artifacts for the Purchase product must be placed
+      under the following layout:
+
+        config/
+          environment.yaml          # externalised config (CX-P001, CX-P002)
+          exclusions.yaml           # out-of-scope object list
+          workflows/                # Databricks Workflow JSON definitions
+        docs/
+          design.md                 # ETL design document
+          data-dictionary.md        # column-level data dictionary
+        src/
+          common/
+            constants.py            # catalog/schema/table constants
+            udfs.py                 # consolidated UDFs (CX-P003)
+            scd2_merge.py           # SCD-2 merge helper (OB-P004)
+            sk_resolver.py          # surrogate key resolver (OB-P004)
+            fact_merge.py           # fact merge helper (OB-P004)
+          db/
+            ddl/                    # CREATE TABLE / VIEW DDL files
+            grants/                 # GRANT statements
+          etl/
+            migrate_staged_purchase_data.py
+            nb_extract_watermark.py
+            nb_extract_purchase.py
+          init/
+            bootstrap_<dim>_sentinel.py  # one per SCD-2 dim (per OB-P001)
+            reseed_purchase_environment.py
+        tests/
+          common/                   # unit tests for shared helpers
+          etl/                      # integration tests for ETL notebooks
+
+      Code generators must validate output file paths against this layout before writing.
+      Any artifact placed outside this layout must include a rationale comment.
+    validation:
+      success_criteria:
+        - All generated artifacts exist under the prescribed directory layout after generation
+        - No generated file is placed outside the layout without a rationale comment
+        - Code generator validates output path against layout before writing
+      test_cases:
+        - name: Required directories exist after init
+          description: After environment init, assert all top-level directories (config, docs, src, tests) exist
+          assertion: "os.path.isdir('config') AND os.path.isdir('src') AND os.path.isdir('tests') AND os.path.isdir('docs')"
+        - name: Required common modules exist
+          description: After code generation, assert constants.py, scd2_merge.py, sk_resolver.py, fact_merge.py exist in src/common/
+          assertion: "All four files present in src/common/"
+
+  - id: CX-P005
+    action: new
+    dimension: Custom
+    name: Enforce standard Python notebook skeleton for all Purchase ETL notebooks
+    intent: "Enforce the standard Python notebook convention for all Purchase ETL notebooks: constants.py import, taskValues lineage_key injection, zero-rows guard, and conditional OPTIMIZE."
+    rationale: >
+      Without a shared notebook convention, individual ETL notebooks implement the
+      same boilerplate patterns differently, leading to inconsistency in lineage
+      propagation, silent zero-row success on empty batches, and unconditional OPTIMIZE
+      runs on low-volume nights. A product-level convention rule ensures all Purchase
+      notebooks use the same structural skeleton.
+    scope: "All Python ETL notebooks in src/etl/ and src/init/ for the Purchase product."
+    behavior: |
+      Every Purchase ETL notebook must follow this structural skeleton:
+
+        # 1. IMPORTS
+        from src.common.constants import *
+        from src.common.lineage_utils import open_lineage_record, close_lineage_record
+        from src.common.etl_control import get_last_etl_cutoff, set_etl_cutoff
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 2. LINEAGE KEY (from upstream task via taskValues — see LN-P001)
+        lineage_key = dbutils.jobs.taskValues.get(
+            taskKey="nb_extract_watermark", key="lineage_key"
+        )
+
+        # 3. ZERO-ROWS GUARD (skip processing on empty batch)
+        staging_count = spark.sql(
+            "SELECT COUNT(*) FROM " + PURCHASE_STAGING_TABLE
+        ).collect()[0][0]
+        if staging_count == 0:
+            logger.info("Zero rows in staging — skipping ETL processing for this run")
+            dbutils.notebook.exit("SKIPPED: zero rows")
+
+        # 4. MAIN ETL LOGIC
+        try:
+            rows_merged = <ETL steps>
+            <QA checks>
+        except Exception as e:
+            close_lineage_record(spark, lineage_key, rows_merged=0, succeeded=False)
+            raise
+
+        # 5. CONDITIONAL OPTIMIZE (see PE-P002)
+        if rows_merged > FACT_OPTIMIZE_ROW_THRESHOLD:
+            spark.sql(f"OPTIMIZE {FACT_PURCHASE_TABLE}")
+
+        # 6. CLOSE LINEAGE
+        close_lineage_record(spark, lineage_key, rows_merged=rows_merged, succeeded=True)
+    validation:
+      success_criteria:
+        - All Purchase ETL notebooks include all 6 skeleton sections in the prescribed order
+        - lineage_key is obtained via dbutils.jobs.taskValues.get in every notebook except nb_extract_watermark
+        - Zero-rows guard is present in every ETL notebook
+        - close_lineage_record is called in both the success path and the except block
+      test_cases:
+        - name: Zero-rows guard exits notebook on empty batch
+          description: Load zero rows to staging; assert notebook exits with 'SKIPPED: zero rows'
+          assertion: "dbutils.notebook.exit called with 'SKIPPED: zero rows' message"
+        - name: Lineage closed on exception
+          description: Inject an exception in main ETL logic; assert close_lineage_record called with succeeded=False
+          assertion: "close_lineage_record(spark, lineage_key, rows_merged=0, succeeded=False) called in except block"
+
+  - id: CX-P006
+    action: new
+    dimension: Custom
+    name: Enforce standard SQL DDL file header block for all Purchase DDL files
+    intent: "Enforce a standard SQL DDL file header block for all DDL files generated for the Purchase product."
+    rationale: >
+      Generated DDL files require a standard header so that reviewers can identify
+      the source object being replaced, the target object being created, the
+      transformation rules applied, and the generation timestamp. Without a standard
+      header, auditing which project and product rules were applied to each file
+      requires searching external documents.
+    scope: "All SQL DDL files in src/db/ddl/ for the Purchase product."
+    behavior: |
+      Every SQL DDL file for the Purchase product must begin with the following
+      header block:
+
+        -- ============================================================
+        -- PROJECT  : Inventory_Stock_Project
+        -- PRODUCT  : Purchase
+        -- FILE     : <filename>.sql
+        -- PURPOSE  : <one-line description of the object being created>
+        -- SOURCE   : <source schema.object> (<source platform>)
+        -- TARGET   : <target catalog.schema.object> (<target platform>)
+        -- RULES    : <comma-separated list of rule IDs applied, e.g. TY-P001, OB-P001>
+        -- GENERATED: <ISO-8601 date>
+        -- ============================================================
+
+      The RULES field must list every project and product rule ID that influenced
+      this file's content. Code generators must populate this field automatically
+      by recording which rules were evaluated during generation.
+    validation:
+      success_criteria:
+        - Every DDL file in src/db/ddl/ begins with the standard header block
+        - The RULES field in each header lists all rule IDs that influenced the file
+        - GENERATED field contains a valid ISO-8601 date
+      test_cases:
+        - name: Header block present in all DDL files
+          description: Static scan of src/db/ddl/ — assert all .sql files begin with the standard header comment block
+          assertion: "grep -l '-- PROJECT  : Inventory_Stock_Project' src/db/ddl/*.sql count == total .sql file count"
+        - name: RULES field populated
+          description: For each DDL file, assert RULES field is non-empty
+          assertion: "grep -c '-- RULES    : $' src/db/ddl/*.sql = 0 (no empty RULES fields)"

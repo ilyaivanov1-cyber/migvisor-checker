@@ -1,0 +1,66 @@
+# =============================================================================
+# Project  : Inventory_Stock_Project
+# Product  : Purchase
+# File     : config/environment.dev.yaml
+# Purpose  : Development environment overrides for the Purchase ETL product.
+#            Load this file INSTEAD OF config/environment.yaml when running
+#            locally or against a dev catalog.
+#
+#            Usage in notebooks / local scripts:
+#              import yaml, os
+#              env = os.getenv("PURCHASE_ENV", "prod")
+#              cfg_file = f"config/environment.{env}.yaml" if env != "prod" \
+#                         else "config/environment.yaml"
+#              with open(cfg_file) as f:
+#                  cfg = yaml.safe_load(f)
+#
+# NOTE     : This file contains dev placeholders only.
+#            Do NOT commit real credentials — use Databricks Secret Scopes.
+# =============================================================================
+
+purchase:
+
+  # ---------------------------------------------------------------------------
+  # ETL operational parameters — dev overrides
+  # ---------------------------------------------------------------------------
+  etl:
+
+    initial_load_date: "1900-01-01"
+
+    # Wider lookback window for dev re-runs and backfill testing
+    batch_lookback_days: 7
+
+    # Lower threshold so OPTIMIZE runs on small dev data volumes
+    fact_optimize_row_threshold: 0
+
+    # Dev JDBC connection — replace with dev SQL Server instance details
+    # or use a mock / sample data approach for local testing
+    jdbc_driver:   "{{DEV_JDBC_DRIVER_CLASS}}"
+    jdbc_user:     "{{DEV_JDBC_USER}}"
+    jdbc_password: "{{DEV_JDBC_PASSWORD}}"
+    source_table:  "{{DEV_SOURCE_TABLE_FQTN}}"
+
+  # ---------------------------------------------------------------------------
+  # Dev catalog override
+  # ---------------------------------------------------------------------------
+  catalog:
+    # Override Unity Catalog target for dev runs
+    # Replace with your personal or shared dev catalog name
+    name: "inventory_stock_dev"
+    bronze_schema:      "inventory_stock_dev.bronze"
+    silver_fact_schema: "inventory_stock_dev.silver_fact"
+    silver_dim_schema:  "inventory_stock_dev.silver_dim"
+
+  # ---------------------------------------------------------------------------
+  # Business-rule validation parameters — relaxed for dev
+  # ---------------------------------------------------------------------------
+  business_rules:
+
+    min_ordered_quantity: 0
+    min_ordered_outers: 0
+
+    # Allow wider date tolerance in dev to avoid rejecting historical backfill rows
+    date_window_tolerance_days: 30
+
+    # Relax package requirement so sparse dev datasets don't fail QA-P004
+    package_required: false

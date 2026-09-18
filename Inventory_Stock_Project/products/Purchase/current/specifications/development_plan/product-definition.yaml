@@ -1,0 +1,224 @@
+# Purchase — ODPS 4.1 Product Definition
+# Generated: 2026-09-07 | Project: Inventory_Stock_Project
+
+schema: https://opendataproducts.org/v4.1/schema/odps.yaml
+version: "4.1"
+
+product:
+
+  # -------------------------------------------------------------------------
+  # Details
+  # -------------------------------------------------------------------------
+  details:
+    en:
+      productID: purchase
+      name: Purchase
+      description: >
+        Grain-level Delta Lake fact table for procurement transactions on Databricks.
+        Each row represents one purchase order line identified by purchase_key (IDENTITY),
+        associated with a supplier, stock item, and order date via resolved SCD-2
+        surrogate keys. Includes five post-load data quality assertions (row count
+        reconciliation, orphaned SK detection, RI checks, business rule assertions,
+        and centralised DQ rejection tracking) and full end-to-end lineage via
+        lineage_key propagation from nb_extract_watermark to fact_purchase.
+        Corrects the legacy SSIS staging-truncation bug by writing bronze.purchase_staging
+        in OVERWRITE mode on every run.
+      valueProposition: >
+        Provides reliable, auditable, and queryable procurement analytics on a modern
+        cloud-native Databricks platform. Eliminates the stale-row defect that caused
+        silent data quality issues in the predecessor pipeline. Enables the
+        wwidw_purchase_and_sale_per_stockitem_dynamic and wwidw_ordered_by_supplier
+        Power BI reports through Databricks SQL Warehouse, and establishes the
+        observability foundation (lineage, DQ rejection store, watermark control)
+        required for production operations.
+      type: analytical_data_product
+      status: draft
+      visibility: organisation
+      categories:
+        - procurement
+        - purchasing
+        - supply_chain
+      tags:
+        - delta_lake
+        - medallion
+        - incremental_etl
+        - scd2
+        - fact_table
+        - databricks
+
+  # -------------------------------------------------------------------------
+  # Input Ports (x-inputPorts extension)
+  # -------------------------------------------------------------------------
+  x-inputPorts:
+
+    - inputName: purchase_staging
+      inputType: delta_table
+      location: inventory_stock.bronze.purchase_staging
+      format: delta
+      frequency: daily
+      description: >
+        Primary source for the ETL promotion step. Populated by nb_extract_purchase
+        in OVERWRITE mode at the start of each nightly run. Contains incremental
+        purchase order lines extracted since the last watermark cutoff.
+
+    - inputName: supplier_dimension
+      inputType: delta_table
+      location: inventory_stock.silver_dim.supplier
+      format: delta
+      frequency: daily
+      description: >
+        SCD-2 supplier dimension. External dependency — loaded by a separate
+        product before the Purchase ETL executes. Required for temporal range
+        join surrogate key resolution in sk_resolver.py.
+
+    - inputName: stock_item_dimension
+      inputType: delta_table
+      location: inventory_stock.silver_dim.stock_item
+      format: delta
+      frequency: daily
+      description: >
+        SCD-2 stock item dimension. External dependency — loaded by a separate
+        product before the Purchase ETL executes. Required for temporal range
+        join surrogate key resolution in sk_resolver.py.
+
+    - inputName: date_dimension
+      inputType: delta_table
+      location: inventory_stock.silver_dim.date
+      format: delta
+      frequency: static
+      description: >
+        Date dimension. Static reference table — no runtime load dependency.
+        FK target for date_key in fact_purchase.
+
+    - inputName: etl_cutoff
+      inputType: delta_table
+      location: inventory_stock.bronze.etl_cutoff
+      format: delta
+      frequency: daily
+      description: >
+        High-watermark control table. Read by nb_extract_watermark at job start
+        to bound the incremental extract window.
+
+  # -------------------------------------------------------------------------
+  # Output Ports (dataAccess)
+  # -------------------------------------------------------------------------
+  dataAccess:
+
+    default:
+      outputName: fact_purchase_sql_warehouse
+      outputType: sql_endpoint
+      outputFormat: delta_sql
+      auth: Unity Catalog RBAC (service principal or user credentials)
+      spec: >
+        Databricks SQL Warehouse connected to Unity Catalog inventory_stock.
+        Primary dataset: inventory_stock.silver_fact.fact_purchase.
+        Column names are lowercase_snake_case; all SCD-2 FK columns are resolved
+        surrogate keys (supplier_key, stock_item_key; date_key is a DATE value).
+        Consumers must filter on lineage_key or date_key for incremental queries.
+      url: "dbsql://{{DATABRICKS_HOST}}/sql/1.0/warehouses/{{WAREHOUSE_ID}}"
+      datasets:
+        primary:
+          - inventory_stock.silver_fact.fact_purchase
+        supporting:
+          - inventory_stock.silver_dim.supplier
+          - inventory_stock.silver_dim.stock_item
+          - inventory_stock.silver_dim.date
+
+    bi_reports:
+      outputName: power_bi_purchase_reports
+      outputType: bi_connection
+      outputFormat: power_bi_dataset
+      auth: Unity Catalog service principal (read-only)
+      spec: >
+        Two Power BI reports reconnected to Databricks SQL Warehouse from the
+        legacy direct SQL Server connection. Table and column references updated
+        to inventory_stock target naming conventions.
+      reports:
+        - name: wwidw_purchase_and_sale_per_stockitem_dynamic
+          description: Cross-domain procurement-vs-sales comparison per stock item.
+          crossProductDependency: inventory_stock.silver_fact.fact_sale (Sales_Orders product)
+        - name: wwidw_ordered_by_supplier
+          description: Supplier performance and order fill-rate analytics.
+
+  # -------------------------------------------------------------------------
+  # Data Quality
+  # -------------------------------------------------------------------------
+  dataQuality:
+
+    default:
+      - dimension: completeness
+        target: inventory_stock.silver_fact.fact_purchase
+        description: >
+          QA-P001: Row count in silver_fact.fact_purchase after each MERGE must
+          equal the row count in bronze.purchase_staging for the same batch.
+          Failure raises RuntimeError and marks the Databricks Workflow task FAILED.
+        strategy: zero_tolerance
+        blocking: true
+
+      - dimension: consistency
+        target: inventory_stock.silver_fact.fact_purchase
+        description: >
+          QA-P003: Referential integrity checks via LEFT ANTI JOIN per FK column
+          (date_key, supplier_key, stock_item_key). Violations written to
+          inventory_stock.bronze.dq_rejections with lineage_key.
+        strategy: reject_and_continue
+        blocking: false
+
+      - dimension: accuracy
+        target: inventory_stock.silver_fact.fact_purchase
+        description: >
+          QA-P004: Business rule assertions — negative ordered_outers/ordered_quantity,
+          date_key outside expected batch window, null/empty package.
+          Violations logged at WARNING level; non-blocking.
+        strategy: log_and_continue
+        blocking: false
+
+      - dimension: uniqueness
+        target: inventory_stock.silver_fact.fact_purchase
+        description: >
+          QA-P002: Orphaned surrogate key detection via LEFT ANTI JOIN for
+          supplier_key and stock_item_key (excluding key=0 sentinel).
+          Informational only; non-blocking.
+        strategy: log_and_continue
+        blocking: false
+
+      - dimension: traceability
+        target: inventory_stock.bronze.dq_rejections
+        description: >
+          QA-P005: All DQ violations are written to the centralised rejection store
+          with lineage_key, rule_id, source_table, pk_column, pk_value,
+          violation_column, violation_value, and detection timestamp.
+        strategy: centralised_sink
+        blocking: false
+
+  # -------------------------------------------------------------------------
+  # SLA
+  # -------------------------------------------------------------------------
+  SLA:
+
+    default:
+      - dimension: updateFrequency
+        value: daily
+        unit: day
+        description: Nightly incremental load; one batch per calendar day.
+
+      - dimension: latency
+        value: 4
+        unit: hours
+        description: >
+          Data must be available in silver_fact.fact_purchase by 06:00 UTC;
+          nightly job starts at 02:00 UTC.
+
+      - dimension: uptime
+        value: 99.5
+        unit: percent
+        description: >
+          Target availability of the Databricks SQL Warehouse endpoint for
+          BI consumers during business hours.
+
+      - dimension: retentionPolicy
+        silver: 7_years
+        bronze: 90_days
+        description: >
+          silver_fact.fact_purchase retained for 7 years per data governance policy.
+          bronze.purchase_staging and control tables retained for 90 days.

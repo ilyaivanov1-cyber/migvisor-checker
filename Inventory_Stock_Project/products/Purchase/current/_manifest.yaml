@@ -1,0 +1,303 @@
+product: Purchase
+project: Inventory_Stock_Project
+pipeline:
+  stage: to-be
+  completedSteps:
+    - scope
+    - as-is
+    - rules
+    - to-be
+sdd:
+  stage: init
+  completedSteps:
+    - catalog
+    - define
+    - requirements
+    - design
+    - tasks
+    - emit-md
+    - init
+  artifacts:
+    catalog: project/current/catalog.yaml
+    productDefinition: products/Purchase/current/specifications/development_plan/product-definition.yaml
+    requirements: products/Purchase/current/specifications/development_plan/requirements.md
+    design: products/Purchase/current/specifications/development_plan/design.md
+    tasks: products/Purchase/current/specifications/development_plan/tasks.md
+sb:
+  sddVersion: "4.1"
+  domain: "Procurement / Purchasing"
+  publisher: Inventory_Stock_Project
+  initialized: "2026-09-07T00:00:00Z"
+  completedSteps:
+    - init
+    - plan
+    - generate-db
+    - generate-etl
+    - validation
+  tasks:
+    - id: TASK-001
+      type: db
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-002
+      type: db
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-003
+      type: db
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-004
+      type: db
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-005
+      type: db
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-006
+      type: db
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-007
+      type: db
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-008
+      type: db
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-009
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-010
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-011
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-012
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-013
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-014
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-015
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-016
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-017
+      type: etl
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-018
+      type: config
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-019
+      type: config
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-020
+      type: test
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-021
+      type: test
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-022
+      type: test
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-023
+      type: docs
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-024
+      type: docs
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-025
+      type: docs
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+    - id: TASK-026
+      type: docs
+      status: completed
+      timestamp: "2026-09-07T00:00:00Z"
+      version: null
+  generated:
+    - products/Purchase/current/codebase/build-plan.md
+    - products/Purchase/current/codebase/src/db/ddl/bronze_lineage_run.sql
+    - products/Purchase/current/codebase/src/db/ddl/bronze_etl_cutoff.sql
+    - products/Purchase/current/codebase/src/db/ddl/bronze_purchase_staging.sql
+    - products/Purchase/current/codebase/src/db/ddl/bronze_dq_rejections.sql
+    - products/Purchase/current/codebase/src/db/ddl/silver_fact_fact_purchase.sql
+    - products/Purchase/current/codebase/src/db/ddl/silver_dim_supplier_current.sql
+    - products/Purchase/current/codebase/src/db/ddl/silver_dim_stock_item_current.sql
+    - products/Purchase/current/codebase/src/db/grants/purchase_grants.sql
+    - products/Purchase/current/codebase/src/common/constants.py
+    - products/Purchase/current/codebase/src/common/scd2_merge.py
+    - products/Purchase/current/codebase/src/common/sk_resolver.py
+    - products/Purchase/current/codebase/src/common/fact_merge.py
+    - products/Purchase/current/codebase/src/common/udfs.py
+    - products/Purchase/current/codebase/src/etl/nb_extract_watermark.py
+    - products/Purchase/current/codebase/src/etl/nb_extract_purchase.py
+    - products/Purchase/current/codebase/src/etl/migrate_staged_purchase_data.py
+    - products/Purchase/current/codebase/src/init/reseed_purchase_environment.py
+    - products/Purchase/current/codebase/config/environment.yaml
+    - products/Purchase/current/codebase/config/workflows/nightly_etl_purchase.json
+    - products/Purchase/current/codebase/tests/common/test_sk_resolver.py
+    - products/Purchase/current/codebase/tests/common/test_udfs.py
+    - products/Purchase/current/codebase/tests/etl/test_migrate_staged_purchase_data.py
+    - products/Purchase/current/codebase/docs/bi/wwidw_purchase_and_sale_per_stockitem_dynamic_reconnection.md
+    - products/Purchase/current/codebase/docs/bi/wwidw_ordered_by_supplier_reconnection.md
+    - products/Purchase/current/codebase/docs/design.md
+    - products/Purchase/current/codebase/docs/data-dictionary.md
+    - products/Purchase/current/codebase/validation-report.md
+ruleInheritance:
+  projectRulesVersion: "1.0"
+  overrides:
+    - ruleId: "TY-P001"
+      action: override
+      overrides: "TY-012"
+      reason: "SCD-2 validity columns (valid_from, valid_to) on Purchase SCD-2 dimension tables must be DATE, not TIMESTAMP_NTZ, to align with business date semantics and SCD-2 temporal JOIN probe columns"
+    - ruleId: "TY-P002"
+      action: extend
+      extends: "TY-012"
+      reason: "Define the full 5-column SCD-2 control block pattern for Purchase dimension tables"
+    - ruleId: "TY-P003"
+      action: extend
+      extends: "TY-005"
+      reason: "Add explicit MONEY and SMALLMONEY type mappings not covered by project TY rules"
+    - ruleId: "TY-P004"
+      action: extend
+      extends: "TY-009"
+      reason: "Map SQL Server geography CLR type to three target columns (_wkt, _lat, _lon)"
+    - ruleId: "OB-P001"
+      action: extend
+      extends: "OB-001"
+      reason: "Require key=0 sentinel row bootstrap notebook for every SCD-2 dimension table"
+    - ruleId: "OB-P002"
+      action: extend
+      extends: "OB-003"
+      reason: "Add lineage_key and _extracted_at_utc audit columns to purchase_staging"
+    - ruleId: "OB-P003"
+      action: extend
+      extends: "OB-008"
+      reason: "Classify analytics views as MATERIALIZED vs regular VIEW based on aggregation presence"
+    - ruleId: "OB-P004"
+      action: extend
+      extends: "OB-005"
+      reason: "Promote scd2_merge.py, sk_resolver.py, fact_merge.py as explicit named shared helper modules"
+    - ruleId: "PE-P001"
+      action: extend
+      extends: "PE-002"
+      reason: "Add PARTITIONED BY + ZORDER alternative strategy for pre-DBR 13.3 runtimes"
+    - ruleId: "PE-P002"
+      action: extend
+      extends: "PE-003"
+      reason: "Make OPTIMIZE conditional on rows_merged > FACT_OPTIMIZE_ROW_THRESHOLD (10,000)"
+    - ruleId: "LN-P001"
+      action: extend
+      extends: "LN-003"
+      reason: "Specify dbutils.jobs.taskValues as the exact lineage_key injection mechanism for the Purchase Workflow architecture"
+    - ruleId: "SX-P001"
+      action: extend
+      extends: "SX-004"
+      reason: "Add exact dbutils.jobs.taskValues pattern as canonical replacement for EXEC Integration.GetLineageKey"
+    - ruleId: "SX-P002"
+      action: extend
+      extends: "SX-017"
+      reason: "Add CONVERT(CHAR(8), GETDATE()-N, 112) → DATE_FORMAT(DATE_SUB(current_date(), N), 'yyyyMMdd') mapping"
+    - ruleId: "SX-P003"
+      action: extend
+      extends: "SX-003"
+      reason: "Add sk_resolver.py pre-join step pattern as canonical replacement for inline UPDATE staging SET key = (SELECT TOP(1)...) pattern"
+    - ruleId: "SX-P004"
+      action: new
+      dimension: "SX"
+      reason: "Convert inline lineage-close UPDATE Integration.Lineage pattern to spark.sql UPDATE with Python variable injection"
+    - ruleId: "QA-P001"
+      action: new
+      dimension: "QA"
+      reason: "Row count reconciliation between staging and fact table — blocking failure on mismatch"
+    - ruleId: "QA-P002"
+      action: new
+      dimension: "QA"
+      reason: "Orphaned surrogate key detection — informational, non-blocking"
+    - ruleId: "QA-P003"
+      action: new
+      dimension: "QA"
+      reason: "RI checks via LEFT ANTI JOIN; violations written to dq_rejections"
+    - ruleId: "QA-P004"
+      action: new
+      dimension: "QA"
+      reason: "Business rule assertions on loaded Purchase data — informational, non-blocking"
+    - ruleId: "QA-P005"
+      action: new
+      dimension: "QA"
+      reason: "Centralised DQ rejection store with lineage_key for traceability"
+    - ruleId: "CX-P001"
+      action: new
+      dimension: "CX"
+      reason: "Externalise hard-coded date filters to config/environment.yaml"
+    - ruleId: "CX-P002"
+      action: new
+      dimension: "CX"
+      reason: "Externalise hard-coded business factors; add NULL guards and DQ bound assertions"
+    - ruleId: "CX-P003"
+      action: new
+      dimension: "CX"
+      reason: "Consolidate duplicate scalar functions into NULL-guarded Python UDFs"
+    - ruleId: "CX-P004"
+      action: new
+      dimension: "CX"
+      reason: "Enforce standard Purchase codebase layout"
+    - ruleId: "CX-P005"
+      action: new
+      dimension: "CX"
+      reason: "Enforce standard ETL notebook skeleton"
+    - ruleId: "CX-P006"
+      action: new
+      dimension: "CX"
+      reason: "Enforce standard SQL DDL file header block"

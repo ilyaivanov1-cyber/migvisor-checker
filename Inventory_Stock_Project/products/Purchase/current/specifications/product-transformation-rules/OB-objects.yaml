@@ -1,0 +1,1226 @@
+dimension: Objects
+prefix: OB
+product: Purchase
+inherits_from: Inventory_Stock_Project
+generated: "2026-09-07"
+
+# ── INHERITED PROJECT RULES ──────────────────────────────────
+rules:
+
+  - id: OB-001
+    dimension: Objects
+    name: SCD-2 Dimension Tables to Delta Lake Managed Tables with _current Views
+    intent: >
+      Migrate the two SCD Type-2 conformed dimension tables (dimension.supplier and
+      dimension.[stock item]) from SQL Server to Delta Lake managed tables in the
+      inventory_stock.silver_dim schema, preserving the Valid From / Valid To / Is Current
+      SCD-2 pattern, renaming the space-bearing object dimension.[stock item] to
+      silver_dim.stock_item, and providing a _current view over each dimension for
+      efficient surrogate key lookups in the Purchase ETL.
+    activation:
+      preconditions:
+        - Source object is a table residing in the SQL Server dimension schema
+        - Table name matches one of: supplier, stock item (space-in-name variant)
+        - Table carries SCD-2 columns: Valid From (datetime2), Valid To (datetime2)
+        - Unity Catalog catalog inventory_stock and schema inventory_stock.silver_dim exist
+      scope: project
+    transformation:
+      source:
+        object_type: TABLE
+        schema_pattern: "dimension.supplier | dimension.[stock item]"
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: DELTA_MANAGED_TABLE
+        schema: "inventory_stock.silver_dim"
+        naming_convention: "inventory_stock.silver_dim.<snake_case_table_name>"
+        platform: "Databricks (Delta Lake)"
+        properties:
+          - delta.enableChangeDataFeed = true
+          - delta.minReaderVersion = 2
+          - delta.minWriterVersion = 5
+          - TBLPROPERTIES layer = 'silver_dim'
+    algorithm: >
+      1. Map source tables to target names (snake_case, strip schema prefix, remove spaces):
+         - dimension.supplier          → inventory_stock.silver_dim.supplier
+         - dimension.[stock item]      → inventory_stock.silver_dim.stock_item
+      2. Translate all column data types per the TY (Types) dimension rules; preserve
+         Valid From / Valid To as TIMESTAMP (from datetime2); retain Is Current as BOOLEAN.
+      3. Convert IDENTITY int surrogate key to INT GENERATED ALWAYS AS IDENTITY in the DDL.
+      4. Retain the SCD-2 pattern: Valid_From TIMESTAMP NOT NULL, Valid_To TIMESTAMP NOT NULL,
+         Is_Current BOOLEAN NOT NULL. No structural refactoring of the SCD-2 design.
+      5. Rename space-in-name column references: [stock item] → stock_item throughout all
+         DDL, ETL code, and BI query objects.
+      6. Create a companion _current view (CREATE VIEW silver_dim.supplier_current AS
+         SELECT * FROM silver_dim.supplier WHERE is_current = TRUE) for each SCD-2
+         dimension to simplify surrogate key lookups in the Purchase ETL notebook.
+      7. Set delta.enableChangeDataFeed = true to support incremental SCD-2 processing.
+      8. Register both tables and views in Unity Catalog; grant SELECT to the ETL service
+         principal and the BI service principal group.
+      9. Emit CREATE TABLE … USING DELTA and CREATE VIEW … statements in generated DDL files.
+    validation:
+      success_criteria:
+        - Both target tables (supplier, stock_item) exist in inventory_stock.silver_dim
+        - Companion _current views (supplier_current, stock_item_current) exist and
+          return only rows where is_current = TRUE
+        - No space characters appear in any object name in the target catalog
+        - Row counts in target tables match source counts post initial dimension load
+        - Valid_From / Valid_To columns present with TIMESTAMP type; Is_Current is BOOLEAN
+        - SCD-2 uniqueness: for any given natural key only one row where is_current = TRUE
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - conformity
+        - uniqueness
+      test_cases:
+        - name: dim_table_existence
+          description: >
+            Assert inventory_stock.silver_dim.supplier and
+            inventory_stock.silver_dim.stock_item exist
+          expected: Both tables present in Unity Catalog
+        - name: dim_current_view_existence
+          description: >
+            Assert supplier_current and stock_item_current views exist and
+            return is_current = TRUE rows only
+          expected: Views present; SELECT COUNT(*) WHERE is_current = FALSE returns 0
+        - name: dim_no_space_in_names
+          description: >
+            Inspect Unity Catalog column and table names for space characters
+          expected: 0 object names containing spaces
+        - name: dim_row_count_match
+          description: >
+            Compare source vs target row counts for each dimension table post load
+          expected: Delta <= 0 rows discrepancy
+        - name: dim_scd2_current_uniqueness
+          description: >
+            For each natural key (wwiSupplierID / wwiStockItemID) assert at most one
+            row with is_current = TRUE
+          expected: COUNT(*) = COUNT(DISTINCT <natural_key>) on the _current view
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: EXTENDED   # by OB-P001 — key=0 sentinel bootstrap MERGE notebook required for each SCD-2 dimension
+
+  - id: OB-002
+    dimension: Objects
+    name: Fact Table (fact.purchase) to Delta Lake Managed Table in silver_fact
+    intent: >
+      Migrate fact.purchase from SQL Server to a Delta Lake managed table in
+      inventory_stock.silver_fact, replacing the BIGINT IDENTITY surrogate key
+      (PurchaseKey) with BIGINT GENERATED ALWAYS AS IDENTITY, applying CLUSTER BY on
+      high-cardinality FK and date columns, and enabling optimized write to reduce
+      small-file accumulation from the daily incremental upsert pattern.
+    activation:
+      preconditions:
+        - Source object is fact.purchase in the SQL Server fact schema
+        - Unity Catalog catalog inventory_stock and schema inventory_stock.silver_fact exist
+      scope: project
+    transformation:
+      source:
+        object_type: TABLE
+        schema_pattern: "fact.purchase"
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: DELTA_MANAGED_TABLE
+        schema: "inventory_stock.silver_fact"
+        naming_convention: "inventory_stock.silver_fact.purchase"
+        platform: "Databricks (Delta Lake)"
+        properties:
+          - delta.enableChangeDataFeed = false
+          - delta.autoOptimize.optimizeWrite = true
+          - delta.autoOptimize.autoCompact = true
+          - TBLPROPERTIES layer = 'silver_fact'
+          - CLUSTER BY (date_key, supplier_key, stock_item_key)
+    algorithm: >
+      1. Map fact.purchase → inventory_stock.silver_fact.purchase (snake_case columns;
+         strip brackets from column names: [Date Key] → date_key, [Supplier Key] →
+         supplier_key, etc.).
+      2. Replace BIGINT IDENTITY PK (PurchaseKey) with BIGINT GENERATED ALWAYS AS IDENTITY
+         in the CREATE TABLE DDL. Retain purchase_key as the primary surrogate key column.
+      3. Translate all column data types per TY dimension rules (see type mapping):
+         - int → INT; bigint → BIGINT; nvarchar(50) → STRING; bit → BOOLEAN;
+           date → DATE; datetime2 → TIMESTAMP.
+      4. Do NOT enforce FOREIGN KEY constraints; document referential relationships as
+         data quality expectations and Delta table comments.
+      5. Apply CLUSTER BY (date_key, supplier_key, stock_item_key) using Liquid Clustering
+         (Databricks Runtime 13.3+) or Z-ORDER in OPTIMIZE for earlier runtimes, to optimise
+         the supplier performance and stock-item cross-domain BI query patterns.
+      6. Set delta.autoOptimize.optimizeWrite = true and delta.autoOptimize.autoCompact = true
+         to manage small files from the daily incremental order-level delete+insert pattern.
+      7. Add standard audit columns: load_timestamp TIMESTAMP DEFAULT current_timestamp(),
+         etl_run_id STRING to replace the lineage_key FK with a portable run identifier.
+      8. Emit CREATE TABLE … USING DELTA statement in generated DDL.
+    validation:
+      success_criteria:
+        - inventory_stock.silver_fact.purchase exists in Unity Catalog
+        - purchase_key column has GENERATED ALWAYS AS IDENTITY; no manual IDENTITY inserts
+        - All 11 source columns mapped with correct target data types
+        - No FOREIGN KEY constraint DDL present in the target table definition
+        - Row counts match source post initial full load
+        - Cluster / Z-ORDER applied on date_key, supplier_key, stock_item_key
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - conformity
+        - uniqueness
+      test_cases:
+        - name: fact_table_existence
+          description: Assert inventory_stock.silver_fact.purchase exists
+          expected: Table present in Unity Catalog
+        - name: fact_identity_column
+          description: >
+            Assert purchase_key column has GENERATED ALWAYS AS IDENTITY in table DDL
+          expected: IDENTITY attribute present on purchase_key
+        - name: fact_row_count_match
+          description: Compare source vs target row counts post initial full load
+          expected: Zero discrepancy
+        - name: fact_fk_referential_check
+          description: >
+            Left-join supplier_key and stock_item_key to their respective dimension
+            _current views; assert no orphaned keys beyond key=0 sentinel rows
+          expected: 0 orphaned FK values excluding the key=0 unknown sentinel
+        - name: fact_cluster_columns
+          description: >
+            Run EXPLAIN on a query filtering by date_key and supplier_key;
+            assert partition or cluster pruning is applied
+          expected: Query plan shows cluster or partition pruning
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: OB-003
+    dimension: Objects
+    name: Staging Table (integration.purchase_staging) to Bronze Delta Table with Overwrite Mode
+    intent: >
+      Migrate integration.purchase_staging to a bronze Delta Lake managed table in
+      inventory_stock.bronze, implementing proper overwrite semantics at each ETL run start
+      to correct the confirmed SSIS staging-truncation bug (which targeted
+      Integration.Order_Staging instead of Integration.Purchase_Staging, causing stale
+      rows to accumulate). The Databricks replacement must explicitly truncate or overwrite
+      the staging table before each incremental extract load.
+    activation:
+      preconditions:
+        - Source object is integration.purchase_staging in the SQL Server integration schema
+        - Unity Catalog catalog inventory_stock and schema inventory_stock.bronze exist
+      scope: project
+    transformation:
+      source:
+        object_type: TABLE
+        schema_pattern: "integration.purchase_staging"
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: DELTA_MANAGED_TABLE
+        schema: "inventory_stock.bronze"
+        naming_convention: "inventory_stock.bronze.purchase_staging"
+        platform: "Databricks (Delta Lake)"
+        properties:
+          - TBLPROPERTIES layer = 'bronze'
+          - delta.deletedFileRetentionDuration = 'interval 1 days'
+          - delta.logRetentionDuration = 'interval 7 days'
+    algorithm: >
+      1. Map integration.purchase_staging → inventory_stock.bronze.purchase_staging
+         (snake_case columns; strip brackets; rename space-bearing source IDs accordingly).
+      2. Translate all 14 source column data types per TY dimension rules; retain the
+         PurchaseStagingKey IDENTITY column for row traceability within a run; translate
+         to INT GENERATED ALWAYS AS IDENTITY.
+      3. CRITICAL — fix the SSIS staging-truncation bug:
+         - At the start of each ETL Databricks Workflow run, execute a TRUNCATE TABLE
+           inventory_stock.bronze.purchase_staging (or use spark.write.mode("overwrite"))
+           before writing any extracted rows.
+         - The SSIS dataflow that issued DELETE FROM Integration.Order_Staging is replaced
+           by an explicit TRUNCATE step as the first task in the purchase load Workflow.
+         - This is a correctness fix, not an optional optimisation.
+      4. Add load_timestamp TIMESTAMP DEFAULT current_timestamp() and
+         batch_id STRING audit columns to correlate staging rows to a specific ETL batch run.
+      5. Set short retention properties (1-day deleted file retention) as staging data
+         is ephemeral and should not drive long-term storage costs.
+      6. Do NOT add delta.enableChangeDataFeed on the bronze staging table; CDF is not
+         required for an overwrite-mode transient table.
+      7. Emit CREATE TABLE … USING DELTA statement in generated DDL.
+    validation:
+      success_criteria:
+        - inventory_stock.bronze.purchase_staging exists in Unity Catalog
+        - audit columns (load_timestamp, batch_id) present and non-null after each run
+        - After each ETL run, row count equals source extract count with no stale rows
+          from prior runs
+        - No duplicate WWI Purchase Order ID rows from accumulation of prior batches
+        - TRUNCATE or overwrite step present as first task in Databricks Workflow definition
+      quality_dimensions:
+        - completeness
+        - conformity
+        - validity
+      test_cases:
+        - name: staging_table_existence
+          description: Assert inventory_stock.bronze.purchase_staging exists
+          expected: Table present in Unity Catalog
+        - name: staging_truncate_fix
+          description: >
+            Execute two consecutive ETL runs with different extract windows;
+            assert staging row count after run 2 equals run 2 extract count only
+            (not run 1 + run 2)
+          expected: No row accumulation across runs; count = current run extract count
+        - name: staging_audit_columns
+          description: Assert load_timestamp and batch_id present and non-null after load
+          expected: Both columns present with non-null values on all rows
+        - name: staging_no_stale_rows
+          description: >
+            After a full ETL cycle, query purchase_staging for rows with
+            load_timestamp < current_run start; assert 0 rows
+          expected: 0 rows from prior batch windows
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: EXTENDED   # by OB-P002 — adds lineage_key BIGINT NOT NULL and _extracted_at_utc TIMESTAMP NOT NULL to staging DDL
+
+  - id: OB-004
+    dimension: Objects
+    name: Control / Infrastructure Tables (integration.etl cutoff, integration.lineage) to Bronze Control Delta Tables
+    intent: >
+      Migrate the two shared ETL control tables — integration.[etl cutoff] (incremental
+      watermark store) and integration.lineage (ETL run audit log) — to Delta Lake managed
+      tables in inventory_stock.bronze, replacing SQL Server transaction semantics with
+      Delta ACID guarantees. These tables are shared across project products and must be
+      available to all ETL tasks in the Databricks Workflow.
+    activation:
+      preconditions:
+        - Source objects are integration.[etl cutoff] and integration.lineage in the SQL
+          Server integration schema
+        - Unity Catalog catalog inventory_stock and schema inventory_stock.bronze exist
+        - Both tables are shared infrastructure consumed by multiple ETL tasks
+      scope: project
+    transformation:
+      source:
+        object_type: TABLE
+        schema_pattern: "integration.[etl cutoff] | integration.lineage"
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: DELTA_MANAGED_TABLE
+        schema: "inventory_stock.bronze"
+        naming_convention: >
+          integration.[etl cutoff] → inventory_stock.bronze.etl_cutoff
+          integration.lineage     → inventory_stock.bronze.etl_lineage
+        platform: "Databricks (Delta Lake)"
+        properties:
+          - TBLPROPERTIES layer = 'bronze_control'
+          - delta.enableChangeDataFeed = false
+    algorithm: >
+      1. Map source tables to target names (snake_case, remove brackets and spaces):
+         - integration.[etl cutoff] → inventory_stock.bronze.etl_cutoff
+         - integration.lineage      → inventory_stock.bronze.etl_lineage
+      2. Translate column data types per TY dimension rules:
+         - etl_cutoff: table_name STRING (PK), cutoff_time TIMESTAMP
+         - etl_lineage: lineage_key INT (PK, GENERATED ALWAYS AS IDENTITY to replace
+           SEQUENCE dependency — see OB-006), data_load_started TIMESTAMP,
+           table_name STRING, data_load_completed TIMESTAMP, was_successful BOOLEAN,
+           source_system_cutoff_time TIMESTAMP
+      3. Delta ACID transactions replace SQL Server BEGIN TRAN / COMMIT / ROLLBACK patterns
+         used in migratestagedpurchasedata for watermark advancement and lineage updates.
+         Each Delta write to etl_cutoff or etl_lineage is atomic by default.
+      4. Seed initial rows in etl_cutoff for fact.purchase (table_name = 'fact.purchase',
+         cutoff_time = base epoch) as part of the environment initialisation notebook.
+      5. Grant SELECT, INSERT, UPDATE to the ETL service principal; grant SELECT to
+         monitoring and alerting service principals.
+      6. Both tables are shared across project products; do NOT create product-scoped
+         copies — all products read from and write to the same control tables in
+         inventory_stock.bronze.
+      7. Emit CREATE TABLE … USING DELTA statements in generated DDL.
+    validation:
+      success_criteria:
+        - inventory_stock.bronze.etl_cutoff and inventory_stock.bronze.etl_lineage exist
+        - etl_cutoff contains at least one seeded row for table_name = 'fact.purchase'
+        - etl_lineage lineage_key uses GENERATED ALWAYS AS IDENTITY; no manual key inserts
+        - Delta ACID write confirms atomicity of watermark update + lineage close in ETL run
+        - Both tables accessible (SELECT) by the ETL service principal and monitoring roles
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - consistency
+        - validity
+      test_cases:
+        - name: control_tables_existence
+          description: Assert etl_cutoff and etl_lineage exist in inventory_stock.bronze
+          expected: Both tables present in Unity Catalog
+        - name: etl_cutoff_seed_row
+          description: >
+            Assert etl_cutoff contains a row for table_name = 'fact.purchase' after
+            environment initialisation
+          expected: 1 row present with non-null cutoff_time
+        - name: lineage_key_identity
+          description: >
+            Insert two rows into etl_lineage in sequence; assert lineage_key values
+            are unique and monotonically increasing
+          expected: Second lineage_key > first lineage_key; no duplicates
+        - name: acid_watermark_update
+          description: >
+            Simulate an ETL run; assert etl_cutoff.cutoff_time updated and
+            etl_lineage row closed atomically (no partial state)
+          expected: Both writes complete or both fail; no partial-update state observed
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: OB-005
+    dimension: Objects
+    name: ETL Stored Procedures to Python Notebooks and Delta SQL Tasks in Databricks Workflow
+    intent: >
+      Migrate the three core integration-schema ETL stored procedures
+      (integration.migratestagedpurchasedata, integration.getlastetlcutofftime,
+      integration.getlineagekey) to Python notebooks or Delta SQL task modules within a
+      Databricks Workflow, rewriting T-SQL MERGE / INSERT-SELECT / UPDATE logic as
+      PySpark Delta MERGE INTO operations and Python utility functions, and preserving
+      the SCD-2 surrogate key resolution logic with full temporal accuracy.
+    activation:
+      preconditions:
+        - Source objects are stored procedures in the SQL Server integration schema:
+          migratestagedpurchasedata, getlastetlcutofftime, getlineagekey
+        - Databricks Workflows environment is available in the target
+        - Target Delta tables (etl_cutoff, etl_lineage, silver_dim.supplier,
+          silver_dim.stock_item, silver_fact.purchase) are already provisioned
+      scope: project
+    transformation:
+      source:
+        object_type: STORED_PROCEDURE
+        schema_pattern: "integration.migratestagedpurchasedata | integration.getlastetlcutofftime | integration.getlineagekey"
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: DATABRICKS_NOTEBOOK or DATABRICKS_WORKFLOW_TASK
+        schema: "N/A (orchestration layer)"
+        naming_convention: >
+          migratestagedpurchasedata → src/etl/migrate_staged_purchase_data.py
+          getlastetlcutofftime      → src/etl/etl_control.py (utility function get_last_etl_cutoff_time)
+          getlineagekey             → src/etl/etl_control.py (utility function get_next_lineage_key)
+        platform: "Databricks (Delta Lake)"
+    algorithm: >
+      1. getlastetlcutofftime:
+         - Translate to Python function get_last_etl_cutoff_time(table_name: str) -> datetime
+           that executes: spark.sql("SELECT cutoff_time FROM inventory_stock.bronze.etl_cutoff
+           WHERE table_name = '<table_name>'").collect()[0][0]
+         - Returns a datetime value to be used as @LastCutoff in the extract query.
+      2. getlineagekey:
+         - Translate to Python function get_next_lineage_key(table_name: str) -> int that
+           INSERTs a new run-start row into inventory_stock.bronze.etl_lineage and returns
+           the generated lineage_key identity value (see OB-006 for SEQUENCE retirement).
+         - Use a RETURNING clause or a MAX(lineage_key) read-after-insert pattern to
+           retrieve the generated key atomically.
+      3. migratestagedpurchasedata:
+         a. Read ETL watermark via get_last_etl_cutoff_time('fact.purchase') → last_cutoff.
+         b. Compute new_cutoff = current_timestamp().
+         c. Get lineage key via get_next_lineage_key('fact.purchase') → lineage_key.
+         d. SCD-2 Supplier Key resolution → translate T-SQL correlated UPDATE to a PySpark
+            broadcast join or Databricks SQL UPDATE … FROM pattern:
+            UPDATE bronze.purchase_staging stg
+            SET supplier_key = COALESCE(
+                (SELECT s.supplier_key FROM silver_dim.supplier s
+                 WHERE s.wwi_supplier_id = stg.wwi_supplier_id
+                   AND stg.last_modified_when > s.valid_from
+                   AND stg.last_modified_when <= s.valid_to
+                 ORDER BY s.valid_from LIMIT 1), 0)
+         e. SCD-2 Stock Item Key resolution → identical pattern against silver_dim.stock_item.
+         f. Fact load — implement the order-level delete+insert pattern using Delta MERGE
+            INTO or a staged DELETE + INSERT approach:
+            - DELETE FROM silver_fact.purchase WHERE wwi_purchase_order_id IN
+              (SELECT wwi_purchase_order_id FROM bronze.purchase_staging)
+            - INSERT INTO silver_fact.purchase SELECT ..., lineage_key FROM bronze.purchase_staging
+         g. Close lineage row: UPDATE etl_lineage SET data_load_completed = current_timestamp(),
+            was_successful = TRUE WHERE lineage_key = <lineage_key>.
+         h. Advance watermark: UPDATE etl_cutoff SET cutoff_time = new_cutoff
+            WHERE table_name = 'fact.purchase'.
+      4. Wrap all steps in Python try/except; on failure call lineage closure with
+         was_successful = FALSE and re-raise the exception to fail the Workflow task.
+      5. T-SQL MERGE INTO → Delta MERGE INTO (with WHEN MATCHED / WHEN NOT MATCHED clauses)
+         where a true upsert pattern is preferred over delete+insert.
+      6. Emit Python source files in src/etl/; emit Databricks Workflow JSON task definitions
+         referencing each notebook/module.
+    validation:
+      success_criteria:
+        - All 3 source stored procedures have corresponding Python functions or notebook tasks
+        - Databricks Workflow executes the Purchase load end-to-end without errors
+        - SCD-2 key resolution produces the same supplier_key / stock_item_key values as
+          the source T-SQL procedure for a representative test data set
+        - Lineage rows opened and closed correctly in etl_lineage for each run
+        - ETL watermark advanced correctly in etl_cutoff after each successful run
+        - No T-SQL procedural constructs (DECLARE, SET, TRY/CATCH, EXEC) in Python artifacts
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - consistency
+        - timeliness
+      test_cases:
+        - name: etl_task_coverage
+          description: >
+            Assert src/etl/migrate_staged_purchase_data.py and src/etl/etl_control.py
+            exist and contain the expected function signatures
+          expected: Both files present with all required functions
+        - name: etl_scd2_key_resolution_parity
+          description: >
+            Run both SQL Server procedure and Databricks notebook against identical
+            staging data; compare supplier_key and stock_item_key output column values
+          expected: Zero discrepancy in resolved keys across all test rows
+        - name: etl_full_load_run
+          description: >
+            Execute the Databricks Workflow for a full purchase load run; assert all
+            tasks succeed and fact row counts match expected extract count
+          expected: All tasks SUCCESS; fact.purchase row delta = staging row count
+        - name: etl_lineage_closure
+          description: >
+            Assert etl_lineage row for the run has was_successful = TRUE and
+            non-null data_load_completed after a successful run
+          expected: 1 closed lineage row per run with was_successful = TRUE
+        - name: etl_idempotency
+          description: >
+            Execute the workflow twice with the same watermark window; assert fact row
+            count identical after second run (order-level re-load is idempotent)
+          expected: Row count unchanged after second run; no duplicates
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: EXTENDED   # by OB-P004 — scd2_merge.py, sk_resolver.py, fact_merge.py promoted as explicit named migration targets in src/common/
+
+  - id: OB-006
+    dimension: Objects
+    name: SEQUENCE Object (sequences.lineagekey) to GENERATED ALWAYS AS IDENTITY on etl_lineage
+    intent: >
+      Retire the SQL Server SEQUENCE object sequences.lineagekey and replace its
+      monotonically increasing key generation with a BIGINT GENERATED ALWAYS AS IDENTITY
+      column on the inventory_stock.bronze.etl_lineage Delta table, eliminating the
+      need for a separate SEQUENCE object and the NEXT VALUE FOR T-SQL construct that
+      has no native Databricks equivalent.
+    activation:
+      preconditions:
+        - Source object is the SQL Server SEQUENCE sequences.lineagekey
+        - The SEQUENCE is consumed solely via integration.getlineagekey stored procedure
+        - Target table inventory_stock.bronze.etl_lineage is being created as part of
+          this migration (see OB-004)
+      scope: project
+    transformation:
+      source:
+        object_type: SEQUENCE
+        schema_pattern: "sequences.lineagekey"
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: IDENTITY_COLUMN on DELTA_MANAGED_TABLE
+        schema: "inventory_stock.bronze (column attribute on etl_lineage)"
+        naming_convention: "lineage_key BIGINT GENERATED ALWAYS AS IDENTITY"
+        platform: "Databricks (Delta Lake)"
+    algorithm: >
+      1. Replace NEXT VALUE FOR Sequences.LineageKey with the IDENTITY column value
+         generated by an INSERT INTO etl_lineage ... returning lineage_key (or equivalent
+         MAX(lineage_key) + read-after-insert pattern if RETURNING is not available in
+         the runtime version).
+      2. Define etl_lineage.lineage_key as BIGINT GENERATED ALWAYS AS IDENTITY
+         (START WITH 1 INCREMENT BY 1) in the CREATE TABLE DDL (see OB-004).
+      3. The Python utility function get_next_lineage_key() in src/etl/etl_control.py
+         performs:
+         - spark.sql("INSERT INTO inventory_stock.bronze.etl_lineage
+             (data_load_started, table_name) VALUES (current_timestamp(), '<table>')")
+         - return spark.sql("SELECT MAX(lineage_key) FROM
+             inventory_stock.bronze.etl_lineage WHERE table_name = '<table>'
+             AND data_load_completed IS NULL").collect()[0][0]
+      4. Drop the sequences schema entirely in the target; no schema-level SEQUENCE
+         construct is needed in Unity Catalog.
+      5. Document in the migration registry that sequences.lineagekey is RETIRED with
+         disposition = 'REPLACED_BY_IDENTITY_COLUMN' and target reference
+         'inventory_stock.bronze.etl_lineage.lineage_key'.
+      6. Verify Delta ACID guarantees prevent duplicate lineage_key values under
+         concurrent ETL task execution.
+    validation:
+      success_criteria:
+        - No SEQUENCE or NEXT VALUE FOR T-SQL syntax in any generated artifact
+        - etl_lineage.lineage_key defined as BIGINT GENERATED ALWAYS AS IDENTITY
+        - get_next_lineage_key() function returns unique monotonically increasing values
+          across consecutive ETL runs
+        - No duplicate lineage_key values in etl_lineage after multiple ETL runs
+        - Migration registry records sequences.lineagekey as RETIRED
+      quality_dimensions:
+        - uniqueness
+        - accuracy
+        - consistency
+        - validity
+      test_cases:
+        - name: no_sequence_syntax_in_artifacts
+          description: >
+            Grep all generated artifacts for NEXT VALUE FOR, CREATE SEQUENCE,
+            or sequences. references; assert none found
+          expected: 0 matches
+        - name: lineage_key_identity_defined
+          description: >
+            Assert etl_lineage DDL contains GENERATED ALWAYS AS IDENTITY on lineage_key
+          expected: IDENTITY attribute present in DDL
+        - name: lineage_key_uniqueness
+          description: >
+            After 5 ETL runs, assert no duplicate lineage_key values in etl_lineage
+          expected: COUNT(*) = COUNT(DISTINCT lineage_key) = 5
+        - name: sequence_retired_in_registry
+          description: >
+            Assert migration registry contains a row for sequences.lineagekey with
+            disposition = 'REPLACED_BY_IDENTITY_COLUMN'
+          expected: 1 registry row present with correct disposition
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: OB-007
+    dimension: Objects
+    name: SSIS Pipeline (Purchase Container) to Databricks Workflow with Task Dependencies
+    intent: >
+      Replace the SSIS orchestration pipeline (demo_ssis…pipeline_dailyetlmain Purchase
+      container and its four dataflow items) with a Databricks Workflow that mirrors the
+      same task dependency graph, corrects the staging-truncation bug (see OB-003), and
+      enforces that the Purchase fact load task runs only after the dimension load tasks
+      for supplier and stock_item complete successfully.
+    activation:
+      preconditions:
+        - Source object is the SSIS pipeline (demo_ssis…pipeline_dailyetlmain) and its
+          Purchase-domain dataflow items
+        - Databricks Workflows environment is available in the target
+        - All target Delta tables (bronze, silver_dim, silver_fact) are provisioned
+        - Dimension load tasks for supplier and stock_item are available as upstream tasks
+          (owned by Inventory_Stock and Sales_Orders products respectively)
+      scope: project
+    transformation:
+      source:
+        object_type: SSIS_PIPELINE
+        schema_pattern: "demo_ssis…pipeline_dailyetlmain (Purchase container)"
+        platform: "Microsoft SQL Server 2014 / SQL Server Integration Services"
+      target:
+        object_type: DATABRICKS_WORKFLOW
+        schema: "N/A (orchestration layer)"
+        naming_convention: "inventory_stock_purchase_daily_etl (Workflow JSON)"
+        platform: "Databricks (Delta Lake)"
+    algorithm: >
+      1. Map each SSIS dataflow item to a Databricks Workflow task:
+         - pipeline_item_set tablename to purchase
+           → Replaced by Workflow parameter binding (no explicit task needed;
+             table_name is a Workflow parameter passed to all tasks).
+         - pipeline_item_truncate purchase_staging (BUG: targeted Order_Staging)
+           → Task: truncate_purchase_staging (Python notebook)
+             CORRECTED: executes spark.sql("TRUNCATE TABLE
+             inventory_stock.bronze.purchase_staging")
+         - pipeline_item_extract updated purchase data to staging
+           → Task: extract_purchase_updates (Python notebook; reads OLTP source via
+             JDBC using watermark from etl_cutoff; loads to bronze.purchase_staging
+             in overwrite mode after truncation)
+         - pipeline_item_migrate staged purchase data
+           → Task: migrate_staged_purchase_data (Python notebook;
+             src/etl/migrate_staged_purchase_data.py)
+      2. Define task dependencies in Workflow JSON:
+         - truncate_purchase_staging runs first (no dependency)
+         - extract_purchase_updates depends_on: [truncate_purchase_staging]
+         - migrate_staged_purchase_data depends_on:
+             [extract_purchase_updates, load_supplier_dim, load_stock_item_dim]
+         (load_supplier_dim and load_stock_item_dim are tasks from the shared
+          dimension load Workflow or a predecessor Workflow; the Purchase Workflow
+          must declare these as upstream task dependencies or use
+          Workflow run dependencies to enforce ordering.)
+      3. Add a Workflow schedule: CRON '0 2 * * *' (nightly at 02:00) replacing the
+         SSIS SQL Agent job schedule.
+      4. Add on-failure email/Slack alert configuration on the Workflow to replace
+         SSIS failure notifications.
+      5. Emit the Databricks Workflow JSON definition in config/workflows/
+         inventory_stock_purchase_daily_etl.json.
+    validation:
+      success_criteria:
+        - Databricks Workflow JSON definition present in config/workflows/
+        - All 4 SSIS dataflow items mapped to Workflow tasks
+        - truncate_purchase_staging task targets bronze.purchase_staging (not order_staging)
+        - migrate_staged_purchase_data task declares explicit depends_on dimension load tasks
+        - Workflow executes end-to-end without error on a test run
+        - SSIS pipeline objects not reproduced in target (no DTSX files)
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - conformity
+        - timeliness
+      test_cases:
+        - name: workflow_json_exists
+          description: >
+            Assert config/workflows/inventory_stock_purchase_daily_etl.json exists
+            and is valid JSON
+          expected: File present; json.loads() succeeds without error
+        - name: workflow_task_coverage
+          description: >
+            Assert Workflow JSON contains tasks: truncate_purchase_staging,
+            extract_purchase_updates, migrate_staged_purchase_data
+          expected: All 3 task names present in tasks array of Workflow JSON
+        - name: workflow_dependency_order
+          description: >
+            Assert migrate_staged_purchase_data.depends_on includes
+            extract_purchase_updates and dimension load task references
+          expected: depends_on list contains at least 3 upstream task references
+        - name: workflow_truncate_target
+          description: >
+            Assert truncate_purchase_staging task code references
+            bronze.purchase_staging (not order_staging)
+          expected: String 'purchase_staging' present; string 'order_staging' absent
+            in truncate task notebook
+        - name: workflow_end_to_end_run
+          description: >
+            Trigger a manual Workflow run against test data; assert all tasks
+            complete with status SUCCEEDED
+          expected: All tasks SUCCEEDED; no task in FAILED or SKIPPED state
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: OB-008
+    dimension: Objects
+    name: BI Reports to Databricks SQL Warehouse with Updated Connection Strings and Renamed Objects
+    intent: >
+      Reconnect the two active BI reports (wwidw purchase and sale per stockitem dynamic;
+      wwidw-ordered-by-supplier) from SQL Server to the Databricks SQL Warehouse, update
+      all connection strings and data source references, rename the stock_item table
+      reference from the space-bearing source name (Dimension.[Stock Item]) to
+      silver_dim.stock_item, and update supplier references to silver_dim.supplier
+      and the fact table to silver_fact.purchase.
+    activation:
+      preconditions:
+        - Source BI reports are Power BI reports with direct SQL Server connections
+        - Reports query fact.purchase, dimension.supplier, dimension.[stock item] directly
+        - Databricks SQL Warehouse endpoint is provisioned and accessible to BI service
+          principal
+      scope: project
+    transformation:
+      source:
+        object_type: BI_REPORT
+        schema_pattern: "Power BI reports — direct SQL Server connections"
+        platform: "Power BI / SQL Server 2014"
+      target:
+        object_type: BI_REPORT
+        schema: "inventory_stock.silver_fact | inventory_stock.silver_dim"
+        naming_convention: "Unchanged report names; updated data source and table references"
+        platform: "Databricks SQL Warehouse (Power BI DirectQuery or Import)"
+    algorithm: >
+      1. Update Power BI data source connection:
+         - Remove SQL Server connection (server: <sql_server_host>, database: wideworldimportersdw).
+         - Add Databricks SQL Warehouse connection (server hostname: <databricks_workspace_url>,
+           HTTP path: <sql_warehouse_http_path>, catalog: inventory_stock).
+      2. Update all table references in report queries and data model:
+         - fact.purchase             → inventory_stock.silver_fact.purchase
+         - dimension.supplier        → inventory_stock.silver_dim.supplier
+           (or supplier_current view for current-only lookups)
+         - dimension.[stock item]    → inventory_stock.silver_dim.stock_item
+           (or stock_item_current view; the space in [stock item] must be removed)
+         - dimension.date            → inventory_stock.silver_dim.date (shared infra)
+      3. Update column name references where source used bracket-quoted space-bearing names:
+         - [Stock Item Key]  → stock_item_key
+         - [Supplier Key]    → supplier_key
+         - [Date Key]        → date_key
+         - [Is Order Finalized] → is_order_finalized
+         - [Ordered Outers]  → ordered_outers
+         (Apply NM-dimension column rename rules consistently throughout all report measures
+          and calculated columns.)
+      4. For the cross-domain report (wwidw purchase and sale per stockitem dynamic):
+         document a dependency on the Sales_Orders product migration completing and
+         exposing fact.sale in the Databricks catalog before this report is fully
+         functional. Coordinate cutover timing with the Sales_Orders product team.
+      5. Validate report queries against the Databricks SQL Warehouse using Power BI
+         DirectQuery test connection before go-live.
+      6. Document updated .pbix or connection config files in config/bi/.
+    validation:
+      success_criteria:
+        - Both reports connect to Databricks SQL Warehouse without SQL Server dependency
+        - All table references updated to inventory_stock schema equivalents
+        - No [space-bearing] bracket-quoted object names in report queries
+        - wwidw-ordered-by-supplier executes and returns supplier-level purchase data
+        - wwidw purchase and sale per stockitem dynamic dependency on Sales_Orders
+          documented; report returns purchase data independently of Sales_Orders readiness
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - completeness
+        - timeliness
+      test_cases:
+        - name: bi_connection_databricks
+          description: >
+            Open each report in Power BI Desktop; assert data source points to
+            Databricks SQL Warehouse, not SQL Server
+          expected: Data source type = Databricks; SQL Server source absent
+        - name: bi_no_space_names
+          description: >
+            Inspect report M queries / DAX for bracket-quoted space-bearing names
+            ([stock item], [Stock Item Key], etc.); assert none found
+          expected: 0 occurrences of space-bearing bracket-quoted table or column names
+        - name: bi_supplier_report_data
+          description: >
+            Refresh wwidw-ordered-by-supplier; assert row count > 0 and
+            supplier names are populated (not null)
+          expected: Report loads with data; supplier_name column non-null
+        - name: bi_cross_domain_report_purchase_data
+          description: >
+            Refresh wwidw purchase and sale per stockitem dynamic purchase portion;
+            assert purchase measures (ordered_outers, ordered_quantity) return values
+          expected: Purchase measures populated; cross-domain join may show nulls if
+            Sales_Orders not yet migrated — acceptable pre-cutover
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: EXTENDED   # by OB-P003 — aggregating/reporting views → CREATE OR REPLACE MATERIALIZED VIEW; thin wrapper views → CREATE OR REPLACE VIEW
+
+  - id: OB-009
+    dimension: Objects
+    name: application.configuration_reseedetl (Purchase Portions) — Conditional Retain or DROP
+    intent: >
+      Evaluate the Purchase-domain portions of application.configuration_reseedetl — which
+      TRUNCATEs fact.purchase, inserts key=0 sentinel rows into dimension.supplier and
+      dimension.[stock item], and resets the ETL cutoff to base time — and either retire
+      the procedure (if used only for legacy environment reseed) or replace it with a
+      Databricks initialisation notebook that pre-seeds key=0 unknown-member sentinel rows
+      and resets the etl_cutoff watermark in the Delta control table.
+    activation:
+      preconditions:
+        - Source object is application.configuration_reseedetl (Purchase-domain portions only)
+        - Scope owner has confirmed whether the procedure is needed in the target
+          environment (testing / reseed utility vs. production artefact)
+        - Confirmed key=0 sentinel row requirement for silver_dim.supplier and
+          silver_dim.stock_item (needed for COALESCE fallback in SCD-2 key resolution)
+      scope: project
+    transformation:
+      source:
+        object_type: STORED_PROCEDURE
+        schema_pattern: "application.configuration_reseedetl (Purchase portions)"
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: DATABRICKS_NOTEBOOK or DROPPED
+        schema: "N/A (initialisation utility)"
+        naming_convention: >
+          If retained: src/init/reseed_purchase_environment.py
+          If dropped: registry entry only
+        platform: "Databricks (Delta Lake)"
+    algorithm: >
+      1. CONFIRM SCOPE WITH OWNER before implementing:
+         - If the procedure is a testing/reseed-only utility with no production use
+           → DISPOSITION: DROP. Record in migration registry with disposition = 'DROPPED'
+           and rationale 'Environment reseed utility; no production equivalent required'.
+         - If the procedure is used in production (e.g. for environment refresh, DR,
+           or disaster recovery re-initialization) → DISPOSITION: REPLACE with a
+           Databricks initialisation notebook.
+      2. If RETAINED, the Databricks replacement notebook (src/init/reseed_purchase_environment.py)
+         must perform:
+         a. TRUNCATE TABLE inventory_stock.silver_fact.purchase
+         b. Merge key=0 sentinel row into inventory_stock.silver_dim.supplier:
+            (supplier_key=0, wwi_supplier_id=0, supplier='Unknown', ...,
+             valid_from='1900-01-01', valid_to='9999-12-31', is_current=TRUE)
+         c. Merge key=0 sentinel row into inventory_stock.silver_dim.stock_item:
+            (stock_item_key=0, wwi_stock_item_id=0, stock_item='Unknown', ...,
+             valid_from='1900-01-01', valid_to='9999-12-31', is_current=TRUE)
+         d. UPDATE inventory_stock.bronze.etl_cutoff
+            SET cutoff_time = '1900-01-01T00:00:00'
+            WHERE table_name = 'fact.purchase'
+      3. Key=0 sentinel rows are required regardless of whether the reseed procedure is
+         retained: they must be present after environment initialisation so that the
+         COALESCE(..., 0) fallback in the SCD-2 key resolution step (OB-005) can resolve
+         to a valid dimension row rather than an orphaned FK.
+      4. The reseed notebook should be tagged as INIT_ONLY in its notebook metadata and
+         must NOT appear in the production nightly Workflow definition.
+      5. Record the disposition in the migration registry.
+    validation:
+      success_criteria:
+        - Scope owner decision (DROP vs RETAIN) documented in migration registry
+          before implementation begins
+        - If DROP: no application.configuration_reseedetl T-SQL or equivalent in any
+          generated production artifact
+        - Key=0 sentinel rows present in silver_dim.supplier and silver_dim.stock_item
+          after environment initialisation, regardless of DROP/RETAIN decision
+        - etl_cutoff seeded with base cutoff for fact.purchase on environment init
+        - Reseed notebook (if retained) absent from production Workflow task list
+      quality_dimensions:
+        - completeness
+        - conformity
+        - validity
+      test_cases:
+        - name: reseed_disposition_documented
+          description: >
+            Assert migration registry contains a row for
+            application.configuration_reseedetl with non-null disposition
+          expected: 1 registry row with disposition = 'DROPPED' or 'REPLACED_BY_NOTEBOOK'
+        - name: sentinel_rows_present
+          description: >
+            Assert silver_dim.supplier and silver_dim.stock_item each contain a row
+            with surrogate key = 0 after environment initialisation
+          expected: 1 row with supplier_key = 0 in supplier; 1 row with stock_item_key = 0
+            in stock_item
+        - name: no_reseed_in_production_workflow
+          description: >
+            Assert the production Databricks Workflow JSON does not reference
+            reseed_purchase_environment notebook
+          expected: 0 references to reseed_purchase_environment in production Workflow JSON
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: OB-010
+    dimension: Objects
+    name: Out-of-Scope Object Exclusion (dbo.*, reseed sequence utilities, cross-domain objects)
+    intent: >
+      Explicitly exclude all SQL Server objects outside the Inventory_Stock_Project
+      Purchase-domain scope from all migration activities, including dbo.* schema objects
+      (SSMS diagram artefacts), reseed sequence utilities (sequences.reseedallsequences,
+      sequences.reseedsequencebeyondtablevalues), cross-domain fact and staging tables,
+      and analytics.* views and tables, ensuring no out-of-scope object is accidentally
+      included in generated DDL, ETL code, or Workflow definitions.
+    activation:
+      preconditions:
+        - Source object resides in one of the following out-of-scope locations:
+          dbo schema; sequences schema reseed procedures; fact tables other than fact.purchase;
+          integration staging tables other than purchase_staging and the shared control tables;
+          analytics schema; dimension tables outside supplier / stock item / date
+        - Object has not been explicitly re-included by a product-level override rule
+      scope: project
+    transformation:
+      source:
+        object_type: ANY
+        schema_pattern: >
+          dbo.* |
+          sequences.reseedallsequences |
+          sequences.reseedsequencebeyondtablevalues |
+          fact.sale | fact.order | fact.movement | fact.transaction | fact.stock_holding |
+          integration.*_staging (non-purchase) |
+          analytics.* |
+          dimension.customer | dimension.city | dimension.employee |
+          dimension.payment_method | dimension.transaction_type |
+          application.configuration_applypolybase |
+          application.configuration_populatelargesaletable |
+          application.configuration_applypartitionedcolumnstoreindexing
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: EXCLUDED (no target object)
+        schema: "N/A"
+        platform: "Databricks (Delta Lake)"
+    exclusion_list:
+      - schema: "dbo"
+        rationale: "SSMS diagram objects and sample/test artefacts; not part of Inventory_Stock domain"
+      - objects: ["sequences.reseedallsequences", "sequences.reseedsequencebeyondtablevalues"]
+        rationale: "Reseed sequence utilities; no Databricks equivalent; review at implementation — likely drop"
+      - schema: "analytics"
+        rationale: "Finance/Analytics domain — separate product outside Inventory_Stock_Project scope"
+      - objects: ["fact.sale", "fact.order", "fact.movement", "fact.transaction", "fact.stock_holding"]
+        rationale: "Belong to Sales_Orders, Inventory_Movement, or Finance_Analytics products"
+      - dimensions: ["dimension.customer", "dimension.city", "dimension.employee", "dimension.payment_method", "dimension.transaction_type"]
+        rationale: "Conformed dimensions owned by Sales_Orders product"
+      - procedures: ["application.configuration_applypolybase", "application.configuration_populatelargesaletable", "application.configuration_applypartitionedcolumnstoreindexing"]
+        rationale: "SQL Server-specific infrastructure procedures; no Purchase-domain relevance"
+    algorithm: >
+      1. Maintain an exclusion list (config/exclusions.yaml) containing all out-of-scope
+         schema and object patterns for the Inventory_Stock_Project.
+      2. All code generation tooling (DDL generators, ETL task generators, Workflow
+         JSON generators) must filter source objects against this exclusion list before
+         processing.
+      3. If an excluded object is referenced as a dependency by an in-scope object
+         (e.g. fact.purchase cross-domain join in the wwidw purchase and sale per
+         stockitem dynamic report depends on fact.sale from Sales_Orders), flag the
+         dependency in the migration registry as CROSS_SCOPE_DEPENDENCY and raise a
+         migration issue for manual resolution with the relevant product team.
+      4. Record each excluded schema/object in the migration registry with
+         disposition = 'EXCLUDED' and a rationale entry.
+      5. For reseed sequence utilities: record as 'PENDING_SCOPE_REVIEW'; confirm DROP
+         disposition with scope owner before go-live.
+    validation:
+      success_criteria:
+        - config/exclusions.yaml exists and lists all out-of-scope patterns
+        - No generated DDL or ETL artifact references a dbo.* object
+        - No analytics.* or cross-domain fact table objects appear in generated artifacts
+        - Reseed sequence utilities disposition confirmed (DROP or RETAIN) before go-live
+        - Cross-scope dependencies (e.g. fact.sale for cross-domain BI report) documented
+          in migration registry with a resolution plan
+      quality_dimensions:
+        - completeness
+        - conformity
+        - coverage
+      test_cases:
+        - name: exclusion_list_exists
+          description: >
+            Assert config/exclusions.yaml exists and contains entries for dbo, analytics,
+            cross-domain facts, and reseed utilities
+          expected: File present; all out-of-scope patterns listed
+        - name: no_dbo_in_artifacts
+          description: >
+            Grep all generated DDL, Python, and Workflow JSON artifacts for dbo. references
+          expected: 0 matches (excluding exclusion documentation comments)
+        - name: no_analytics_in_artifacts
+          description: >
+            Grep all generated artifacts for analytics. schema references
+          expected: 0 matches
+        - name: reseed_utilities_disposition
+          description: >
+            Assert migration registry contains disposition entries for
+            sequences.reseedallsequences and sequences.reseedsequencebeyondtablevalues
+          expected: 2 registry rows; disposition not null
+        - name: cross_scope_dependency_documented
+          description: >
+            Assert migration registry contains a CROSS_SCOPE_DEPENDENCY entry for
+            the fact.sale dependency of the cross-domain BI report
+          expected: 1 registry row with dependency_type = 'CROSS_SCOPE_DEPENDENCY'
+            referencing fact.sale and Sales_Orders product
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+      product_status: INHERITED
+
+  - id: OB-011
+    dimension: Objects
+    name: dimension.date (Shared Calendar Infrastructure) to silver_dim.date — Read-Only Reference
+    intent: >
+      Register dimension.date (the static WideWorldImporters calendar dimension, shared
+      infrastructure) as a read-only reference table in inventory_stock.silver_dim.date
+      in the target Databricks catalog. The Purchase product does not own the load
+      procedure for this table; it is pre-populated by the shared infrastructure layer.
+      This rule governs the naming, schema placement, and access grant for the
+      dimension.date target object as consumed by the Purchase fact table and BI reports.
+    activation:
+      preconditions:
+        - Source object is dimension.date in the SQL Server dimension schema
+        - Table is a static calendar dimension with no SCD-2 pattern
+        - The Purchase product consumes dimension.date as a FK target for date_key in
+          fact.purchase; the Purchase product does NOT own its load procedure
+        - Unity Catalog catalog inventory_stock and schema inventory_stock.silver_dim exist
+      scope: project
+    transformation:
+      source:
+        object_type: TABLE
+        schema_pattern: "dimension.date"
+        platform: "Microsoft SQL Server 2014"
+      target:
+        object_type: DELTA_MANAGED_TABLE
+        schema: "inventory_stock.silver_dim"
+        naming_convention: "inventory_stock.silver_dim.date"
+        platform: "Databricks (Delta Lake)"
+        properties:
+          - TBLPROPERTIES layer = 'silver_dim'
+          - TBLPROPERTIES owned_by = 'shared_infrastructure'
+    algorithm: >
+      1. Map dimension.date → inventory_stock.silver_dim.date (snake_case columns;
+         no space-bearing names in this table).
+      2. Translate all 12 column data types per TY dimension rules:
+         - Date (PK): DATE
+         - DateKey: INT
+         - CalendarYear, CalendarMonthNumber, FiscalYear, ISOWeekNumber, DayNumber: INT
+         - CalendarYearLabel, CalendarMonthLabel, FiscalYearLabel, ShortMonth, Day: STRING
+      3. No SCD-2 pattern: no Valid_From / Valid_To / Is_Current columns; the calendar
+         is static and does not change across loads.
+      4. Mark the table with TBLPROPERTIES owned_by = 'shared_infrastructure' to signal
+         that the Purchase product does not own the load procedure; the dimension is
+         populated by a separate infrastructure layer before any product ETL runs.
+      5. Grant SELECT to the ETL service principal (Purchase workflow must be able to
+         validate date_key FK existence) and to the BI service principal.
+      6. Do NOT add load logic for silver_dim.date in the Purchase Workflow; emit a
+         comment in the Workflow JSON noting the external ownership.
+      7. Emit CREATE TABLE … USING DELTA statement in generated DDL for reference;
+         actual population is delegated to the shared infrastructure provisioning step.
+    validation:
+      success_criteria:
+        - inventory_stock.silver_dim.date exists in Unity Catalog
+        - Table carries TBLPROPERTIES owned_by = 'shared_infrastructure'
+        - No load task for silver_dim.date appears in the Purchase Databricks Workflow
+        - date_key FK validation in fact.purchase post-load returns 0 orphaned date keys
+        - BI reports can join to silver_dim.date without permission errors
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - conformity
+      test_cases:
+        - name: date_dim_existence
+          description: Assert inventory_stock.silver_dim.date exists in Unity Catalog
+          expected: Table present with correct column count (12)
+        - name: date_dim_no_load_in_workflow
+          description: >
+            Assert the Purchase Databricks Workflow JSON contains no task that
+            writes to silver_dim.date
+          expected: 0 tasks referencing silver_dim.date as a write target
+        - name: date_key_fk_validation
+          description: >
+            After Purchase fact load, left-join silver_fact.purchase.date_key to
+            silver_dim.date.date_key; assert 0 orphaned keys
+          expected: 0 rows in fact table with date_key not present in silver_dim.date
+        - name: date_dim_bi_access
+          description: >
+            Execute SELECT COUNT(*) FROM inventory_stock.silver_dim.date via BI
+            service principal; assert no permission error
+          expected: Query succeeds; row count > 0
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+# ── PRODUCT-SPECIFIC RULES (Purchase) ────────────────────────
+product_rules:
+
+  - id: OB-P001
+    dimension: Objects
+    name: Bootstrap key=0 sentinel MERGE notebook for each Purchase SCD-2 dimension table
+    action: extend
+    extends_rule: OB-001
+    intent: >
+      Require a key=0 'Unknown' sentinel row bootstrap notebook for every SCD-2 dimension
+      table in the Purchase product scope, ensuring the COALESCE fallback in surrogate key
+      resolution always resolves to a valid row.
+    rationale: >
+      Project rule OB-001 defines the SCD-2 dimension structure but does not mandate
+      the bootstrap mechanism that pre-populates the key=0 unknown-member sentinel row.
+      The Purchase product's surrogate key resolution pattern (SCD-2 temporal JOIN with
+      COALESCE(..., 0) fallback) relies on this sentinel row being present at all times.
+      The product brief makes this an explicit migration target — a dedicated bootstrap
+      notebook must be generated and registered.
+    scope: "SCD-2 dimension tables in Purchase scope: inventory_stock.silver_dim.supplier, inventory_stock.silver_dim.stock_item."
+    transformation:
+      extended_behavior: |
+        For each SCD-2 dimension table in Purchase scope, a dedicated bootstrap notebook
+        (src/init/bootstrap_<dim>_sentinel.py) must be generated that performs a MERGE
+        to upsert the key=0 sentinel row:
+
+          MERGE INTO inventory_stock.silver_dim.<dim> AS tgt
+          USING (SELECT
+                   0                   AS <dim>_key,
+                   0                   AS wwi_<dim>_id,
+                   'Unknown'           AS <dim_name_col>,
+                   DATE '1900-01-01'   AS valid_from,
+                   DATE '9999-12-31'   AS valid_to,
+                   DATE '1900-01-01'   AS row_effective_date,
+                   DATE '9999-12-31'   AS row_expiry_date,
+                   TRUE                AS is_current_row
+                 ) AS src
+          ON tgt.<dim>_key = 0
+          WHEN MATCHED THEN UPDATE SET ...
+          WHEN NOT MATCHED THEN INSERT (...) VALUES (...);
+
+        The bootstrap notebook must:
+        - Be tagged INIT_ONLY in notebook metadata
+        - Run as the first task in environment initialisation (before any ETL run)
+        - NOT appear in the production nightly Workflow
+        - Be idempotent (MERGE, not INSERT — safe to re-run)
+        - Assert after execution that key=0 exists in the dimension table
+
+  - id: OB-P002
+    dimension: Objects
+    name: Add lineage_key and _extracted_at_utc audit columns to Purchase staging DDL
+    action: extend
+    extends_rule: OB-003
+    intent: >
+      Require two additional audit columns (lineage_key BIGINT NOT NULL and
+      _extracted_at_utc TIMESTAMP NOT NULL) on the Purchase staging table, beyond
+      the project-level staging DDL pattern.
+    rationale: >
+      The Purchase product's staging table must carry lineage_key to propagate the
+      ETL run identifier to every staging row (per LN-006) and _extracted_at_utc to
+      record the exact UTC wall-clock time at which each row was extracted from the
+      source system, enabling fine-grained data freshness auditing and replay-window
+      calculation independent of the ETL cutoff watermark.
+    scope: "inventory_stock.bronze.purchase_staging staging Delta table."
+    transformation:
+      extended_behavior: |
+        The following two audit columns are added to inventory_stock.bronze.purchase_staging
+        DDL in addition to the columns defined by OB-003:
+
+          lineage_key        BIGINT     NOT NULL
+              COMMENT 'FK to inventory_stock.bronze.lineage_run.lineage_key; identifies the ETL run that extracted this row'
+          _extracted_at_utc  TIMESTAMP  NOT NULL
+              COMMENT 'UTC timestamp at which this row was extracted from the SQL Server source; populated by the extract notebook from datetime.now(timezone.utc)'
+
+        lineage_key is populated from the Python variable returned by open_lineage_record()
+        at the start of the extract task. _extracted_at_utc is populated by the extract
+        notebook using datetime.now(timezone.utc) at the time each row is written to
+        the staging table, not at the time the pipeline started.
+
+  - id: OB-P003
+    dimension: Objects
+    name: Classify Purchase analytics views as MATERIALIZED or REGULAR based on aggregation content
+    action: extend
+    extends_rule: OB-008
+    intent: >
+      Distinguish between aggregating/reporting views (must use CREATE OR REPLACE
+      MATERIALIZED VIEW) and thin wrapper/alias views (must use CREATE OR REPLACE VIEW)
+      when generating analytics views for the Purchase product.
+    rationale: >
+      The project OB rules do not specify how analytics views should be materialised.
+      The Purchase product explicitly requires that views performing aggregation or
+      reporting logic use Databricks materialized views for performance, while views
+      that are thin wrappers or aliases use regular (non-materialized) views to avoid
+      unnecessary compute cost and staleness complexity.
+    scope: "All analytics views generated for the Purchase product in the inventory_stock catalog."
+    transformation:
+      extended_behavior: |
+        Apply the following classification rule to every analytics view generated for
+        the Purchase product:
+
+        MATERIALIZED VIEW (CREATE OR REPLACE MATERIALIZED VIEW):
+          - Views that contain GROUP BY, aggregation functions (SUM, COUNT, AVG, etc.),
+            WINDOW functions, or non-trivial joins that compress row counts
+          - Examples: purchase_summary_by_supplier, stock_item_order_totals
+
+        REGULAR VIEW (CREATE OR REPLACE VIEW):
+          - Views that are thin wrappers — SELECT * with a simple WHERE filter,
+            single-table renames, or alias views used for backward compatibility
+          - Examples: purchase_current (is_order_finalized = TRUE filter only),
+            fact_purchase_v (alias over silver_fact.fact_purchase)
+
+        Each generated view file must include a comment header stating its view class
+        (MATERIALIZED or REGULAR) and the classification rationale.
+
+  - id: OB-P004
+    dimension: Objects
+    name: Promote scd2_merge.py, sk_resolver.py, fact_merge.py as named migration targets in src/common/
+    action: extend
+    extends_rule: OB-005
+    intent: >
+      Promote scd2_merge.py, sk_resolver.py, and fact_merge.py as explicit, named
+      migration targets that must be generated as shared Python helper modules, not
+      inlined into individual ETL notebooks.
+    rationale: >
+      The project OB rules describe the high-level transformation of stored procedures
+      to Python notebooks but do not prescribe the decomposition into shared helper
+      libraries. The Purchase product explicitly designates three shared helpers as
+      migration targets. Treating them as first-class artifacts ensures they are
+      tracked, versioned, tested, and referenced consistently across all Purchase ETL
+      notebooks.
+    scope: "Purchase product ETL codebase under src/common/."
+    transformation:
+      extended_behavior: |
+        The following three shared helper modules are explicit migration targets for the
+        Purchase product and must be generated as standalone files:
+
+          src/common/scd2_merge.py
+            - Encapsulates the SCD-2 dimension MERGE logic (open new version, close old version,
+              set is_current_row flag, populate row_effective_date / row_expiry_date)
+            - Accepts: spark, target_table, source_df, natural_key_col, effective_date_col
+            - Returns: rows_merged count
+
+          src/common/sk_resolver.py
+            - Encapsulates the surrogate key resolution pre-join step that replaces the
+              UPDATE staging SET key = (SELECT TOP(1)...) T-SQL pattern
+            - Accepts: spark, staging_df, dim_table, natural_key_col, probe_date_col, sk_col
+            - Returns: staging_df with <sk_col> populated (COALESCE to 0 for unresolved rows)
+
+          src/common/fact_merge.py
+            - Encapsulates the order-level delete+insert / MERGE pattern for fact_purchase
+            - Accepts: spark, staging_table, fact_table, join_key_col, lineage_key
+            - Returns: rows_merged count; emits conditional OPTIMIZE if rows_merged > threshold
+
+        Each module must have:
+          - Unit tests in tests/common/test_<module>.py
+          - A module-level docstring citing the source procedure it replaces
+          - Import from src/common/constants.py for catalog/schema/table constants

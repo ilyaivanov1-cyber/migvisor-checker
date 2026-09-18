@@ -1,0 +1,465 @@
+new_rules:
+  # ──────────────────────────────────────────────
+  # SYNTAX — new patterns not in project SX rules
+  # ──────────────────────────────────────────────
+
+  - rule_id: "SX-P004"
+    action: new
+    dimension: "SX"
+    intent: "Convert UPDATE Integration.Lineage SET [Data Load Completed] = ... inline lineage close pattern to a spark.sql UPDATE call with Python variable injection."
+    rationale: >
+      The Purchase product source contains an inline lineage-close UPDATE statement
+      embedded at the end of migratestagedpurchasedata. This specific UPDATE pattern
+      is not covered by any project SX rule. A product rule is required to document
+      the exact Spark SQL replacement, including the rows_merged count injection and
+      the lineage_key variable reference.
+    scope: "The inline UPDATE Integration.Lineage SET [Data Load Completed] = ... statement in the Purchase ETL procedure."
+    behavior: |
+      Replace:
+        UPDATE Integration.Lineage
+        SET [Data Load Completed] = SYSDATETIME()
+        WHERE [Lineage Key] = @LineageKey;
+
+      With (inline after the MERGE / fact-load step):
+        spark.sql(f"""
+            UPDATE inventory_stock.bronze.lineage_run
+            SET data_load_completed = current_timestamp(),
+                table_row_count     = {rows_merged},
+                was_successful      = true
+            WHERE lineage_key = {lineage_key}
+        """)
+
+      This statement must appear immediately after the fact_merge.py call that
+      returns rows_merged, within the same try block. On exception, the finally
+      block must call the equivalent with was_successful = false.
+
+  # ──────────────────────────────────────────────
+  # QA — Data Quality dimension (entirely new)
+  # ──────────────────────────────────────────────
+
+  - rule_id: "QA-P001"
+    action: new
+    dimension: "QA"
+    intent: "Perform row count reconciliation between the staging table and the fact table after each ETL run to detect silent data loss."
+    rationale: >
+      The Purchase product migrates from a stored procedure with no explicit row count
+      validation. Delta Lake provides row-level ACID but does not prevent logic errors
+      that filter or drop rows. A mandatory post-load row count check ensures the number
+      of rows written to fact_purchase matches the number of resolved rows in
+      purchase_staging for the current batch.
+    scope: "inventory_stock.bronze.purchase_staging and inventory_stock.silver_fact.fact_purchase after each nightly ETL run."
+    behavior: |
+      After the fact load step, assert:
+
+        staging_count = spark.sql("""
+            SELECT COUNT(*) FROM inventory_stock.bronze.purchase_staging
+        """).collect()[0][0]
+
+        inserted_count = rows_merged  # returned by fact_merge.py
+
+        assert inserted_count == staging_count, (
+            f"Row count mismatch: staging={staging_count}, inserted={inserted_count}"
+        )
+
+      Log the result as a DQ metric in lineage_run.table_row_count.
+      Failure raises a RuntimeError that marks the Workflow task as FAILED.
+      Log pass result at INFO level; log fail result at ERROR level.
+
+  - rule_id: "QA-P002"
+    action: new
+    dimension: "QA"
+    intent: "Check dimension key integrity by detecting orphaned surrogate keys in fact_purchase after each ETL load — flag but do not block."
+    rationale: >
+      The Purchase product's surrogate key resolution relies on the COALESCE(..., 0)
+      fallback, which silently assigns key=0 to staging rows that cannot be resolved
+      to a dimension version. Orphaned keys (key=0 rows beyond the expected unknown-member
+      sentinel volume) indicate data quality issues in the source or in the SCD-2
+      dimension load. These must be measured per run and flagged informatively.
+    scope: "supplier_key and stock_item_key columns in inventory_stock.silver_fact.fact_purchase after each nightly ETL load."
+    behavior: |
+      After the fact load, run informational key-integrity checks:
+
+        orphan_supplier = spark.sql("""
+            SELECT COUNT(*) AS cnt
+            FROM inventory_stock.silver_fact.fact_purchase fp
+            LEFT ANTI JOIN inventory_stock.silver_dim.supplier s
+              ON fp.supplier_key = s.supplier_key
+            WHERE fp.lineage_key = {lineage_key}
+              AND fp.supplier_key != 0
+        """.format(lineage_key=lineage_key)).collect()[0]["cnt"]
+
+        orphan_stock_item = spark.sql("""
+            SELECT COUNT(*) AS cnt
+            FROM inventory_stock.silver_fact.fact_purchase fp
+            LEFT ANTI JOIN inventory_stock.silver_dim.stock_item si
+              ON fp.stock_item_key = si.stock_item_key
+            WHERE fp.lineage_key = {lineage_key}
+              AND fp.stock_item_key != 0
+        """.format(lineage_key=lineage_key)).collect()[0]["cnt"]
+
+        if orphan_supplier > 0:
+            logger.warning(f"QA-P002: {orphan_supplier} orphaned supplier_key rows (lineage_key={lineage_key})")
+        if orphan_stock_item > 0:
+            logger.warning(f"QA-P002: {orphan_stock_item} orphaned stock_item_key rows (lineage_key={lineage_key})")
+
+      This check is INFORMATIONAL — it logs warnings but does NOT block the pipeline
+      or mark the task as FAILED. Results are surfaced in the lineage_run record as
+      extended metadata columns (orphan_supplier_count, orphan_stock_item_count).
+
+  - rule_id: "QA-P003"
+    action: new
+    dimension: "QA"
+    intent: "Perform referential integrity checks using LEFT ANTI JOIN per FK column to identify rows in fact_purchase with no matching dimension row (excluding key=0 sentinel)."
+    rationale: >
+      Delta Lake does not enforce FK constraints. The Purchase product must compensate
+      with explicit LEFT ANTI JOIN assertions per foreign key to detect rows that
+      reference dimension keys that do not exist in any version (not just the current
+      version) of the dimension. These checks run per lineage_key batch after each ETL
+      run and write failing row details to stg.dq_rejections.
+    scope: "All FK columns in inventory_stock.silver_fact.fact_purchase: supplier_key, stock_item_key, date_key."
+    behavior: |
+      For each FK column, perform:
+
+        -- supplier_key referential integrity
+        ri_supplier = spark.sql("""
+            SELECT fp.purchase_key, fp.supplier_key, 'supplier_key' AS fk_column,
+                   {lineage_key} AS lineage_key, current_timestamp() AS checked_at
+            FROM inventory_stock.silver_fact.fact_purchase fp
+            LEFT ANTI JOIN inventory_stock.silver_dim.supplier s
+              ON fp.supplier_key = s.supplier_key
+            WHERE fp.lineage_key = {lineage_key}
+              AND fp.supplier_key != 0
+        """.format(lineage_key=lineage_key))
+
+        # Repeat for stock_item_key (LEFT ANTI JOIN silver_dim.stock_item)
+        # Repeat for date_key (LEFT ANTI JOIN silver_dim.date)
+
+        # Write all failing rows to DQ rejections table:
+        if ri_supplier.count() > 0:
+            ri_supplier.write.format("delta").mode("append") \
+                .saveAsTable("inventory_stock.bronze.dq_rejections")
+            logger.error(f"QA-P003: {ri_supplier.count()} RI violations on supplier_key")
+
+      The stg.dq_rejections (inventory_stock.bronze.dq_rejections) table must have the schema:
+        purchase_key   BIGINT     NOT NULL
+        fk_column      STRING     NOT NULL
+        fk_value       BIGINT     NOT NULL
+        lineage_key    BIGINT     NOT NULL
+        checked_at     TIMESTAMP  NOT NULL
+        rule_id        STRING     NOT NULL DEFAULT 'QA-P003'
+
+      RI violations are logged at ERROR level and written to dq_rejections but do NOT
+      block the pipeline. Alert if count > 0 after each run.
+
+  - rule_id: "QA-P004"
+    action: new
+    dimension: "QA"
+    intent: "Run business rule assertions on loaded Purchase data — informational checks only, non-blocking."
+    rationale: >
+      The Purchase product has domain-specific business invariants that are not
+      expressible as schema constraints but are expected to hold in valid data.
+      These assertions catch upstream data issues early and provide an observable
+      signal for data quality regression. All assertions are informational and
+      non-blocking.
+    scope: "inventory_stock.silver_fact.fact_purchase rows from the current lineage_key batch."
+    behavior: |
+      Run the following business rule assertions after each ETL load:
+
+        # Assertion 1: ordered_outers and ordered_quantity must be >= 0
+        neg_qty = spark.sql(f"""
+            SELECT COUNT(*) FROM inventory_stock.silver_fact.fact_purchase
+            WHERE lineage_key = {lineage_key}
+              AND (ordered_outers < 0 OR ordered_quantity < 0)
+        """).collect()[0][0]
+        if neg_qty > 0:
+            logger.warning(f"QA-P004: {neg_qty} rows with negative ordered_outers or ordered_quantity")
+
+        # Assertion 2: date_key must be within the current batch window
+        out_of_window = spark.sql(f"""
+            SELECT COUNT(*) FROM inventory_stock.silver_fact.fact_purchase
+            WHERE lineage_key = {lineage_key}
+              AND (date_key < '{batch_date_min}' OR date_key > '{batch_date_max}')
+        """).collect()[0][0]
+        if out_of_window > 0:
+            logger.warning(f"QA-P004: {out_of_window} rows with date_key outside expected batch window")
+
+        # Assertion 3: package must be non-null and non-empty
+        empty_pkg = spark.sql(f"""
+            SELECT COUNT(*) FROM inventory_stock.silver_fact.fact_purchase
+            WHERE lineage_key = {lineage_key}
+              AND (package IS NULL OR TRIM(package) = '')
+        """).collect()[0][0]
+        if empty_pkg > 0:
+            logger.warning(f"QA-P004: {empty_pkg} rows with null or empty package")
+
+      All assertions are logged at WARNING level. No exception is raised. Results are
+      included in the lineage_run extended metadata.
+
+  - rule_id: "QA-P005"
+    action: new
+    dimension: "QA"
+    intent: "Write DQ rejection rows to stg.dq_rejections (inventory_stock.bronze.dq_rejections) with lineage_key for traceability."
+    rationale: >
+      The Purchase product requires a centralised DQ rejection store so that all
+      quality failures from QA-P003 (RI checks) and other DQ assertions are
+      persisted in a queryable Delta table with the run's lineage_key, enabling
+      surgical investigation and replay of specific bad batches.
+    scope: "All DQ rule violations detected during Purchase ETL post-load checks."
+    behavior: |
+      The DQ rejections table must be created as part of the Purchase environment
+      initialisation:
+
+        CREATE TABLE IF NOT EXISTS inventory_stock.bronze.dq_rejections (
+            rejection_id       BIGINT     GENERATED ALWAYS AS IDENTITY,
+            lineage_key        BIGINT     NOT NULL
+                COMMENT 'FK to lineage_run; identifies the ETL run that produced this rejection',
+            rule_id            STRING     NOT NULL
+                COMMENT 'QA rule ID that detected this violation (e.g., QA-P003)',
+            source_table       STRING     NOT NULL,
+            pk_column          STRING     NOT NULL,
+            pk_value           STRING     NOT NULL,
+            violation_column   STRING     NOT NULL,
+            violation_value    STRING,
+            rejection_reason   STRING     NOT NULL,
+            detected_at        TIMESTAMP  NOT NULL DEFAULT current_timestamp()
+        )
+        USING DELTA
+        TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
+
+      All QA checks (QA-P001 through QA-P004) that identify violations must append
+      rejection rows to this table using spark.write with mode("append").
+
+      A post-run summary query must be logged at the end of each ETL run:
+        spark.sql(f"""
+            SELECT rule_id, COUNT(*) AS rejection_count
+            FROM inventory_stock.bronze.dq_rejections
+            WHERE lineage_key = {lineage_key}
+            GROUP BY rule_id
+        """).show()
+
+  # ──────────────────────────────────────────────
+  # CX — Custom patterns dimension (entirely new)
+  # ──────────────────────────────────────────────
+
+  - rule_id: "CX-P001"
+    action: new
+    dimension: "CX"
+    intent: "Replace hard-coded date filters with externalised configuration values read from config/environment.yaml."
+    rationale: >
+      The Purchase product source contains hard-coded date literals used as extract
+      window lower bounds and filter boundaries. Externalising these to
+      config/environment.yaml eliminates brittle hard-codes, enables environment-specific
+      overrides (dev/test/prod), and makes batch re-runs with alternative date windows
+      possible without code changes.
+    scope: "Any hard-coded date literal used as a filter or window boundary in Purchase ETL notebooks or SQL."
+    behavior: |
+      Identify all hard-coded date literals in Purchase ETL code (e.g., '2020-01-01',
+      '1900-01-01' used as lower bounds, GETDATE()-365 style fixed offsets).
+
+      Externalise each to config/environment.yaml under the [purchase.etl] section:
+        purchase:
+          etl:
+            initial_load_date: "1900-01-01"
+            batch_lookback_days: 1
+            fact_optimize_row_threshold: 10000
+
+      Load at notebook startup via:
+        import yaml
+        with open("/dbfs/config/environment.yaml") as f:
+            cfg = yaml.safe_load(f)
+        INITIAL_LOAD_DATE = cfg["purchase"]["etl"]["initial_load_date"]
+
+      Replace all hard-coded date literals in ETL code with the corresponding
+      config variable. Document each externalised value with a comment citing the
+      original hard-coded value and the config key that replaces it.
+
+  - rule_id: "CX-P002"
+    action: new
+    dimension: "CX"
+    intent: "Replace hard-coded business factors (e.g., multipliers, thresholds, rate constants) with externalised config values, add NULL guards, and add DQ bound assertions."
+    rationale: >
+      Hard-coded business factors (tax rates, conversion factors, quantity thresholds)
+      embedded in ETL or transformation logic are fragile and untraceable. Externalising
+      them enables governance review and change tracking. NULL guards prevent silent
+      calculation errors when a factor is not configured. DQ bound assertions catch
+      out-of-range values before they propagate downstream.
+    scope: "All numeric literals used as business-semantic multipliers, rates, or thresholds in Purchase ETL and SQL."
+    behavior: |
+      For each identified hard-coded business factor:
+
+      1. Add an entry to config/environment.yaml under purchase.business_rules:
+           purchase:
+             business_rules:
+               <factor_name>: <value>
+
+      2. In Python, load and apply a NULL guard:
+           factor_val = cfg["purchase"]["business_rules"].get("<factor_name>")
+           if factor_val is None:
+               raise ValueError("CX-P002: <factor_name> is not configured in environment.yaml")
+
+      3. After loading the factor, assert it is within expected bounds:
+           assert <lower_bound> <= factor_val <= <upper_bound>, (
+               f"CX-P002: <factor_name>={factor_val} is outside expected range [{lower_bound}, {upper_bound}]"
+           )
+
+      Document each factor with its business meaning, expected range, and the ETL
+      location where it is applied.
+
+  - rule_id: "CX-P003"
+    action: new
+    dimension: "CX"
+    intent: "Consolidate duplicate scalar functions that appear multiple times in source stored procedures into a single NULL-guarded Python UDF or SQL function."
+    rationale: >
+      The Purchase product source contains repeated scalar function patterns (e.g.,
+      date-format transforms, string normalisation, numeric coercion) that are
+      copy-pasted across multiple stored procedures. Consolidating these into a
+      single, NULL-guarded UDF reduces maintenance surface and ensures consistent
+      NULL handling across all call sites.
+    scope: "Duplicate scalar function patterns identified across Purchase-scope stored procedures."
+    behavior: |
+      For each repeated scalar function pattern:
+
+      1. Identify all occurrences across source stored procedures
+      2. Create a single Python UDF or Spark SQL function in src/common/udfs.py:
+
+           from pyspark.sql.functions import udf
+           from pyspark.sql.types import StringType
+
+           @udf(returnType=StringType())
+           def <function_name>(val):
+               """<docstring citing original T-SQL function and all call sites>"""
+               if val is None:
+                   return None  # NULL guard
+               return <transformation logic>
+
+      3. Register as a Spark SQL function if needed in SQL notebooks:
+           spark.udf.register("<function_name>", <function_name>)
+
+      4. Replace all occurrences in ETL notebooks with the UDF call
+      5. Add a unit test in tests/common/test_udfs.py covering: None input (NULL guard),
+         empty string input, boundary values, and representative valid input
+
+  - rule_id: "CX-P004"
+    action: new
+    dimension: "CX"
+    intent: "Enforce the standard Purchase product codebase layout: all generated artifacts must be placed in the prescribed directory structure."
+    rationale: >
+      The Purchase product introduces a multi-module codebase with shared helpers,
+      ETL notebooks, database DDL, configuration, documentation, and tests. Without
+      a standard layout, artifacts become scattered and tooling (CI, import resolution,
+      documentation generation) breaks. A canonical layout rule ensures all code
+      generators and manual contributors produce artifacts in the correct locations.
+    scope: "All files and directories produced for the Purchase product codebase."
+    behavior: |
+      All generated and hand-written artifacts for the Purchase product must be placed
+      under the following layout:
+
+        config/
+          environment.yaml          # externalised config (CX-P001, CX-P002)
+          exclusions.yaml           # out-of-scope object list
+          workflows/                # Databricks Workflow JSON definitions
+        docs/
+          design.md                 # ETL design document
+          data-dictionary.md        # column-level data dictionary
+        src/
+          common/
+            constants.py            # catalog/schema/table constants
+            udfs.py                 # consolidated UDFs (CX-P003)
+            scd2_merge.py           # SCD-2 merge helper (OB-P004)
+            sk_resolver.py          # surrogate key resolver (OB-P004)
+            fact_merge.py           # fact merge helper (OB-P004)
+          db/
+            ddl/                    # CREATE TABLE / VIEW DDL files
+            grants/                 # GRANT statements
+          etl/
+            migrate_staged_purchase_data.py
+            nb_extract_watermark.py
+            nb_extract_purchase.py
+          init/
+            bootstrap_<dim>_sentinel.py  # one per SCD-2 dim (per OB-P001)
+            reseed_purchase_environment.py
+        tests/
+          common/                   # unit tests for shared helpers
+          etl/                      # integration tests for ETL notebooks
+
+      Code generators must validate output file paths against this layout before writing.
+      Any artifact placed outside this layout must include a rationale comment.
+
+  - rule_id: "CX-P005"
+    action: new
+    dimension: "CX"
+    intent: "Enforce the standard Python notebook convention for all Purchase ETL notebooks: constants.py import, taskValues lineage_key injection, zero-rows guard, and conditional OPTIMIZE."
+    rationale: >
+      Without a shared notebook convention, individual ETL notebooks implement the
+      same boilerplate patterns differently, leading to inconsistency in lineage
+      propagation, silent zero-row success on empty batches, and unconditional OPTIMIZE
+      runs on low-volume nights. A product-level convention rule ensures all Purchase
+      notebooks use the same structural skeleton.
+    scope: "All Python ETL notebooks in src/etl/ and src/init/ for the Purchase product."
+    behavior: |
+      Every Purchase ETL notebook must follow this structural skeleton:
+
+        # 1. IMPORTS
+        from src.common.constants import *
+        from src.common.lineage_utils import open_lineage_record, close_lineage_record
+        from src.common.etl_control import get_last_etl_cutoff, set_etl_cutoff
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 2. LINEAGE KEY (from upstream task via taskValues — see LN-P001)
+        lineage_key = dbutils.jobs.taskValues.get(
+            taskKey="nb_extract_watermark", key="lineage_key"
+        )
+
+        # 3. ZERO-ROWS GUARD (skip processing on empty batch)
+        staging_count = spark.sql(
+            "SELECT COUNT(*) FROM " + PURCHASE_STAGING_TABLE
+        ).collect()[0][0]
+        if staging_count == 0:
+            logger.info("Zero rows in staging — skipping ETL processing for this run")
+            dbutils.notebook.exit("SKIPPED: zero rows")
+
+        # 4. MAIN ETL LOGIC
+        try:
+            rows_merged = <ETL steps>
+            <QA checks>
+        except Exception as e:
+            close_lineage_record(spark, lineage_key, rows_merged=0, succeeded=False)
+            raise
+
+        # 5. CONDITIONAL OPTIMIZE (see PE-P002)
+        if rows_merged > FACT_OPTIMIZE_ROW_THRESHOLD:
+            spark.sql(f"OPTIMIZE {FACT_PURCHASE_TABLE}")
+
+        # 6. CLOSE LINEAGE
+        close_lineage_record(spark, lineage_key, rows_merged=rows_merged, succeeded=True)
+
+  - rule_id: "CX-P006"
+    action: new
+    dimension: "CX"
+    intent: "Enforce a standard SQL DDL file header block for all DDL files generated for the Purchase product."
+    rationale: >
+      Generated DDL files require a standard header so that reviewers can identify
+      the source object being replaced, the target object being created, the
+      transformation rules applied, and the generation timestamp. Without a standard
+      header, auditing which project and product rules were applied to each file
+      requires searching external documents.
+    scope: "All SQL DDL files in src/db/ddl/ for the Purchase product."
+    behavior: |
+      Every SQL DDL file for the Purchase product must begin with the following
+      header block:
+
+        -- ============================================================
+        -- PROJECT  : Inventory_Stock_Project
+        -- PRODUCT  : Purchase
+        -- FILE     : <filename>.sql
+        -- PURPOSE  : <one-line description of the object being created>
+        -- SOURCE   : <source schema.object> (<source platform>)
+        -- TARGET   : <target catalog.schema.object> (<target platform>)
+        -- RULES    : <comma-separated list of rule IDs applied, e.g. TY-P001, OB-P001>
+        -- GENERATED: <ISO-8601 date>
+        -- ============================================================
+
+      The RULES field must list every project and product rule ID that influenced
+      this file's content. Code generators must populate this field automatically
+      by recording which rules were evaluated during generation.

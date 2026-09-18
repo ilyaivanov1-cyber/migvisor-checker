@@ -1,0 +1,8 @@
+project: Inventory_Stock_Project
+mode: hybrid
+created: "2026-09-04"
+pipeline:
+  stage: rules
+  completedSteps:
+    - modernization-plan
+    - rules

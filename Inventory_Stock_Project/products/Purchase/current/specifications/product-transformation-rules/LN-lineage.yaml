@@ -1,0 +1,878 @@
+dimension: Lineage
+prefix: LN
+product: Purchase
+project: "Inventory_Stock_Project"
+inherits_from: "Inventory_Stock_Project"
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-07"
+
+# ── INHERITED PROJECT RULES ────────────────────────────────────────────────────
+# All 8 project LN rules are reproduced verbatim below.
+# product_status annotation is added to each inheritance: block:
+#   INHERITED — rule applies as-is for the Purchase product
+#   EXTENDED  — rule is extended by a product rule (see product_rules section)
+# ──────────────────────────────────────────────────────────────────────────────
+
+rules:
+
+  - id: LN-001
+    dimension: Lineage
+    name: Migrate integration.lineage table to Delta Lake
+    intent: >
+      Recreate the SQL Server `integration.lineage` table as a managed Delta Lake table
+      `inventory_stock.bronze.lineage_run` in the Databricks Unity Catalog, preserving its
+      schema and semantics while adopting Delta Lake storage conventions. The source table
+      records one row per ETL run per entity with start/end timestamps and success status
+      (columns: lineage_key, data_load_started, data_load_completed, table_name, was_successful,
+      source_system_cutoff_time). The target table retains all these metadata columns and adds
+      an ETL_run_id column for cross-system correlation. This table must exist and be accessible
+      before any ETL pipeline executes in the target environment.
+    activation:
+      preconditions:
+        - The source `integration.lineage` table exists in SQL Server 2014
+        - The Unity Catalog schema `inventory_stock.bronze` is provisioned
+        - Delta Lake storage credentials are configured
+      scope: project
+    transformation:
+      source:
+        object: integration.lineage
+        platform: "Microsoft SQL Server 2014"
+        ddl_pattern: |
+          CREATE TABLE [Integration].[Lineage]
+          (
+            [Lineage Key]                INT           NOT NULL,
+            [Data Load Started]          DATETIME2(7)  NOT NULL,
+            [Data Load Completed]        DATETIME2(7)  NULL,
+            [Table Name]                 NVARCHAR(100) NOT NULL,
+            [Was Successful]             BIT           NOT NULL DEFAULT 0,
+            [Source System Cutoff Time]  DATETIME2(7)  NULL,
+            CONSTRAINT [PK_Integration_Lineage] PRIMARY KEY ([Lineage Key])
+          );
+      target:
+        object: inventory_stock.bronze.lineage_run
+        platform: "Databricks (Delta Lake)"
+        ddl_pattern: |
+          CREATE TABLE IF NOT EXISTS inventory_stock.bronze.lineage_run (
+            lineage_key               BIGINT        NOT NULL
+                                        GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1),
+            data_load_started         TIMESTAMP     NOT NULL,
+            data_load_completed       TIMESTAMP     NULL,
+            table_name                STRING        NOT NULL,
+            was_successful            BOOLEAN       NOT NULL DEFAULT FALSE,
+            source_system_cutoff_time TIMESTAMP     NULL,
+            -- Extended metadata columns (new capability)
+            etl_run_id                STRING        NOT NULL COMMENT 'UUID assigned per pipeline invocation for cross-system correlation',
+            pipeline_name             STRING        NULL     COMMENT 'Databricks pipeline or job name',
+            notebook_path             STRING        NULL     COMMENT 'Path to the executing notebook',
+            cluster_id                STRING        NULL     COMMENT 'Databricks cluster ID',
+            table_row_count           BIGINT        NULL     COMMENT 'Rows written to the target Delta table in this run',
+            created_at                TIMESTAMP     NOT NULL DEFAULT current_timestamp()
+          )
+          USING DELTA
+          COMMENT 'ETL run audit log; migrated from SQL Server integration.lineage; one row per pipeline execution per entity'
+          TBLPROPERTIES (
+            'delta.enableChangeDataFeed'            = 'true',
+            'delta.autoOptimize.optimizeWrite'      = 'true',
+            'delta.autoOptimize.autoCompact'        = 'true'
+          );
+      algorithm:
+        - Map INT lineage_key to BIGINT GENERATED ALWAYS AS IDENTITY to replace sequences.lineagekey (see LN-002)
+        - Map all DATETIME2(7) columns to TIMESTAMP (Databricks native timestamp type)
+        - Map NVARCHAR(100) table_name to STRING
+        - Map BIT was_successful to BOOLEAN
+        - Add etl_run_id (STRING UUID), pipeline_name, notebook_path, cluster_id, table_row_count as extended metadata columns
+        - Enable Change Data Feed for downstream audit and CDC use cases
+        - Enable auto-optimize write and auto-compact for operational efficiency
+        - Historical rows from SQL Server are bulk-loaded via JDBC; run OPTIMIZE once after bulk load
+        - Rename target table to lineage_run to align with Delta naming conventions and avoid collision with system tables
+    validation:
+      success_criteria:
+        - Table `inventory_stock.bronze.lineage_run` exists in Unity Catalog with correct schema
+        - Row count after migration matches source `integration.lineage` row count
+        - All NOT NULL constraints are satisfied in the target
+        - BOOLEAN column was_successful contains only TRUE/FALSE values (no NULLs on NOT NULL column)
+        - Delta table properties are set (autoOptimize, CDC, autoCompact)
+      quality_dimensions:
+        - completeness
+        - conformity
+        - accuracy
+      test_cases:
+        - name: Row count parity
+          description: Count rows in source and target; assert equality after bulk load
+          assertion: "SELECT COUNT(*) FROM inventory_stock.bronze.lineage_run = source integration.lineage COUNT(*)"
+        - name: NOT NULL column integrity
+          description: Assert no NULLs in lineage_key, data_load_started, table_name, was_successful, etl_run_id
+          assertion: "SELECT COUNT(*) WHERE lineage_key IS NULL OR data_load_started IS NULL OR etl_run_id IS NULL = 0"
+        - name: Primary key uniqueness
+          description: Assert lineage_key is unique across all rows
+          assertion: "SELECT COUNT(*) != COUNT(DISTINCT lineage_key) = 0"
+        - name: Delta table format with CDF
+          description: Verify table is stored in Delta format with Change Data Feed enabled
+          assertion: "DESCRIBE DETAIL inventory_stock.bronze.lineage_run shows format=delta and enableChangeDataFeed=true"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: LN-002
+    dimension: Lineage
+    name: Retire sequences.lineagekey SEQUENCE and replace with IDENTITY column
+    intent: >
+      SQL Server SEQUENCE objects (`sequences.lineagekey`) have no direct equivalent in
+      Databricks. The integer key generation pattern used by `integration.getlineagekey`
+      (which calls `NEXT VALUE FOR sequences.lineagekey` and injects the result as the
+      `Lineage Key` for all rows of that ETL run) must be replaced with a Delta Lake
+      IDENTITY column on `inventory_stock.bronze.lineage_run`. This eliminates the standalone
+      sequence object and the procedure that wraps it, delegating key assignment to Delta
+      Lake's built-in auto-increment mechanism. The SEQUENCE is retired without replacement.
+    activation:
+      preconditions:
+        - The source `sequences.lineagekey` SEQUENCE object is identified in SQL Server
+        - The `inventory_stock.bronze.lineage_run` Delta table exists (LN-001 applied)
+        - ETL pipelines have not yet been written for the target platform
+      scope: project
+    transformation:
+      source:
+        object: sequences.lineagekey
+        platform: "Microsoft SQL Server 2014"
+        ddl_pattern: |
+          -- SQL Server SEQUENCE used by integration.getlineagekey:
+          CREATE SEQUENCE [Sequences].[LineageKey]
+            AS INT
+            START WITH 1
+            INCREMENT BY 1
+            MINVALUE 1
+            NO MAXVALUE
+            NO CYCLE
+            CACHE 50;
+
+          -- Called via:
+          -- SELECT @LineageKey = NEXT VALUE FOR [Sequences].[LineageKey];
+      target:
+        object: inventory_stock.bronze.lineage_run (lineage_key column)
+        platform: "Databricks (Delta Lake)"
+        ddl_pattern: |
+          -- IDENTITY column on lineage_run replaces the SEQUENCE (defined in LN-001 DDL):
+          lineage_key BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)
+
+          -- Python ETL pipelines must NOT supply lineage_key on INSERT;
+          -- Delta assigns it automatically and it is retrieved post-insert via etl_run_id:
+          --
+          --   spark.sql("""
+          --       INSERT INTO inventory_stock.bronze.lineage_run
+          --         (data_load_started, table_name, was_successful, etl_run_id, ...)
+          --       VALUES (current_timestamp(), 'fact_purchase', false, '<uuid>', ...)
+          --   """)
+          --   row = spark.sql("""
+          --       SELECT lineage_key FROM inventory_stock.bronze.lineage_run
+          --       WHERE etl_run_id = '<uuid>'
+          --   """).collect()[0]
+          --   lineage_key = row["lineage_key"]
+      algorithm:
+        - DROP the source SEQUENCE object `sequences.lineagekey` after migration (no parallel run needed)
+        - The `lineage_key` column in `inventory_stock.bronze.lineage_run` is GENERATED ALWAYS AS IDENTITY — no explicit value supplied on INSERT
+        - Python ETL pipelines retrieve the assigned lineage_key by querying the just-inserted row by its UUID etl_run_id
+        - Remove all `NEXT VALUE FOR sequences.lineagekey` references from migrated ETL code
+        - Document that IDENTITY values may have gaps (e.g., after failed transactions); gaps are acceptable
+        - The reseed procedures `sequences.reseedallsequences` and `sequences.reseedsequencebeyondtablevalues` are retired (see LN-007)
+    validation:
+      success_criteria:
+        - No reference to `sequences.lineagekey` or `NEXT VALUE FOR` exists in any migrated ETL code
+        - lineage_key is populated on every INSERT to `inventory_stock.bronze.lineage_run` without the caller providing a value
+        - lineage_key values are unique and monotonically increasing across runs
+        - No SEQUENCE DDL objects exist in the target Databricks catalog
+      quality_dimensions:
+        - uniqueness
+        - validity
+        - consistency
+      test_cases:
+        - name: IDENTITY auto-assignment
+          description: Insert a row without specifying lineage_key and assert it is auto-assigned
+          assertion: "INSERT INTO inventory_stock.bronze.lineage_run (...) WITHOUT lineage_key; SELECT lineage_key IS NOT NULL"
+        - name: Key uniqueness after 100 inserts
+          description: Perform 100 test inserts; verify COUNT(DISTINCT lineage_key) = 100
+          assertion: "COUNT(DISTINCT lineage_key) = 100"
+        - name: No SEQUENCE references in ETL
+          description: Static scan of all generated ETL files for NEXT VALUE FOR or sequences.lineagekey
+          assertion: "grep -r 'NEXT VALUE FOR\\|sequences.lineagekey\\|sequences\\.LineageKey' ./src = 0 matches"
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+      product_status: INHERITED
+
+  - id: LN-003
+    dimension: Lineage
+    name: Replace integration.getlineagekey procedure with Python utility function
+    intent: >
+      The SQL Server stored procedure `integration.getlineagekey` encapsulates the two-step
+      pattern of (1) generating the next lineage key via `NEXT VALUE FOR sequences.lineagekey`
+      and (2) inserting an opening record into `integration.lineage`. In the Purchase ETL,
+      `migratestagedpurchasedata` calls this procedure to obtain the `@LineageKey` variable
+      that is then stamped on every row inserted into `fact.purchase` and into the staging
+      table. This procedure must be replaced by a Python utility function in the target
+      platform that opens a lineage record in `inventory_stock.bronze.lineage_run` and
+      returns the IDENTITY-assigned lineage_key for use by the calling ETL pipeline.
+    activation:
+      preconditions:
+        - LN-001 (Delta lineage_run table) and LN-002 (IDENTITY key) are applied
+        - Shared Python utilities module exists in the project (`shared/utils/`)
+        - Databricks runtime with PySpark is the execution environment
+      scope: project
+    transformation:
+      source:
+        object: integration.getlineagekey
+        platform: "Microsoft SQL Server 2014"
+        ddl_pattern: |
+          -- Called at the start of migratestagedpurchasedata:
+          CREATE PROCEDURE [Integration].[GetLineageKey]
+            @TableName   NVARCHAR(100),
+            @LineageKey  INT OUTPUT
+          AS BEGIN
+            SET NOCOUNT ON;
+            INSERT INTO [Integration].[Lineage]
+              ([Data Load Started], [Table Name], [Was Successful])
+            VALUES (SYSDATETIME(), @TableName, 0);
+            SET @LineageKey = SCOPE_IDENTITY();
+          END;
+      target:
+        object: shared/utils/lineage_utils.py :: open_lineage_record()
+        platform: "Databricks (Delta Lake)"
+        ddl_pattern: |
+          # shared/utils/lineage_utils.py
+          from datetime import datetime, timezone
+          import uuid
+          from pyspark.sql import SparkSession
+
+          CATALOG = "inventory_stock"
+          SCHEMA  = "bronze"
+
+          def open_lineage_record(
+              spark: SparkSession,
+              table_name: str,
+              pipeline_name: str,
+              pipeline_version: str,
+              notebook_path: str = None,
+              catalog: str = CATALOG,
+              schema: str = SCHEMA
+          ) -> int:
+              """
+              Opens a new lineage record in inventory_stock.bronze.lineage_run.
+              Equivalent to integration.getlineagekey in SQL Server.
+              Returns the IDENTITY-assigned lineage_key for this ETL run.
+              """
+              run_id = str(uuid.uuid4())
+              now = datetime.now(timezone.utc)
+              spark.sql(f"""
+                  INSERT INTO {catalog}.{schema}.lineage_run
+                    (data_load_started, table_name, was_successful,
+                     etl_run_id, pipeline_name, notebook_path, created_at)
+                  VALUES
+                    ('{now}', '{table_name}', false,
+                     '{run_id}', '{pipeline_name}', '{notebook_path}', current_timestamp())
+              """)
+              row = spark.sql(f"""
+                  SELECT lineage_key
+                  FROM {catalog}.{schema}.lineage_run
+                  WHERE etl_run_id = '{run_id}'
+              """).collect()[0]
+              return row["lineage_key"]
+
+          def close_lineage_record(
+              spark: SparkSession,
+              lineage_key: int,
+              row_count: int,
+              succeeded: bool,
+              new_cutoff: str = None,
+              catalog: str = CATALOG,
+              schema: str = SCHEMA
+          ) -> None:
+              """
+              Closes an open lineage record by stamping completion time, row count,
+              success status, and optionally the new ETL cutoff timestamp.
+              No direct SQL Server equivalent — new capability added in target platform.
+              """
+              cutoff_clause = f", source_system_cutoff_time = '{new_cutoff}'" if new_cutoff else ""
+              spark.sql(f"""
+                  UPDATE {catalog}.{schema}.lineage_run
+                  SET data_load_completed = current_timestamp(),
+                      table_row_count     = {row_count},
+                      was_successful      = {str(succeeded).lower()}
+                      {cutoff_clause}
+                  WHERE lineage_key = {lineage_key}
+              """)
+      algorithm:
+        - Create `shared/utils/lineage_utils.py` in the project's shared utilities package
+        - Implement `open_lineage_record()` as the functional replacement for `getlineagekey`
+        - Implement `close_lineage_record()` to stamp completion metadata — new capability absent in source
+        - Use UUID as `etl_run_id` to allow idempotent re-runs and cross-system correlation; retrieve IDENTITY key post-insert by querying on etl_run_id
+        - All ETL notebooks must import and call `open_lineage_record()` at pipeline start and `close_lineage_record()` at pipeline end (in a finally block)
+        - DROP `integration.getlineagekey` from source schema after cutover validation
+        - The Python functions are unit-testable without a live Spark session via mocking
+    validation:
+      success_criteria:
+        - "`open_lineage_record()` inserts a row into `inventory_stock.bronze.lineage_run` and returns a valid positive integer lineage_key"
+        - The returned lineage_key matches the IDENTITY value assigned by Delta
+        - "`close_lineage_record()` updates data_load_completed, table_row_count, was_successful for the correct row"
+        - No ETL notebook calls `integration.getlineagekey` via JDBC after cutover
+        - Unit tests for both functions pass in CI
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - validity
+      test_cases:
+        - name: open_lineage_record returns integer key
+          description: Call open_lineage_record with test parameters; assert return type is int and > 0
+          assertion: "isinstance(open_lineage_record(...), int) and key > 0"
+        - name: Lineage row inserted on open
+          description: After calling open_lineage_record, query lineage_run and assert one row with was_successful=false
+          assertion: "COUNT(*) WHERE lineage_key = <returned_key> AND was_successful = false = 1"
+        - name: close_lineage_record updates row
+          description: Call close_lineage_record with succeeded=True, row_count=500; assert record updated
+          assertion: "was_successful = true AND table_row_count = 500 AND data_load_completed IS NOT NULL"
+        - name: No open records after successful pipeline
+          description: After full ETL pipeline, assert no lineage rows have was_successful=false and data_load_completed IS NULL
+          assertion: "COUNT(*) WHERE was_successful = false AND data_load_completed IS NULL = 0"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: EXTENDED   # by LN-P001 — specifies dbutils.jobs.taskValues as the exact lineage_key injection mechanism for the Purchase Workflow architecture
+
+  - id: LN-004
+    dimension: Lineage
+    name: Replace integration.getlastetlcutofftime procedure with Delta control table read
+    intent: >
+      The SQL Server stored procedure `integration.getlastetlcutofftime` reads the ETL
+      high-watermark for a given entity from `integration.etl cutoff` and returns it as an
+      OUTPUT parameter. In the Purchase ETL, `migratestagedpurchasedata` calls this procedure
+      to obtain the `@LastCutoff` timestamp that bounds the incremental extract window.
+      Because Delta Lake has no stored procedures, this must be replaced with a direct
+      Python/SQL read from the Delta control table `inventory_stock.bronze.etl_cutoff`.
+      The read pattern must be atomic with respect to the subsequent watermark write at
+      run end (see LN-005).
+    activation:
+      preconditions:
+        - LN-005 (etl_cutoff Delta control table) is applied
+        - Shared Python utilities module exists in the project (`shared/utils/`)
+        - Databricks runtime with PySpark is the execution environment
+      scope: project
+    transformation:
+      source:
+        object: integration.getlastetlcutofftime
+        platform: "Microsoft SQL Server 2014"
+        ddl_pattern: |
+          CREATE PROCEDURE [Integration].[GetLastETLCutoffTime]
+            @TableName   NVARCHAR(100),
+            @CutoffTime  DATETIME2(7) OUTPUT
+          AS BEGIN
+            SET NOCOUNT ON;
+            SELECT TOP(1) @CutoffTime = [Cutoff Time]
+            FROM   [Integration].[ETL Cutoff]
+            WHERE  [Table Name] = @TableName;
+          END;
+      target:
+        object: shared/utils/etl_control.py :: get_last_etl_cutoff()
+        platform: "Databricks (Delta Lake)"
+        ddl_pattern: |
+          # shared/utils/etl_control.py
+          from pyspark.sql import SparkSession
+          from datetime import datetime, timezone
+
+          CATALOG = "inventory_stock"
+          SCHEMA  = "bronze"
+
+          def get_last_etl_cutoff(
+              spark: SparkSession,
+              table_name: str,
+              catalog: str = CATALOG,
+              schema: str = SCHEMA
+          ) -> str:
+              """
+              Reads the current ETL high-watermark for the specified entity from
+              inventory_stock.bronze.etl_cutoff.
+              Replaces integration.getlastetlcutofftime stored procedure.
+              Returns cutoff_time as an ISO-8601 string; falls back to '1900-01-01T00:00:00Z'
+              if no row exists for the entity (first-run bootstrap).
+              """
+              rows = spark.sql(f"""
+                  SELECT cutoff_time
+                  FROM   {catalog}.{schema}.etl_cutoff
+                  WHERE  table_name = '{table_name}'
+              """).collect()
+              if rows:
+                  return str(rows[0]["cutoff_time"])
+              return "1900-01-01T00:00:00+00:00"  # bootstrap default
+
+          def set_etl_cutoff(
+              spark: SparkSession,
+              table_name: str,
+              new_cutoff: str,
+              catalog: str = CATALOG,
+              schema: str = SCHEMA
+          ) -> None:
+              """
+              Advances the ETL high-watermark for the specified entity.
+              Called at the end of a successful ETL run.
+              Uses Delta MERGE to upsert — handles both first-run INSERT and subsequent UPDATE.
+              """
+              spark.sql(f"""
+                  MERGE INTO {catalog}.{schema}.etl_cutoff AS tgt
+                  USING (SELECT '{table_name}' AS table_name,
+                                CAST('{new_cutoff}' AS TIMESTAMP) AS cutoff_time) AS src
+                  ON tgt.table_name = src.table_name
+                  WHEN MATCHED THEN
+                    UPDATE SET tgt.cutoff_time = src.cutoff_time,
+                               tgt.last_updated = current_timestamp()
+                  WHEN NOT MATCHED THEN
+                    INSERT (table_name, cutoff_time, last_updated)
+                    VALUES (src.table_name, src.cutoff_time, current_timestamp())
+              """)
+      algorithm:
+        - Create `shared/utils/etl_control.py` in the project's shared utilities package
+        - Implement `get_last_etl_cutoff()` as the functional replacement for `getlastetlcutofftime`
+        - Implement `set_etl_cutoff()` as the replacement for the watermark UPDATE at end of `migratestagedpurchasedata`
+        - Use Delta MERGE for the watermark write to ensure idempotency on re-runs
+        - Provide a bootstrap default of '1900-01-01' for first-run scenarios (no existing cutoff row)
+        - DROP `integration.getlastetlcutofftime` from source schema after cutover validation
+        - The function is unit-testable without a live Spark session via mocking
+    validation:
+      success_criteria:
+        - "`get_last_etl_cutoff()` returns the correct cutoff_time string for a known entity"
+        - Bootstrap default '1900-01-01T00:00:00+00:00' is returned when no row exists for the entity
+        - "`set_etl_cutoff()` upserts the watermark row correctly for both INSERT and UPDATE cases"
+        - No ETL notebook calls `integration.getlastetlcutofftime` via JDBC after cutover
+        - Watermark advances correctly across three sequential test runs without gaps or overlaps
+      quality_dimensions:
+        - accuracy
+        - consistency
+        - timeliness
+      test_cases:
+        - name: get_last_etl_cutoff returns known value
+          description: Pre-seed etl_cutoff with a known timestamp; call get_last_etl_cutoff; assert returned value matches
+          assertion: "get_last_etl_cutoff(spark, 'fact_purchase') == '2024-01-15T00:00:00+00:00' (seeded value)"
+        - name: Bootstrap default on first run
+          description: Call get_last_etl_cutoff for a table_name that has no row; assert '1900-01-01' default is returned
+          assertion: "get_last_etl_cutoff(spark, 'new_entity') == '1900-01-01T00:00:00+00:00'"
+        - name: set_etl_cutoff upserts correctly
+          description: Call set_etl_cutoff twice with different timestamps; assert the second value is retained
+          assertion: "SELECT cutoff_time FROM etl_cutoff WHERE table_name = 'fact_purchase' = <second_value>"
+        - name: No getlastetlcutofftime references in ETL
+          description: Static scan of all generated ETL files for the procedure name
+          assertion: "grep -r 'getlastetlcutofftime\\|GetLastETLCutoffTime' ./src = 0 matches"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: LN-005
+    dimension: Lineage
+    name: Migrate integration.etl cutoff watermark table to Delta control table
+    intent: >
+      The SQL Server table `integration.etl cutoff` (note: name contains a space) is the
+      per-entity ETL high-watermark store. It holds one row per tracked entity with the
+      timestamp of the last successful ETL run. The Purchase ETL reads this watermark via
+      `integration.getlastetlcutofftime` to bound the incremental extract window and writes
+      it at the end of `migratestagedpurchasedata`. This table must be migrated to a Delta
+      control table `inventory_stock.bronze.etl_cutoff` (renamed to snake_case, eliminating
+      the space). ACID writes via Delta MERGE replace the SQL Server transaction-protected
+      UPDATE, providing equivalent atomicity without explicit transaction blocks.
+    activation:
+      preconditions:
+        - The source `integration.etl cutoff` table exists in SQL Server 2014
+        - The Unity Catalog schema `inventory_stock.bronze` is provisioned
+        - Delta Lake storage credentials are configured
+      scope: project
+    transformation:
+      source:
+        object: "integration.etl cutoff"
+        platform: "Microsoft SQL Server 2014"
+        ddl_pattern: |
+          CREATE TABLE [Integration].[ETL Cutoff]
+          (
+            [Table Name]  NVARCHAR(100) NOT NULL,
+            [Cutoff Time] DATETIME2(7)  NOT NULL,
+            CONSTRAINT [PK_Integration_ETL_Cutoff] PRIMARY KEY ([Table Name])
+          );
+
+          -- Typical row at migration time:
+          -- ('fact.purchase', '2024-01-14 23:58:47.1234567')
+      target:
+        object: inventory_stock.bronze.etl_cutoff
+        platform: "Databricks (Delta Lake)"
+        ddl_pattern: |
+          CREATE TABLE IF NOT EXISTS inventory_stock.bronze.etl_cutoff (
+            table_name    STRING     NOT NULL,
+            cutoff_time   TIMESTAMP  NOT NULL,
+            last_updated  TIMESTAMP  NOT NULL DEFAULT current_timestamp()
+          )
+          USING DELTA
+          COMMENT 'Per-entity ETL high-watermark control table; migrated from SQL Server integration.[ETL Cutoff]'
+          TBLPROPERTIES (
+            'delta.autoOptimize.optimizeWrite' = 'true'
+          );
+
+          -- Seed the purchase entity watermark at migration time:
+          -- INSERT INTO inventory_stock.bronze.etl_cutoff
+          --   VALUES ('fact_purchase', CAST('<last_sql_server_cutoff>' AS TIMESTAMP), current_timestamp());
+      algorithm:
+        - Rename `integration.etl cutoff` (space in name) to `inventory_stock.bronze.etl_cutoff` (snake_case, no space)
+        - Map NVARCHAR(100) table_name to STRING
+        - Map DATETIME2(7) cutoff_time to TIMESTAMP
+        - Add last_updated TIMESTAMP column for observability
+        - Seed the target table with the current watermark values from SQL Server before cutover
+        - Entity name for the purchase watermark row must be normalised to snake_case: 'fact_purchase' (not 'fact.purchase')
+        - Use Delta MERGE for all watermark writes (see LN-004) — ensures idempotency on re-runs
+        - ACID writes via Delta OPTIMIZE WRITE replace SQL Server transaction-protected UPDATEs
+        - All callers of `integration.getlastetlcutofftime` must be updated to call `get_last_etl_cutoff()` (LN-004)
+    validation:
+      success_criteria:
+        - Table `inventory_stock.bronze.etl_cutoff` exists in Unity Catalog with correct schema
+        - Row for 'fact_purchase' is seeded with the watermark value from the SQL Server source at cutover time
+        - Delta MERGE upserts complete without errors under concurrent ETL runs
+        - No object named `[ETL Cutoff]` (with space) is referenced in any migrated ETL code
+      quality_dimensions:
+        - completeness
+        - conformity
+        - accuracy
+      test_cases:
+        - name: Row seeded at cutover
+          description: After cutover seed, query etl_cutoff for 'fact_purchase' and assert cutoff_time matches source
+          assertion: "SELECT cutoff_time FROM inventory_stock.bronze.etl_cutoff WHERE table_name = 'fact_purchase' = <source_value>"
+        - name: MERGE upsert idempotency
+          description: Run set_etl_cutoff twice with the same timestamp; assert exactly one row for the entity
+          assertion: "SELECT COUNT(*) FROM etl_cutoff WHERE table_name = 'fact_purchase' = 1"
+        - name: No space-named table references in ETL
+          description: Static scan for 'ETL Cutoff' (with space) in migrated ETL code
+          assertion: "grep -r 'ETL Cutoff\\|etl cutoff' ./src = 0 matches"
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+      product_status: INHERITED
+
+  - id: LN-006
+    dimension: Lineage
+    name: Propagate lineage_key to fact_purchase and staging Delta tables
+    intent: >
+      In the SQL Server source, every row in `fact.purchase` and in `integration.purchase_staging`
+      carries a `Lineage Key` integer that references `integration.lineage`, providing row-level
+      ETL run provenance. The `@LineageKey` variable obtained from `integration.getlineagekey`
+      is injected as a constant into every staging and fact row loaded in a given pipeline
+      execution. This FK pattern must be preserved in the Databricks target: every row in
+      `inventory_stock.silver_fact.fact_purchase` (and in the bronze staging table) must carry the
+      `lineage_key` of the ETL run that loaded it, enabling surgical reprocessing, audit, and
+      rollback by run identifier.
+    activation:
+      preconditions:
+        - LN-001 (lineage_run Delta table) is applied
+        - LN-003 (Python open_lineage_record utility) is applied
+        - Target fact and staging table DDLs have not yet been finalized
+      scope: project
+    transformation:
+      source:
+        object: "fact.purchase and integration.purchase_staging (Lineage Key column)"
+        platform: "Microsoft SQL Server 2014"
+        ddl_pattern: |
+          -- In Fact.Purchase (11 columns):
+          [Lineage Key] INT NOT NULL,
+          -- No formal FK constraint defined; referential integrity enforced by ETL procedure logic
+
+          -- In Integration.Purchase_Staging (14 columns):
+          [Lineage Key] INT NOT NULL,
+          -- Set to @LineageKey at the start of migratestagedpurchasedata (same value for all staging rows)
+      target:
+        object: "inventory_stock.silver_fact.fact_purchase and inventory_stock.bronze.purchase_staging"
+        platform: "Databricks (Delta Lake)"
+        ddl_pattern: |
+          -- Standard lineage_key column in fact_purchase DDL:
+          lineage_key  BIGINT  NOT NULL
+            COMMENT 'FK to inventory_stock.bronze.lineage_run.lineage_key; identifies the ETL run that loaded this row',
+
+          -- Standard lineage_key column in purchase_staging DDL:
+          lineage_key  BIGINT  NOT NULL
+            COMMENT 'ETL run identifier; populated from open_lineage_record() at pipeline start; same value for all rows in this run',
+
+          -- Delta Lake does not enforce FK constraints; enforce via post-load DQ assertion:
+          -- ASSERT spark.sql("""
+          --   SELECT COUNT(*) FROM inventory_stock.silver_fact.fact_purchase fp
+          --   LEFT ANTI JOIN inventory_stock.bronze.lineage_run lr
+          --     ON fp.lineage_key = lr.lineage_key
+          --   WHERE fp.lineage_key IS NOT NULL
+          -- """).collect()[0][0] == 0
+      algorithm:
+        - Every target fact and staging table DDL must include a `lineage_key BIGINT NOT NULL` column
+        - The ETL pipeline calls `open_lineage_record()` once per run at pipeline start and stores the returned key in a Python variable
+        - All rows written to the staging and fact Delta tables in that run receive the same lineage_key value
+        - During the MERGE INTO on fact_purchase, the lineage_key column is set from the current run's lineage_key variable (not from the staging row's existing value)
+        - Delta Lake does not natively enforce FK constraints; enforce referential integrity via post-load DQ assertion in the ETL pipeline
+        - For full-refresh loads, all rows receive the new run's lineage_key, replacing the previous value
+        - Include lineage_key column comment in all DDLs for self-documentation
+    validation:
+      success_criteria:
+        - Every target fact and staging Delta table has a `lineage_key BIGINT NOT NULL` column
+        - No fact or staging row has a NULL lineage_key after a successful ETL load
+        - Every lineage_key value in fact_purchase has a corresponding row in `inventory_stock.bronze.lineage_run`
+        - All rows inserted in a single pipeline run share the same lineage_key value
+      quality_dimensions:
+        - completeness
+        - consistency
+        - coverage
+      test_cases:
+        - name: lineage_key column presence in fact_purchase
+          description: Assert fact_purchase has lineage_key column of type BIGINT NOT NULL
+          assertion: "DESCRIBE TABLE inventory_stock.silver_fact.fact_purchase includes lineage_key BIGINT NOT NULL"
+        - name: No NULL lineage_keys post-load
+          description: After ETL pipeline, assert zero NULL lineage_key rows in fact_purchase
+          assertion: "SELECT COUNT(*) FROM inventory_stock.silver_fact.fact_purchase WHERE lineage_key IS NULL = 0"
+        - name: Referential integrity assertion
+          description: Anti-join fact_purchase against lineage_run; assert zero orphan rows
+          assertion: "LEFT ANTI JOIN on lineage_key between fact_purchase and lineage_run returns 0 rows"
+        - name: Single lineage_key per ETL run
+          description: For a given pipeline run, assert all newly inserted fact rows share the same lineage_key
+          assertion: "COUNT(DISTINCT lineage_key) in newly inserted batch of fact_purchase = 1"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: LN-007
+    dimension: Lineage
+    name: Retire sequence reseed procedures
+    intent: >
+      The SQL Server procedures `sequences.reseedallsequences` and
+      `sequences.reseedsequencebeyondtablevalues` exist solely to maintain the integrity
+      of SQL Server SEQUENCE objects by reseeding them above the current maximum key values
+      in dependent tables. Because `sequences.lineagekey` is retired (LN-002) and replaced
+      by a Delta Lake IDENTITY column that auto-increments without drifting below existing
+      values, these reseed procedures have no functional equivalent in Databricks and must
+      be retired without replacement. Their retirement must be documented and any callers
+      identified and removed. The `application.configuration_reseedetl` procedure (Purchase
+      portions) should also be reviewed for reseed calls — confirm drop scope with the
+      scope owner before cutover.
+    activation:
+      preconditions:
+        - LN-002 (SEQUENCE replaced by IDENTITY) is applied
+        - No caller of these procedures remains in migrated ETL code
+      scope: project
+    transformation:
+      source:
+        object: "sequences.reseedallsequences, sequences.reseedsequencebeyondtablevalues"
+        platform: "Microsoft SQL Server 2014"
+        ddl_pattern: |
+          -- sequences.ReseedAllSequences: iterates all sequences and calls ReseedSequenceBeyondTableValues
+          -- sequences.ReseedSequenceBeyondTableValues: finds the max key in the dependent table,
+          --   then calls ALTER SEQUENCE ... RESTART WITH <max+1>
+
+          -- application.configuration_reseedetl (Purchase portions):
+          --   TRUNCATEs fact.purchase; inserts key=0 sentinel rows into Dimension.Supplier
+          --   and Dimension.[Stock Item]; resets ETL cutoff to base time.
+          --   Contains reseed calls — confirm drop vs. retain with scope owner before migration.
+      target:
+        object: "(none — retired)"
+        platform: "Databricks (Delta Lake)"
+        ddl_pattern: |
+          -- No equivalent required.
+          -- Delta Lake IDENTITY columns are monotonically increasing and cannot produce
+          -- values below existing rows without an explicit ALTER TABLE ... ALTER COLUMN
+          -- statement, which is a controlled DBA operation.
+          --
+          -- If a reseed scenario is ever needed (e.g., after a load error or environment reset),
+          -- use: ALTER TABLE inventory_stock.bronze.lineage_run ALTER COLUMN lineage_key
+          --        BIGINT GENERATED ALWAYS AS IDENTITY (START WITH <n> INCREMENT BY 1);
+          -- This is a manual DBA operation, not an automated procedure.
+          --
+          -- For environment reseeds (replacing configuration_reseedetl), implement a
+          -- dedicated Python reset utility notebook that: TRUNCATEs Delta tables via
+          -- spark.sql("TRUNCATE TABLE ..."), inserts key=0 sentinel rows, and resets
+          -- etl_cutoff via set_etl_cutoff() (LN-004). Do not automate as a scheduled job.
+      algorithm:
+        - Scan all ETL source code for calls to `sequences.reseedallsequences` or `sequences.reseedsequencebeyondtablevalues`
+        - Remove or comment out all such call sites; log each removal in the migration change log
+        - Review `application.configuration_reseedetl` (Purchase portions) with the scope owner — confirm drop scope; if retained, rewrite as a Python reset notebook for Databricks
+        - Do NOT create a Python replacement for the reseed procedures — the problem does not exist in the target
+        - Document in the runbook: if a manual reseed of the IDENTITY column is ever required, a DBA must issue an ALTER TABLE DDL statement
+        - Drop both reseed procedures from SQL Server source schema post-cutover
+    validation:
+      success_criteria:
+        - Zero references to reseed procedures exist in any migrated ETL code or notebooks
+        - The migration change log records each removed call site
+        - No automated job or scheduled task invokes these procedure names on the target platform
+        - Drop scope decision for `application.configuration_reseedetl` (Purchase portions) is recorded and signed off
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - name: No reseed references in ETL codebase
+          description: Static code scan for reseed procedure names
+          assertion: "grep -r 'ReseedAllSequences\\|ReseedSequenceBeyondTableValues\\|reseedallsequences' ./src = 0 matches"
+        - name: No scheduled jobs referencing reseed
+          description: Scan Databricks job definitions for reseed procedure names
+          assertion: "No Databricks job YAML/JSON references either reseed procedure name"
+        - name: configuration_reseedetl disposition recorded
+          description: Confirm migration change log contains a disposition decision for configuration_reseedetl (Purchase portions)
+          assertion: "Change log entry exists: configuration_reseedetl Purchase portions — drop or rewrite decision recorded"
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+      product_status: INHERITED
+
+  - id: LN-008
+    dimension: Lineage
+    name: Configure Unity Catalog system lineage to complement application lineage
+    intent: >
+      Databricks Unity Catalog provides automatic system-level data lineage (table-to-table
+      and column-to-column lineage) through its runtime capture mechanism. This system
+      lineage operates independently of the application-level `inventory_stock.bronze.lineage_run`
+      table and provides a different but complementary capability: it tracks which tables
+      and columns were read to produce which output tables and columns, without requiring any
+      ETL code changes. Because all Delta reads and writes in this project automatically flow
+      through Unity Catalog when objects are addressed by their three-part name
+      (`inventory_stock.<schema>.<table>`), no additional instrumentation is required beyond
+      correct three-part naming in all ETL notebooks. This rule mandates that Unity Catalog
+      lineage capture is enabled and that teams understand the boundary between system lineage
+      and application lineage.
+    activation:
+      preconditions:
+        - Databricks Unity Catalog is the metastore for the target environment
+        - The `inventory_stock` catalog is registered in Unity Catalog
+        - All ETL notebooks use three-part naming for every Delta read and write
+        - Data engineers have been briefed on the two-tier lineage model
+      scope: project
+    transformation:
+      source:
+        object: "(no source equivalent — new capability)"
+        platform: "Microsoft SQL Server 2014"
+        ddl_pattern: |
+          -- SQL Server 2014 has no native automatic column lineage capture.
+          -- Lineage is application-managed via integration.lineage table only.
+          -- ETL run provenance is captured per-row via Lineage Key FK only.
+      target:
+        object: "Unity Catalog system lineage + inventory_stock.bronze.lineage_run application lineage"
+        platform: "Databricks (Delta Lake)"
+        ddl_pattern: |
+          -- Unity Catalog lineage is enabled at the workspace/metastore level (admin setting).
+          -- No DDL is required; lineage is captured automatically for all Unity Catalog tables
+          -- accessed via Databricks SQL, notebooks, or Delta Live Tables using three-part names.
+
+          -- Verify lineage capture is active after first ETL run:
+          -- SELECT * FROM system.lineage.table_lineage
+          --   WHERE target_table_full_name LIKE 'inventory_stock.%'
+          --   ORDER BY event_time DESC LIMIT 100;
+
+          -- Column-level lineage query example:
+          -- SELECT * FROM system.lineage.column_lineage
+          --   WHERE target_table_full_name = 'inventory_stock.silver_fact.fact_purchase'
+          --   ORDER BY event_time DESC LIMIT 50;
+
+          -- Application lineage (lineage_run) remains the source of truth for ETL run metadata:
+          -- row counts, success/failure status, run timestamps.
+          -- Unity Catalog lineage is used for impact analysis and column-level data flow documentation.
+      algorithm:
+        - Confirm with the Databricks workspace admin that system lineage capture is enabled (metastore setting)
+        - Document the two-tier lineage model in the project runbook
+        - Tier 1 — System lineage (Unity Catalog)  automatic; tracks table/column data flow; used for impact analysis and schema change risk assessment
+        - Tier 2 — Application lineage (inventory_stock.bronze.lineage_run)  ETL-managed; tracks run metadata, row counts, success/failure status
+        - Do NOT replace application lineage with Unity Catalog system lineage; they serve different purposes
+        - Ensure all ETL notebooks reference Delta tables by full three-part name (inventory_stock.<schema>.<table>) to guarantee lineage capture
+        - Ensure all compute clusters and SQL warehouses are attached to the Unity Catalog metastore
+        - Do NOT write to system.lineage.* tables — they are read-only system tables maintained by Unity Catalog
+    validation:
+      success_criteria:
+        - Unity Catalog system lineage is active and capturing table lineage events for `inventory_stock.*` tables after first ETL run
+        - The project runbook documents the two-tier lineage model
+        - "`system.lineage.table_lineage` contains rows for `inventory_stock.silver_fact.fact_purchase` after first pipeline execution"
+        - Data engineers can navigate column-level lineage in the Databricks UI for fact_purchase columns
+        - All ETL notebooks use three-part names for every Delta read and write
+      quality_dimensions:
+        - coverage
+        - completeness
+      test_cases:
+        - name: System lineage capture active
+          description: After running one ETL pipeline, query system.lineage.table_lineage for inventory_stock tables
+          assertion: "SELECT COUNT(*) FROM system.lineage.table_lineage WHERE target_table_full_name LIKE 'inventory_stock.%' > 0"
+        - name: Column lineage visible in UI
+          description: Navigate to Unity Catalog > inventory_stock.silver_fact.fact_purchase > lineage tab and verify upstream columns are shown
+          assertion: "UI shows column-level lineage for at least one fact_purchase column (e.g., lineage_key, supplier_key)"
+        - name: Application and system lineage not duplicated
+          description: Verify ETL code writes to lineage_run (application) and does NOT attempt to write to system.lineage tables
+          assertion: "No INSERT/UPDATE statements targeting system.lineage.* in ETL codebase"
+        - name: Three-part naming compliance
+          description: Static scan of all ETL notebooks; assert every Delta table reference uses inventory_stock.<schema>.<table> format
+          assertion: "grep -r 'FROM [a-z_]\\+\\.[a-z_]\\+$\\|JOIN [a-z_]\\+\\.[a-z_]\\+$' ./src = 0 matches (two-part names disallowed)"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+# ── PRODUCT-SPECIFIC RULES (Purchase) ─────────────────────────────────────────
+
+product_rules:
+
+  - id: LN-P001
+    action: extend
+    extends_rule: LN-003
+    dimension: Lineage
+    name: Specify dbutils.jobs.taskValues as the Purchase lineage_key injection mechanism
+    intent: >
+      Specify the exact lineage_key injection mechanism for the Purchase product:
+      lineage_key is obtained via dbutils.jobs.taskValues.get from the upstream
+      nb_extract_watermark task, not via a direct open_lineage_record() call within
+      each downstream task.
+    rationale: >
+      Project rule LN-003 specifies that open_lineage_record() inserts a row into
+      lineage_run and reads back the IDENTITY key. The Purchase product's Databricks
+      Workflow architecture separates lineage key generation into a dedicated upstream
+      task (nb_extract_watermark) that publishes the lineage_key as a task value. All
+      downstream ETL tasks in the Purchase Workflow obtain the lineage_key via
+      dbutils.jobs.taskValues.get rather than opening their own lineage records.
+      This extension documents the mechanism so that code generators produce the
+      correct injection pattern.
+    scope: "All Purchase ETL notebooks that consume lineage_key after nb_extract_watermark has run."
+    extended_behavior: |
+      In the Purchase product Databricks Workflow, lineage_key is obtained as follows:
+
+        # In all ETL notebooks downstream of nb_extract_watermark:
+        lineage_key = dbutils.jobs.taskValues.get(
+            taskKey="nb_extract_watermark",
+            key="lineage_key"
+        )
+
+      The upstream task nb_extract_watermark is responsible for:
+        1. Calling open_lineage_record() once per pipeline run
+        2. Publishing the returned integer via:
+           dbutils.jobs.taskValues.set(key="lineage_key", value=lineage_key)
+
+      No other Purchase ETL task calls open_lineage_record() directly.
+      All downstream tasks (staging truncate, staging load, SK resolution, fact merge)
+      must call dbutils.jobs.taskValues.get as shown above.
+
+      This pattern replaces the direct open_lineage_record() call documented in LN-003
+      for the Purchase product scope. LN-003 open_lineage_record() is still used, but
+      only inside nb_extract_watermark.
+    validation:
+      success_criteria:
+        - nb_extract_watermark calls open_lineage_record() and publishes lineage_key via dbutils.jobs.taskValues.set
+        - All other Purchase ETL notebooks retrieve lineage_key via dbutils.jobs.taskValues.get(taskKey="nb_extract_watermark", key="lineage_key")
+        - No downstream ETL task calls open_lineage_record() directly
+      test_cases:
+        - name: nb_extract_watermark publishes lineage_key
+          description: Assert nb_extract_watermark contains dbutils.jobs.taskValues.set(key="lineage_key", ...)
+          assertion: "Static scan of nb_extract_watermark.py — taskValues.set(key='lineage_key') present"
+        - name: Downstream tasks consume via taskValues.get
+          description: Assert all downstream Purchase ETL notebooks use taskValues.get(taskKey='nb_extract_watermark', key='lineage_key')
+          assertion: "Static scan of all downstream ETL notebooks — no open_lineage_record() call; taskValues.get present"

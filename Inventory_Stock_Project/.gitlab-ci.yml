@@ -1,0 +1,70 @@
+# =============================================================================
+# Project  : Inventory_Stock_Project
+# Product  : Purchase
+# Purpose  : GitLab CI/CD pipeline — lint SQL/Python and run unit tests on
+#            every push to master or a merge request targeting master.
+# =============================================================================
+
+stages:
+  - lint
+  - test
+
+variables:
+  CODEBASE: "products/Purchase/current/codebase"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip/
+
+# ---------------------------------------------------------------------------
+# Lint — Python (flake8) + SQL (sqlfluff)
+# ---------------------------------------------------------------------------
+lint:python:
+  stage: lint
+  image: python:3.10-slim
+  script:
+    - pip install flake8 --quiet
+    - flake8 $CODEBASE/src/ $CODEBASE/tests/ --max-line-length=120 --extend-ignore=E501,W503
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+
+lint:sql:
+  stage: lint
+  image: python:3.10-slim
+  script:
+    - pip install sqlfluff --quiet
+    - sqlfluff lint $CODEBASE/src/db/ddl/ $CODEBASE/src/db/grants/
+        --dialect sparksql
+        --templater raw
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "master"'
+
+# ---------------------------------------------------------------------------
+# Test — pytest unit tests (local Spark, no live Databricks cluster required)
+# ---------------------------------------------------------------------------
+test:unit:
+  stage: test
+  image: python:3.10-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq default-jdk-headless
+    - pip install -r requirements.txt --quiet
+  script:
+    - cd $CODEBASE
+    - pytest tests/common/
+        --tb=short
+        --cov=src/common
+        --cov-report=term-missing
+        --cov-fail-under=70
+        -v
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: $CODEBASE/coverage.xml
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "master"'

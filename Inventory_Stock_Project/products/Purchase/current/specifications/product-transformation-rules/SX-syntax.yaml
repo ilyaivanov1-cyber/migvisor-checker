@@ -1,0 +1,1231 @@
+dimension: Syntax
+prefix: SX
+product: "Purchase"
+inherits_from: "Inventory_Stock_Project"
+generated: "2026-09-07"
+
+# ── INHERITED PROJECT RULES (Inventory_Stock_Project) ──
+# All 17 project SX rules are active for Purchase.
+# SX-003 is extended by SX-P003 (sk_resolver.py pre-join pattern).
+# SX-004 is extended by SX-P001 (taskValues lineage_key injection).
+# SX-017 is extended by SX-P002 (CONVERT style 112 + date arithmetic).
+# All other rules are inherited without modification.
+
+rules:
+
+  - id: SX-001
+    dimension: Syntax
+    name: MERGE Statement Conversion (Purchase Upsert Pattern)
+    intent: >
+      Convert T-SQL MERGE statements used in integration.migratestagedpurchasedata
+      to Databricks Delta Lake MERGE INTO syntax. The Purchase ETL uses a delete-then-insert
+      pattern (DELETE + INSERT rather than a true MERGE) but any MERGE forms present must be
+      converted. Delta MERGE INTO does not support a standalone DELETE clause for SCD-2 upsert;
+      use WHEN MATCHED THEN UPDATE / WHEN NOT MATCHED THEN INSERT branches only for upsert paths.
+    activation:
+      preconditions:
+        - "Source contains MERGE <target> USING <source> ON <condition> WHEN MATCHED ... WHEN NOT MATCHED ..."
+        - "Target table is a Delta Lake table"
+      scope: project
+    transformation:
+      source: |
+        MERGE <target_table> AS tgt
+        USING <source_table_or_query> AS src
+        ON (<join_condition>)
+        WHEN MATCHED [AND <extra_condition>] THEN
+          UPDATE SET tgt.col1 = src.col1, ...
+        WHEN NOT MATCHED [BY TARGET] [AND <extra_condition>] THEN
+          INSERT (col1, col2, ...) VALUES (src.col1, src.col2, ...)
+        [WHEN NOT MATCHED BY SOURCE THEN DELETE];
+      target: |
+        MERGE INTO <target_table> AS tgt
+        USING <source_table_or_query> AS src
+        ON (<join_condition>)
+        WHEN MATCHED [AND <extra_condition>] THEN
+          UPDATE SET tgt.col1 = src.col1, ...
+        WHEN NOT MATCHED [AND <extra_condition>] THEN
+          INSERT (col1, col2, ...) VALUES (src.col1, src.col2, ...)
+        -- NOTE: WHEN NOT MATCHED BY SOURCE THEN DELETE supported in Delta Lake 2.0+;
+        -- add runtime version guard comment if Delta version < 2.0.
+      algorithm: |
+        1. Replace leading keyword MERGE with MERGE INTO.
+        2. Retain AS aliases for target and source; add them if absent.
+        3. Remove BY TARGET qualifier from WHEN NOT MATCHED (implicit in Delta).
+        4. Remove OUTPUT clause if present; replace with post-merge SELECT metrics query.
+        5. Ensure statement ends with semicolon.
+        6. For the Purchase product the load pattern is DELETE+INSERT not MERGE; preserve that
+           pattern as two separate Delta operations (see SX-002 and SX-008) rather than
+           converting to MERGE, unless a true upsert intent is confirmed.
+    validation:
+      success_criteria:
+        - "MERGE INTO compiles without syntax errors in Databricks SQL"
+        - "No T-SQL MERGE keyword without INTO remains in generated code"
+        - "Row counts for MATCHED updates and NOT MATCHED inserts match source execution"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - description: "Single WHEN MATCHED UPDATE + WHEN NOT MATCHED INSERT"
+          input: "MERGE Fact.Purchase AS tgt USING Integration.Purchase_Staging AS src ON tgt.[WWI Purchase Order ID] = src.[WWI Purchase Order ID] WHEN MATCHED THEN UPDATE SET tgt.[Ordered Outers] = src.[Ordered Outers] WHEN NOT MATCHED THEN INSERT ([Date Key], [Supplier Key]) VALUES (src.[Date Key], src.[Supplier Key]);"
+          expected: "MERGE INTO inventory_stock.silver_fact.fact_purchase AS tgt USING inventory_stock.bronze.purchase_staging AS src ON tgt.wwi_purchase_order_id = src.wwi_purchase_order_id WHEN MATCHED THEN UPDATE SET tgt.ordered_outers = src.ordered_outers WHEN NOT MATCHED THEN INSERT (date_key, supplier_key) VALUES (src.date_key, src.supplier_key);"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-002
+    dimension: Syntax
+    name: DELETE + INSERT-SELECT Fact Load Pattern Conversion
+    intent: >
+      Convert the order-level delete-then-insert reload pattern used in
+      integration.migratestagedpurchasedata — DELETE all Fact.Purchase rows for
+      WWI Purchase Order IDs present in staging, then INSERT the resolved staging rows —
+      to an equivalent Delta Lake write pattern. In Databricks, this is expressed as
+      a MERGE INTO (with WHEN MATCHED THEN DELETE + WHEN NOT MATCHED THEN INSERT) or
+      as a targeted delete followed by an INSERT INTO ... SELECT.
+    activation:
+      preconditions:
+        - "Source contains DELETE FROM <fact> WHERE <natural_key> IN (SELECT <natural_key> FROM <staging>)"
+        - "Source contains INSERT INTO <fact> SELECT ... FROM <staging>"
+      scope: project
+    transformation:
+      source: |
+        DELETE FROM Fact.Purchase
+        WHERE [WWI Purchase Order ID] IN
+            (SELECT [WWI Purchase Order ID] FROM Integration.Purchase_Staging);
+
+        INSERT INTO Fact.Purchase
+            ([Date Key], [Supplier Key], [Stock Item Key],
+             [WWI Purchase Order ID], [Ordered Outers], [Ordered Quantity],
+             [Received Outers], [Package], [Is Order Finalized], [Lineage Key])
+        SELECT [Date Key], [Supplier Key], [Stock Item Key],
+               [WWI Purchase Order ID], [Ordered Outers], [Ordered Quantity],
+               [Received Outers], [Package], [Is Order Finalized], @LineageKey
+        FROM Integration.Purchase_Staging;
+      target: |
+        -- Option A: MERGE INTO with WHEN MATCHED DELETE + WHEN NOT MATCHED INSERT
+        MERGE INTO inventory_stock.silver_fact.fact_purchase AS tgt
+        USING inventory_stock.bronze.purchase_staging AS src
+        ON tgt.wwi_purchase_order_id = src.wwi_purchase_order_id
+        WHEN MATCHED THEN DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (date_key, supplier_key, stock_item_key, wwi_purchase_order_id,
+                  ordered_outers, ordered_quantity, received_outers,
+                  package, is_order_finalized, lineage_key)
+          VALUES (src.date_key, src.supplier_key, src.stock_item_key, src.wwi_purchase_order_id,
+                  src.ordered_outers, src.ordered_quantity, src.received_outers,
+                  src.package, src.is_order_finalized, lineage_key_val);
+
+        -- Option B: explicit delete + append (Python)
+        spark.sql("""
+          DELETE FROM inventory_stock.silver_fact.fact_purchase
+          WHERE wwi_purchase_order_id IN
+              (SELECT wwi_purchase_order_id FROM inventory_stock.bronze.purchase_staging)
+        """)
+        spark.sql(f"""
+          INSERT INTO inventory_stock.silver_fact.fact_purchase
+          SELECT date_key, supplier_key, stock_item_key, wwi_purchase_order_id,
+                 ordered_outers, ordered_quantity, received_outers,
+                 package, is_order_finalized, {lineage_key}
+          FROM inventory_stock.bronze.purchase_staging
+        """)
+      algorithm: |
+        1. Prefer the MERGE INTO approach (Option A) — single atomic operation, fewer round trips.
+        2. If MERGE INTO with WHEN MATCHED THEN DELETE is not available in the target Delta
+           version, use explicit DELETE followed by INSERT INTO (Option B) wrapped in a
+           Python try/except block per SX-006.
+        3. Apply snake_case column renaming per NM dimension rules throughout.
+        4. Replace @LineageKey placeholder with the Python lineage_key variable resolved
+           at run start (see SX-013 for NEXT VALUE FOR conversion).
+        5. Replace schema-qualified references per SX-014:
+           Fact.Purchase → inventory_stock.silver_fact.fact_purchase
+           Integration.Purchase_Staging → inventory_stock.bronze.purchase_staging
+    validation:
+      success_criteria:
+        - "No standalone DELETE FROM Fact.Purchase remains without equivalent Delta delete"
+        - "INSERT INTO ... SELECT pattern compiles in Databricks SQL"
+        - "lineage_key is injected as a Python variable, not a T-SQL @variable"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - completeness
+      test_cases:
+        - description: "DELETE by natural key from staging subquery"
+          input: "DELETE FROM Fact.Purchase WHERE [WWI Purchase Order ID] IN (SELECT [WWI Purchase Order ID] FROM Integration.Purchase_Staging);"
+          expected: "spark.sql('DELETE FROM inventory_stock.silver_fact.fact_purchase WHERE wwi_purchase_order_id IN (SELECT wwi_purchase_order_id FROM inventory_stock.bronze.purchase_staging)')"
+        - description: "INSERT-SELECT with @LineageKey injection"
+          input: "INSERT INTO Fact.Purchase ([Date Key], [Lineage Key]) SELECT [Date Key], @LineageKey FROM Integration.Purchase_Staging;"
+          expected: "spark.sql(f'INSERT INTO inventory_stock.silver_fact.fact_purchase (date_key, lineage_key) SELECT date_key, {lineage_key} FROM inventory_stock.bronze.purchase_staging')"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-003
+    dimension: Syntax
+    name: SCD-2 Surrogate Key Lookup Pattern Conversion (TOP 1 Correlated Subquery)
+    intent: >
+      Convert the T-SQL correlated subquery pattern used in migratestagedpurchasedata
+      for SCD-2 surrogate key resolution — SELECT TOP(1) <SurrogateKey> FROM Dimension.*
+      WHERE <natural_key_match> AND <timestamp> BETWEEN Valid From AND Valid To ORDER BY
+      Valid From — to a Spark SQL equivalent using a JOIN with ROW_NUMBER() or FIRST()
+      window function. This is the most migration-critical logic in the Purchase product.
+    activation:
+      preconditions:
+        - "Source code contains SELECT TOP(1) ... FROM Dimension.Supplier WHERE ... ORDER BY [Valid From]"
+        - "Source code contains SELECT TOP(1) ... FROM Dimension.[Stock Item] WHERE ... ORDER BY [Valid From]"
+        - "Pattern is used as a correlated scalar subquery inside an UPDATE statement"
+      scope: project
+    transformation:
+      source: |
+        UPDATE stg
+        SET stg.[Supplier Key] = COALESCE(
+            (SELECT TOP(1) s.[Supplier Key]
+             FROM Dimension.Supplier s
+             WHERE s.[WWI Supplier ID]      = stg.[WWI Supplier ID]
+               AND stg.[Last Modified When] > s.[Valid From]
+               AND stg.[Last Modified When] <= s.[Valid To]
+             ORDER BY s.[Valid From]),
+            0)
+        FROM Integration.Purchase_Staging stg;
+      target: |
+        -- Spark SQL: resolve using a JOIN + ROW_NUMBER() window function
+        -- (correlated scalar subqueries in UPDATE are not supported in Spark SQL)
+        UPDATE inventory_stock.bronze.purchase_staging AS stg
+        SET supplier_key = COALESCE(resolved.supplier_key, 0)
+        FROM (
+          SELECT
+            ps.purchase_staging_key,
+            s.supplier_key,
+            ROW_NUMBER() OVER (
+              PARTITION BY ps.purchase_staging_key
+              ORDER BY s.valid_from ASC
+            ) AS rn
+          FROM inventory_stock.bronze.purchase_staging ps
+          JOIN inventory_stock.silver.supplier s
+            ON  s.ww_supplier_id     = ps.ww_supplier_id
+            AND ps.last_modified_when >  s.valid_from
+            AND ps.last_modified_when <= s.valid_to
+        ) resolved
+        WHERE resolved.purchase_staging_key = stg.purchase_staging_key
+          AND resolved.rn = 1;
+
+        -- Alternative: Python / PySpark DataFrame join approach
+        from pyspark.sql import functions as F
+        from pyspark.sql.window import Window
+
+        w = Window.partitionBy("purchase_staging_key").orderBy(F.asc("valid_from"))
+        resolved = (
+            staging_df
+            .join(supplier_df,
+                  (staging_df.ww_supplier_id == supplier_df.ww_supplier_id) &
+                  (staging_df.last_modified_when > supplier_df.valid_from) &
+                  (staging_df.last_modified_when <= supplier_df.valid_to),
+                  "left")
+            .withColumn("rn", F.row_number().over(w))
+            .filter(F.col("rn") == 1)
+            .withColumn("supplier_key", F.coalesce(F.col("s.supplier_key"), F.lit(0)))
+        )
+      algorithm: |
+        1. Detect the UPDATE stg SET stg.[SurrogateKey] = COALESCE((SELECT TOP(1) ... ORDER BY [Valid From]), 0) pattern.
+        2. Extract: the natural key column, the timestamp probe column, the dimension table, the surrogate key column, and the validity window columns.
+        3. Rewrite as a JOIN between the staging table and the dimension table on natural key + temporal range predicate.
+        4. Apply ROW_NUMBER() OVER (PARTITION BY staging_pk ORDER BY valid_from ASC) to disambiguate when multiple SCD-2 rows match (edge case of overlapping windows).
+        5. Use rn = 1 filter to select the earliest-starting matching version, preserving the TOP(1) ORDER BY [Valid From] semantics.
+        6. Wrap in COALESCE(..., 0) to preserve the fallback-to-zero unknown-member sentinel.
+        7. In Python: implement as a left join with window function; avoid correlated subqueries in PySpark which do not translate efficiently.
+        8. Apply to both Dimension.Supplier → supplier and Dimension.[Stock Item] → stock_item lookups with identical logic.
+    validation:
+      success_criteria:
+        - "No correlated scalar subquery SELECT TOP(1) remains in UPDATE statements in generated SQL"
+        - "ROW_NUMBER() + rn = 1 filter correctly replicates TOP(1) ORDER BY semantics"
+        - "COALESCE(..., 0) fallback to unknown-member sentinel is preserved"
+        - "Both supplier_key and stock_item_key resolution paths are migrated"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - description: "Correlated TOP(1) subquery in UPDATE — supplier key"
+          input: "UPDATE stg SET stg.[Supplier Key] = COALESCE((SELECT TOP(1) s.[Supplier Key] FROM Dimension.Supplier s WHERE s.[WWI Supplier ID] = stg.[WWI Supplier ID] AND stg.[Last Modified When] > s.[Valid From] AND stg.[Last Modified When] <= s.[Valid To] ORDER BY s.[Valid From]), 0) FROM Integration.Purchase_Staging stg;"
+          expected: "UPDATE inventory_stock.bronze.purchase_staging AS stg SET supplier_key = COALESCE(resolved.supplier_key, 0) FROM (SELECT ps.purchase_staging_key, s.supplier_key, ROW_NUMBER() OVER (PARTITION BY ps.purchase_staging_key ORDER BY s.valid_from) AS rn FROM inventory_stock.bronze.purchase_staging ps JOIN inventory_stock.silver.supplier s ON s.ww_supplier_id = ps.ww_supplier_id AND ps.last_modified_when > s.valid_from AND ps.last_modified_when <= s.valid_to) resolved WHERE resolved.purchase_staging_key = stg.purchase_staging_key AND resolved.rn = 1;"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: EXTENDED   # by SX-P003 — sk_resolver.py pre-join step replaces inline UPDATE pattern
+
+  - id: SX-004
+    dimension: Syntax
+    name: SEQUENCE.NEXT VALUE FOR Conversion
+    intent: >
+      Replace T-SQL NEXT VALUE FOR sequences.lineagekey references (used in
+      integration.getlineagekey to generate monotonically increasing ETL run IDs)
+      with a Databricks-compatible pattern. SQL Server SEQUENCE objects have no
+      native equivalent in Databricks; the replacement is either a Delta table
+      acting as a sequence store or a GENERATED ALWAYS AS IDENTITY column on the
+      lineage table.
+    activation:
+      preconditions:
+        - "Source code contains NEXT VALUE FOR sequences.lineagekey"
+        - "Source DDL defines a SEQUENCE object in the sequences.* schema"
+      scope: project
+    transformation:
+      source: |
+        -- Procedure: integration.getlineagekey
+        SET @lineageKey = NEXT VALUE FOR Sequences.LineageKey;
+
+        -- DDL
+        CREATE SEQUENCE Sequences.LineageKey
+          AS INT START WITH 1 INCREMENT BY 1;
+      target: |
+        -- Option A: GENERATED ALWAYS AS IDENTITY on the lineage table (preferred)
+        -- lineage_key is auto-assigned on INSERT; no explicit NEXT VALUE FOR needed
+        lineage_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)
+
+        -- Retrieve the assigned key after INSERT (Python):
+        lineage_key = spark.sql("""
+            SELECT MAX(lineage_key) FROM inventory_stock.control.lineage
+        """).collect()[0][0]
+
+        -- Option B: Python counter using atomic Delta table update
+        def get_next_lineage_key(spark) -> int:
+            spark.sql("""
+                UPDATE inventory_stock.control.sequence_store
+                SET current_value = current_value + 1
+                WHERE sequence_name = 'lineagekey'
+            """)
+            return spark.sql("""
+                SELECT current_value FROM inventory_stock.control.sequence_store
+                WHERE sequence_name = 'lineagekey'
+            """).collect()[0][0]
+      algorithm: |
+        1. Identify all NEXT VALUE FOR sequences.lineagekey usages.
+        2. If the lineage table adopts GENERATED ALWAYS AS IDENTITY: remove the explicit key
+           assignment before INSERT; after INSERT use MAX(lineage_key) or retrieve via
+           DeltaTable.history() metrics to get the assigned key for the run.
+        3. If a sequence-store Delta table is used: implement a get_next_lineage_key() Python
+           utility function that atomically increments and returns the value.
+        4. Upgrade INT to BIGINT for the identity column to support distributed scale.
+        5. Emit a TODO comment linking to the sequences migration specification for the
+           sequences.lineagekey object.
+        6. Remove DROP/CREATE SEQUENCE DDL; replace with the chosen Delta equivalent schema.
+    validation:
+      success_criteria:
+        - "No NEXT VALUE FOR sequences.lineagekey remains in generated code"
+        - "Lineage key generation is replaced with GENERATED ALWAYS AS IDENTITY or sequence-store utility"
+        - "INT upgraded to BIGINT for lineage key columns"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - uniqueness
+      test_cases:
+        - description: "NEXT VALUE FOR in procedure variable assignment"
+          input: "SET @lineageKey = NEXT VALUE FOR Sequences.LineageKey;"
+          expected: "# TODO: replace with get_next_lineage_key() or GENERATED ALWAYS AS IDENTITY; lineage_key assigned at INSERT"
+        - description: "SEQUENCE DDL"
+          input: "CREATE SEQUENCE Sequences.LineageKey AS INT START WITH 1 INCREMENT BY 1;"
+          expected: "lineage_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)  -- replaces Sequences.LineageKey SEQUENCE object"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: EXTENDED   # by SX-P001 — adds exact dbutils.jobs.taskValues injection pattern as canonical replacement for EXEC Integration.GetLineageKey
+
+  - id: SX-005
+    dimension: Syntax
+    name: Bracketed Identifier Quoting Conversion
+    intent: >
+      Remove T-SQL [bracket] identifier quoting from all SQL objects in the Purchase
+      migration and replace with backtick quoting where Spark SQL reserved words require
+      escaping, or apply snake_case renaming (preferred). The Purchase schema is especially
+      rich in spaced identifiers: [stock item], [etl cutoff], [WWI Purchase Order ID],
+      [Is Order Finalized], [Last Modified When], [Valid From], [Valid To], etc.
+    activation:
+      preconditions:
+        - "Source SQL contains [bracket]-quoted identifiers"
+      scope: project
+    transformation:
+      source: |
+        SELECT [WWI Purchase Order ID], [Is Order Finalized], [Last Modified When]
+        FROM Integration.[ETL Cutoff]
+        JOIN Dimension.[Stock Item] si ON si.[Stock Item Key] = stg.[Stock Item Key]
+        WHERE [Valid From] <= @cutoff AND [Valid To] > @cutoff
+      target: |
+        SELECT wwi_purchase_order_id, is_order_finalized, last_modified_when
+        FROM inventory_stock.control.etl_cutoff
+        JOIN inventory_stock.silver.stock_item si ON si.stock_item_key = stg.stock_item_key
+        WHERE valid_from <= cutoff AND valid_to > cutoff
+      algorithm: |
+        1. Strip [bracket] quoting from all identifiers.
+        2. Convert spaced identifiers to snake_case per NM dimension rules:
+           [Stock Item] → stock_item, [ETL Cutoff] → etl_cutoff,
+           [WWI Purchase Order ID] → wwi_purchase_order_id,
+           [Is Order Finalized] → is_order_finalized,
+           [Last Modified When] → last_modified_when,
+           [Valid From] → valid_from, [Valid To] → valid_to,
+           [Ordered Outers] → ordered_outers, [Ordered Quantity] → ordered_quantity,
+           [Received Outers] → received_outers, [Lineage Key] → lineage_key,
+           [Supplier Key] → supplier_key, [Stock Item Key] → stock_item_key,
+           [Date Key] → date_key, [WWI Supplier ID] → ww_supplier_id,
+           [WWI Stock Item ID] → ww_stock_item_id.
+        3. If the resulting snake_case identifier is a Spark SQL reserved word, apply a
+           context-specific prefix/suffix; fallback to backtick quoting only if renaming
+           is not feasible without breaking upstream consumers.
+        4. Table names with embedded spaces (Dimension.[Stock Item]) are renamed to
+           stock_item — no backtick needed after rename.
+        5. Log all reserved word collisions in the migration notes.
+    validation:
+      success_criteria:
+        - "No [bracket] identifiers remain in generated SQL"
+        - "All spaced identifiers are converted to snake_case"
+        - "Spark SQL reserved word conflicts are resolved via rename or backtick"
+      quality_dimensions:
+        - conformity
+        - validity
+        - consistency
+      test_cases:
+        - description: "Spaced column identifiers"
+          input: "SELECT [WWI Purchase Order ID], [Is Order Finalized] FROM Fact.Purchase"
+          expected: "SELECT wwi_purchase_order_id, is_order_finalized FROM inventory_stock.silver_fact.fact_purchase"
+        - description: "Spaced table name in FROM"
+          input: "FROM Dimension.[Stock Item] si"
+          expected: "FROM inventory_stock.silver.stock_item si"
+        - description: "Control table with space in name"
+          input: "FROM Integration.[ETL Cutoff]"
+          expected: "FROM inventory_stock.control.etl_cutoff"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-006
+    dimension: Syntax
+    name: Procedure Header Directives Removal (SET NOCOUNT / SET XACT_ABORT)
+    intent: >
+      Remove T-SQL procedure-level session directives SET NOCOUNT ON and
+      SET XACT_ABORT ON from all in-scope stored procedures (migratestagedpurchasedata,
+      getlastetlcutofftime, getlineagekey, configuration_reseedetl). These are
+      SQL Server session-level settings with no Databricks equivalent; Delta Lake's
+      ACID guarantees and Python exception handling cover their intent.
+    activation:
+      preconditions:
+        - "Source stored procedure body contains SET NOCOUNT ON or SET NOCOUNT OFF"
+        - "Source stored procedure body contains SET XACT_ABORT ON or SET XACT_ABORT OFF"
+      scope: project
+    transformation:
+      source: |
+        SET NOCOUNT ON;
+        SET XACT_ABORT ON;
+      target: |
+        -- SET NOCOUNT ON removed: not applicable in Spark SQL / Databricks notebooks
+        -- SET XACT_ABORT ON removed: Delta Lake ACID handles atomicity
+      algorithm: |
+        1. Identify all occurrences of SET NOCOUNT {ON|OFF} and SET XACT_ABORT {ON|OFF} in
+           procedure bodies.
+        2. Replace each with a single-line comment documenting the removal and reason.
+        3. Do not remove surrounding blank lines to preserve readability.
+        4. Flag any other SET <option> statements for manual review (e.g., SET ANSI_NULLS,
+           SET QUOTED_IDENTIFIER) — these may appear in procedure headers but are not
+           applicable in Databricks.
+    validation:
+      success_criteria:
+        - "No SET NOCOUNT or SET XACT_ABORT statements remain in generated SQL"
+        - "Comment explaining removal is present at each removal location"
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - description: "Standard procedure header"
+          input: "SET NOCOUNT ON;\nSET XACT_ABORT ON;\nUPDATE Integration.Purchase_Staging SET ..."
+          expected: "-- SET NOCOUNT ON removed: not applicable in Spark SQL\n-- SET XACT_ABORT ON removed: Delta Lake ACID handles atomicity\nUPDATE inventory_stock.bronze.purchase_staging SET ..."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-007
+    dimension: Syntax
+    name: Transaction Control Conversion
+    intent: >
+      Convert T-SQL explicit transaction control (BEGIN TRANSACTION, COMMIT,
+      ROLLBACK) to Delta Lake transactional patterns. The Purchase ETL wraps its
+      staging-update and fact-load steps in transaction blocks; Delta ACID provides
+      single-operation atomicity automatically, and multi-operation ETL blocks are
+      handled with Python try/except wrapping individual Delta write calls.
+    activation:
+      preconditions:
+        - "Source code contains BEGIN TRANSACTION / BEGIN TRAN"
+        - "Source code contains COMMIT [TRANSACTION] or ROLLBACK [TRANSACTION]"
+      scope: project
+    transformation:
+      source: |
+        BEGIN TRANSACTION;
+        UPDATE Integration.Purchase_Staging SET ...;
+        DELETE FROM Fact.Purchase WHERE ...;
+        INSERT INTO Fact.Purchase SELECT ...;
+        COMMIT TRANSACTION;
+      target: |
+        # Delta Lake: each DML is atomic; wrap multi-statement ETL in Python try/except
+        try:
+            spark.sql("UPDATE inventory_stock.bronze.purchase_staging SET ...")
+            spark.sql("DELETE FROM inventory_stock.silver_fact.fact_purchase WHERE ...")
+            spark.sql(f"INSERT INTO inventory_stock.silver_fact.fact_purchase SELECT ...")
+        except Exception as e:
+            raise RuntimeError(f"Purchase ETL block failed: {e}") from e
+      algorithm: |
+        1. Detect BEGIN TRAN[SACTION] / COMMIT / ROLLBACK blocks.
+        2. If the block wraps a single DML, remove the transaction wrapper — Delta provides
+           atomicity automatically; add an inline comment.
+        3. If the block wraps multiple DML statements (as in migratestagedpurchasedata),
+           convert to a Python try/except block; each DML becomes a spark.sql() call.
+        4. Remove SAVE TRANSACTION savepoints — not supported in Spark; emit a TODO comment.
+        5. Remove named transaction labels (BEGIN TRANSACTION tx_name).
+        6. Preserve all business logic comments adjacent to the original transaction block.
+    validation:
+      success_criteria:
+        - "No BEGIN TRANSACTION or COMMIT TRANSACTION remains in generated SQL"
+        - "Multi-statement ETL blocks are wrapped in Python try/except"
+        - "Single-DML blocks have transaction wrapper removed with explanatory comment"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - consistency
+      test_cases:
+        - description: "Multi-statement ETL transaction in migratestagedpurchasedata"
+          input: "BEGIN TRANSACTION;\nUPDATE Integration.Purchase_Staging SET ...;\nDELETE FROM Fact.Purchase WHERE ...;\nINSERT INTO Fact.Purchase SELECT ...;\nCOMMIT;"
+          expected: "try:\n    spark.sql('UPDATE inventory_stock.bronze.purchase_staging SET ...')\n    spark.sql('DELETE FROM inventory_stock.silver_fact.fact_purchase WHERE ...')\n    spark.sql('INSERT INTO inventory_stock.silver_fact.fact_purchase SELECT ...')\nexcept Exception as e:\n    raise RuntimeError(f'Purchase ETL block failed: {e}') from e"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-008
+    dimension: Syntax
+    name: Date/Time Function Mapping (GETDATE / GETUTCDATE / SYSDATETIME)
+    intent: >
+      Map T-SQL date/time functions GETDATE(), GETUTCDATE(), and SYSDATETIME() to
+      their Spark SQL equivalents. These functions are used extensively in the
+      Purchase ETL for ETL cutoff watermarking, lineage timestamp recording, and
+      audit columns (DataLoadStarted, DataLoadCompleted, SourceSystemCutoffTime
+      in integration.lineage).
+    activation:
+      preconditions:
+        - "Source code contains GETDATE(), SYSDATETIME(), or GETUTCDATE()"
+      scope: project
+    transformation:
+      source: |
+        GETDATE()          -- local datetime, ~3ms precision
+        SYSDATETIME()      -- local datetime, 100ns precision
+        GETUTCDATE()       -- UTC datetime
+      target: |
+        current_timestamp()    -- Spark SQL: session timezone timestamp
+        current_timestamp()    -- nanosecond precision in Spark
+        datetime.now(timezone.utc)  -- Python UTC equivalent; or configure Spark session to UTC
+      algorithm: |
+        1. Replace GETDATE() with current_timestamp() in all SQL expressions.
+        2. Replace SYSDATETIME() with current_timestamp() — Spark timestamp has nanosecond precision.
+        3. Replace GETUTCDATE() in SQL with to_utc_timestamp(current_timestamp(), spark.conf.get('spark.sql.session.timeZone')); alternatively configure the Spark session to UTC and use current_timestamp() directly.
+        4. In Python ETL code (getlastetlcutofftime pattern, lineage timestamp recording), replace GETDATE() / SYSDATETIME() with datetime.now(timezone.utc) from the datetime module.
+        5. Ensure the Spark session timezone is set to UTC in the cluster configuration to avoid implicit timezone shifts in ETL watermark comparisons.
+    validation:
+      success_criteria:
+        - "No GETDATE(), SYSDATETIME(), or GETUTCDATE() remain in generated SQL"
+        - "current_timestamp() used as replacement in all SQL contexts"
+        - "UTC semantics preserved for ETL cutoff watermark columns in integration.etl cutoff"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - timeliness
+      test_cases:
+        - description: "SYSDATETIME() for lineage start timestamp"
+          input: "INSERT INTO Integration.Lineage ([Data Load Started]) VALUES (SYSDATETIME())"
+          expected: "INSERT INTO inventory_stock.control.lineage (data_load_started) VALUES (current_timestamp())"
+        - description: "GETUTCDATE() for ETL cutoff new value"
+          input: "SET @NewCutoff = GETUTCDATE()"
+          expected: "new_cutoff = datetime.now(timezone.utc)  # was GETUTCDATE()"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-009
+    dimension: Syntax
+    name: Null Coalescing Function Mapping (ISNULL / COALESCE)
+    intent: >
+      Map T-SQL ISNULL() to its Spark SQL equivalent. The Purchase ETL uses ISNULL
+      as the fallback wrapper around the TOP(1) SCD-2 correlated subquery —
+      COALESCE((SELECT TOP(1) SurrogateKey ...), 0) — to assign the unknown-member
+      sentinel (key=0) when no matching dimension row is found. ISNULL is not a
+      Spark SQL function; COALESCE is supported with identical two-argument semantics.
+    activation:
+      preconditions:
+        - "Source code contains ISNULL(<expr>, <replacement>) or COALESCE(...)"
+      scope: project
+    transformation:
+      source: |
+        ISNULL(expr, replacement_value)
+        COALESCE(expr1, expr2, ...)
+      target: |
+        COALESCE(expr, replacement_value)   -- preferred in Spark SQL
+        COALESCE(expr1, expr2, ...)         -- identical semantics in Spark SQL
+      algorithm: |
+        1. Replace ISNULL(x, y) with COALESCE(x, y) — both behave identically for two
+           arguments in Spark SQL.
+        2. Leave existing COALESCE() unchanged.
+        3. Note: T-SQL ISNULL returns the data type of the first argument; Spark COALESCE
+           follows standard SQL type resolution. Flag cases where the replacement value
+           has a different type from the first argument for manual review.
+        4. In PySpark DataFrame API, replace with F.coalesce(col, lit(val)).
+    validation:
+      success_criteria:
+        - "No ISNULL() calls remain in generated SQL"
+        - "All replacements use COALESCE() or F.coalesce()"
+        - "Type-mismatch edge cases are flagged with a TODO comment"
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - validity
+      test_cases:
+        - description: "ISNULL fallback in SCD-2 key resolution"
+          input: "COALESCE((SELECT TOP(1) s.[Supplier Key] FROM Dimension.Supplier s WHERE ...), 0)"
+          expected: "COALESCE((SELECT FIRST(supplier_key) FROM ...), 0)"
+        - description: "ISNULL with zero integer replacement"
+          input: "ISNULL(stg.[Stock Item Key], 0)"
+          expected: "COALESCE(stg.stock_item_key, 0)"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-010
+    dimension: Syntax
+    name: TOP(N) / SELECT TOP 1 Conversion to LIMIT
+    intent: >
+      Replace T-SQL TOP(N) and SELECT TOP 1 row-limiting clauses with Spark SQL
+      LIMIT N. The Purchase ETL uses TOP(1) in the SCD-2 correlated subqueries
+      and in the getlastetlcutofftime watermark read. The semantics of TOP 1 with
+      ORDER BY must be preserved in the Spark SQL equivalent.
+    activation:
+      preconditions:
+        - "Source SQL contains SELECT TOP(1) or SELECT TOP 1"
+      scope: project
+    transformation:
+      source: |
+        SELECT TOP(1) [Cutoff Time]
+        FROM Integration.[ETL Cutoff]
+        WHERE [Table Name] = 'fact.purchase'
+        ORDER BY [Cutoff Time] DESC
+
+        SELECT TOP(1) s.[Supplier Key]
+        FROM Dimension.Supplier s
+        WHERE ...
+        ORDER BY s.[Valid From]
+      target: |
+        SELECT cutoff_time
+        FROM inventory_stock.control.etl_cutoff
+        WHERE table_name = 'fact.purchase'
+        ORDER BY cutoff_time DESC
+        LIMIT 1
+
+        SELECT s.supplier_key
+        FROM inventory_stock.silver.supplier s
+        WHERE ...
+        ORDER BY s.valid_from
+        LIMIT 1
+      algorithm: |
+        1. Move TOP N / TOP(N) to LIMIT N at the end of the SELECT statement, after ORDER BY.
+        2. Verify that ORDER BY is present — TOP 1 without ORDER BY is non-deterministic in
+           T-SQL; flag with a reviewer comment if ORDER BY is absent.
+        3. TOP(@variable): extract as a Python variable and inject into parameterized
+           spark.sql() f-string.
+        4. For TOP(1) inside correlated subqueries (SCD-2 pattern), convert the subquery
+           to a JOIN with ROW_NUMBER() per SX-003 — LIMIT is not supported inside
+           correlated subquery positions in Spark SQL.
+    validation:
+      success_criteria:
+        - "No SELECT TOP N syntax remains in generated SQL"
+        - "LIMIT clause appears after ORDER BY"
+        - "TOP(1) inside correlated subqueries is handled via ROW_NUMBER() per SX-003, not LIMIT"
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - validity
+      test_cases:
+        - description: "TOP(1) with ORDER BY for watermark read"
+          input: "SELECT TOP(1) [Cutoff Time] FROM Integration.[ETL Cutoff] WHERE [Table Name] = 'fact.purchase' ORDER BY [Cutoff Time] DESC"
+          expected: "SELECT cutoff_time FROM inventory_stock.control.etl_cutoff WHERE table_name = 'fact.purchase' ORDER BY cutoff_time DESC LIMIT 1"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-011
+    dimension: Syntax
+    name: PRINT Statement Conversion to Logging
+    intent: >
+      Replace T-SQL PRINT statements (diagnostic logging in stored procedures such
+      as migratestagedpurchasedata and configuration_reseedetl) with Python logging
+      calls or Databricks display() output, preserving diagnostic information for
+      ETL observability.
+    activation:
+      preconditions:
+        - "Source stored procedure contains PRINT '<message>' or PRINT @variable"
+      scope: project
+    transformation:
+      source: |
+        PRINT 'Starting purchase staging migration';
+        PRINT @lineageKey;
+        PRINT 'Error: ' + ERROR_MESSAGE();
+      target: |
+        logger.info("Starting purchase staging migration")
+        logger.info(f"lineage_key: {lineage_key}")
+        logger.error(f"Error: {e}")
+      algorithm: |
+        1. Replace PRINT '<literal>' with logger.info("<literal>") in Python ETL code.
+        2. Replace PRINT @variable with logger.info(f"<context>: {variable}").
+        3. Replace PRINT 'Error: ' + ERROR_MESSAGE() with logger.error(f"Error: {e}") inside
+           Python except blocks.
+        4. Add import logging and logger = logging.getLogger(__name__) to each ETL module
+           header if not already present.
+        5. In pure SQL notebook cells, replace PRINT with SELECT '<message>' AS log_message
+           or a Python cell with print().
+    validation:
+      success_criteria:
+        - "No PRINT statements remain in generated code"
+        - "Logging import and logger initialisation present in each module"
+        - "String concatenation in PRINT is converted to Python f-string"
+      quality_dimensions:
+        - conformity
+        - completeness
+      test_cases:
+        - description: "Literal PRINT in procedure"
+          input: "PRINT 'Migrating staged purchase data';"
+          expected: "logger.info('Migrating staged purchase data')"
+        - description: "Variable PRINT for lineage key"
+          input: "PRINT @lineageKey;"
+          expected: "logger.info(f'lineage_key: {lineage_key}')"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-012
+    dimension: Syntax
+    name: EXECUTE AS OWNER Removal
+    intent: >
+      Remove T-SQL WITH EXECUTE AS OWNER and inline EXECUTE AS clauses from
+      stored procedure definitions. Databricks uses Unity Catalog service principals
+      and cluster-level permissions rather than SQL Server impersonation context
+      switching. Affected procedures: migratestagedpurchasedata, getlastetlcutofftime,
+      getlineagekey, configuration_reseedetl.
+    activation:
+      preconditions:
+        - "Source stored procedure definition contains WITH EXECUTE AS OWNER or EXECUTE AS"
+      scope: project
+    transformation:
+      source: |
+        CREATE PROCEDURE integration.migratestagedpurchasedata
+        WITH EXECUTE AS OWNER
+        AS BEGIN ... END
+
+        EXECUTE AS USER = 'etl_service_account';
+        ...
+        REVERT;
+      target: |
+        -- WITH EXECUTE AS OWNER removed: configure Unity Catalog service principal permissions
+        # Python ETL function / Databricks notebook
+
+        -- Inline EXECUTE AS / REVERT removed: set cluster service principal in Databricks
+      algorithm: |
+        1. Remove WITH EXECUTE AS <context> from CREATE PROCEDURE / CREATE FUNCTION headers.
+        2. Add a comment pointing to Unity Catalog permission configuration.
+        3. Remove inline EXECUTE AS USER = '...' statements and their REVERT counterparts.
+        4. Emit a security TODO comment: equivalent permissions must be granted to the
+           Databricks service principal in Unity Catalog.
+        5. Do not remove any business logic between EXECUTE AS and REVERT.
+    validation:
+      success_criteria:
+        - "No EXECUTE AS or WITH EXECUTE AS clauses remain in generated code"
+        - "Security TODO comment present for each removal"
+        - "Business logic between EXECUTE AS and REVERT is preserved"
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - description: "WITH EXECUTE AS OWNER on migratestagedpurchasedata"
+          input: "CREATE PROCEDURE integration.migratestagedpurchasedata WITH EXECUTE AS OWNER AS BEGIN SELECT 1; END"
+          expected: "# TODO: configure Unity Catalog service principal permissions (was WITH EXECUTE AS OWNER)\ndef migrate_staged_purchase_data(spark): ...\n    spark.sql('SELECT 1')"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-013
+    dimension: Syntax
+    name: Object Existence Check Conversion (OBJECT_ID / IF EXISTS / IF NOT EXISTS)
+    intent: >
+      Convert T-SQL OBJECT_ID() existence checks and IF [NOT] EXISTS guard patterns
+      (used in configuration_reseedetl to check for Fact.Purchase before TRUNCATE,
+      and in dimension sentinel-row setup) to Spark SQL IF EXISTS / IF NOT EXISTS
+      clauses or Python spark.catalog.tableExists() calls.
+    activation:
+      preconditions:
+        - "Source code contains OBJECT_ID() function calls"
+        - "Source code contains IF OBJECT_ID(...) IS NOT NULL or IF EXISTS (...) patterns"
+      scope: project
+    transformation:
+      source: |
+        IF OBJECT_ID('fact.purchase', 'U') IS NOT NULL
+            TRUNCATE TABLE fact.purchase;
+
+        IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'integration')
+            EXEC('CREATE SCHEMA integration');
+      target: |
+        spark.sql("TRUNCATE TABLE inventory_stock.silver_fact.fact_purchase")
+        -- or in Python:
+        if spark.catalog.tableExists("inventory_stock.silver_fact.fact_purchase"):
+            spark.sql("TRUNCATE TABLE inventory_stock.silver_fact.fact_purchase")
+
+        spark.sql("CREATE SCHEMA IF NOT EXISTS inventory_stock.integration")
+      algorithm: |
+        1. IF OBJECT_ID('<table>', 'U') IS NOT NULL DROP TABLE → spark.sql("DROP TABLE IF EXISTS <table>").
+        2. IF OBJECT_ID('<table>', 'U') IS NOT NULL TRUNCATE TABLE → spark.sql("TRUNCATE TABLE <table>"); Delta supports TRUNCATE TABLE natively.
+        3. IF NOT EXISTS (SELECT ... FROM sys.schemas) / sys.objects / sys.tables → use spark.catalog.tableExists() or spark.sql("SHOW TABLES IN <schema> LIKE '<name>'") and a Python conditional.
+        4. Remove all sys.* catalog references; emit a comment citing Unity Catalog / information_schema.tables as the equivalent.
+        5. CREATE/DROP SCHEMA guards → use CREATE SCHEMA IF NOT EXISTS / DROP SCHEMA IF EXISTS.
+    validation:
+      success_criteria:
+        - "No OBJECT_ID() calls remain in generated code"
+        - "No sys.objects / sys.tables / sys.schemas references remain"
+        - "DROP TABLE IF EXISTS and TRUNCATE TABLE IF EXISTS used in place of guarded operations"
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - validity
+      test_cases:
+        - description: "Guarded TRUNCATE TABLE"
+          input: "IF OBJECT_ID('fact.purchase', 'U') IS NOT NULL TRUNCATE TABLE fact.purchase;"
+          expected: "spark.sql('TRUNCATE TABLE inventory_stock.silver_fact.fact_purchase')"
+        - description: "Schema existence check"
+          input: "IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'integration') EXEC('CREATE SCHEMA integration');"
+          expected: "spark.sql('CREATE SCHEMA IF NOT EXISTS inventory_stock.integration')"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-014
+    dimension: Syntax
+    name: TRUNCATE TABLE Conversion (Staging Bug Fix)
+    intent: >
+      Convert T-SQL TRUNCATE TABLE / DELETE FROM used for staging table clearance
+      to the correct Databricks Delta equivalent, and simultaneously correct the
+      SSIS staging-truncation bug: the SSIS dataflow incorrectly targets
+      Integration.Order_Staging instead of Integration.Purchase_Staging.
+      The Databricks replacement must truncate purchase_staging, not order_staging,
+      at the start of each run using a TRUNCATE TABLE or overwrite-mode write.
+    activation:
+      preconditions:
+        - "Source SSIS dataflow contains DELETE FROM Integration.Order_Staging (incorrect target)"
+        - "Intent is to clear Integration.Purchase_Staging before each ETL run"
+      scope: project
+    transformation:
+      source: |
+        -- SSIS BUG: incorrect target — should be Purchase_Staging, not Order_Staging
+        DELETE FROM Integration.Order_Staging;   -- ⚠ WRONG TABLE
+
+        -- Intended correct statement (never executed in source):
+        DELETE FROM Integration.Purchase_Staging;
+      target: |
+        -- BUG CORRECTED: truncate the correct purchase staging table
+        spark.sql("TRUNCATE TABLE inventory_stock.bronze.purchase_staging")
+        -- Alternative: overwrite mode in Python (clears and reloads atomically)
+        staging_df.write.format("delta").mode("overwrite") \
+            .saveAsTable("inventory_stock.bronze.purchase_staging")
+      algorithm: |
+        1. Replace the incorrect DELETE FROM Integration.Order_Staging with a
+           TRUNCATE TABLE inventory_stock.bronze.purchase_staging call.
+        2. Add an inline comment documenting the SSIS bug fix:
+           "# BUG FIX: SSIS incorrectly deleted from Order_Staging; now correctly truncates purchase_staging".
+        3. TRUNCATE TABLE is supported in Delta Lake — use it for a synchronous, logged
+           truncation that preserves table metadata and schema.
+        4. For Python-orchestrated loads where the staging table is re-populated in the
+           same step, prefer write.mode("overwrite") to combine truncate + load atomically.
+        5. Ensure this truncation step executes before the incremental extract writes new
+           rows to staging, preserving idempotency.
+    validation:
+      success_criteria:
+        - "Generated ETL truncates inventory_stock.bronze.purchase_staging, not any order_staging table"
+        - "Bug fix comment is present in the generated code"
+        - "Truncation step executes before staging load in the Databricks Workflow task order"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - completeness
+      test_cases:
+        - description: "SSIS bug correction — wrong table replaced with correct truncation"
+          input: "DELETE FROM Integration.Order_Staging;  -- intended: clear Purchase_Staging"
+          expected: "spark.sql('TRUNCATE TABLE inventory_stock.bronze.purchase_staging')  # BUG FIX: SSIS incorrectly targeted Order_Staging; corrected to purchase_staging"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-015
+    dimension: Syntax
+    name: IDENTITY Column Conversion to GENERATED ALWAYS AS IDENTITY
+    intent: >
+      Replace T-SQL IDENTITY(seed, increment) column definitions in Purchase-scope
+      DDL (PurchaseKey on fact.purchase, PurchaseStagingKey on integration.purchase_staging,
+      LineageKey on integration.lineage) with the Databricks Delta Lake
+      GENERATED ALWAYS AS IDENTITY equivalent. Note the limited update semantics
+      of Delta identity columns — identity values cannot be updated once assigned.
+    activation:
+      preconditions:
+        - "Source DDL contains IDENTITY(seed, increment) column definition"
+      scope: project
+    transformation:
+      source: |
+        [Purchase Key]        BIGINT         NOT NULL IDENTITY(1, 1)
+        [Purchase Staging Key] INT           NOT NULL IDENTITY(1, 1)
+        [Lineage Key]         INT            NOT NULL IDENTITY(1, 1)
+      target: |
+        purchase_key          BIGINT         GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)
+        purchase_staging_key  BIGINT         GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)
+        lineage_key           BIGINT         GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)
+      algorithm: |
+        1. Replace IDENTITY(seed, increment) with GENERATED ALWAYS AS IDENTITY
+           (START WITH <seed> INCREMENT BY <increment>) — supported in Delta Lake 3.1+;
+           add a version guard comment for older environments.
+        2. Upgrade INT to BIGINT for all identity columns to support distributed
+           generation scale in Databricks.
+        3. Remove NOT NULL constraint — GENERATED ALWAYS AS IDENTITY columns are implicitly
+           non-nullable in Delta; the constraint is redundant but harmless if kept.
+        4. Document the update restriction: GENERATED ALWAYS AS IDENTITY columns cannot be
+           explicitly set or updated after INSERT; flag any ETL patterns that attempt to
+           SET an identity column value.
+        5. For lineage_key specifically, see also SX-004 for the NEXT VALUE FOR conversion
+           if the key is generated via a SEQUENCE rather than an IDENTITY column.
+    validation:
+      success_criteria:
+        - "No IDENTITY() column definitions remain without a Delta GENERATED ALWAYS AS IDENTITY equivalent"
+        - "INT upgraded to BIGINT for all identity columns"
+        - "Update-restriction warning comment present for each converted identity column"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - uniqueness
+      test_cases:
+        - description: "BIGINT IDENTITY column on fact table"
+          input: "[Purchase Key] BIGINT NOT NULL IDENTITY(1, 1)"
+          expected: "purchase_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)"
+        - description: "INT IDENTITY column upgraded to BIGINT"
+          input: "[Lineage Key] INT NOT NULL IDENTITY(1, 1)"
+          expected: "lineage_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)  -- INT upgraded to BIGINT"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-016
+    dimension: Syntax
+    name: Schema-Qualified Object Reference Conversion to Unity Catalog Three-Part Names
+    intent: >
+      Convert all T-SQL two-part schema.object references in the Purchase product
+      scope to Databricks Unity Catalog three-part names using the catalog
+      inventory_stock and the designated layer schema (bronze / silver / gold /
+      control). Applies to wideworldimportersdw.integration.*, fact.*, dimension.*,
+      sequences.*, and application.* references throughout ETL procedures and DDL.
+    activation:
+      preconditions:
+        - "Source SQL contains schema-qualified references such as integration.*, fact.*, dimension.*, sequences.*, application.*"
+        - "Source SQL contains wideworldimportersdw database prefix"
+      scope: project
+    transformation:
+      source: |
+        FROM integration.purchase_staging
+        FROM fact.purchase
+        FROM dimension.supplier
+        FROM dimension.[stock item]
+        FROM integration.[etl cutoff]
+        FROM integration.lineage
+        NEXT VALUE FOR sequences.lineagekey
+        EXEC application.configuration_reseedetl
+      target: |
+        FROM inventory_stock.bronze.purchase_staging
+        FROM inventory_stock.silver_fact.fact_purchase
+        FROM inventory_stock.silver.supplier
+        FROM inventory_stock.silver.stock_item
+        FROM inventory_stock.control.etl_cutoff
+        FROM inventory_stock.control.lineage
+        -- sequences.lineagekey → replaced per SX-004
+        -- application.configuration_reseedetl → Python utility function reseed_etl()
+      algorithm: |
+        1. Map source schemas to target Unity Catalog layers:
+           - integration.purchase_staging  → inventory_stock.bronze.purchase_staging
+           - integration.etl cutoff        → inventory_stock.control.etl_cutoff
+           - integration.lineage           → inventory_stock.control.lineage
+           - fact.purchase                 → inventory_stock.silver_fact.fact_purchase
+           - dimension.supplier            → inventory_stock.silver.supplier
+           - dimension.[stock item]        → inventory_stock.silver.stock_item
+           - sequences.*                   → sequence utility functions (see SX-004)
+           - application.*                 → Python utility modules
+        2. Apply snake_case renaming to the table/view name portion per NM dimension rules.
+        3. Remove wideworldimportersdw. database prefix where present.
+        4. If the target catalog name is not yet finalised, emit {{TARGET_CATALOG}} as a
+           placeholder and add a configuration TODO comment.
+        5. For procedure calls (EXEC application.*), convert to Python function calls and
+           remove the schema-qualified EXEC syntax.
+        6. Cross-database references must be flagged with a manual-review TODO as they
+           require external table federation or data copy.
+    validation:
+      success_criteria:
+        - "All schema.table references use Unity Catalog three-part naming inventory_stock.<layer>.<table>"
+        - "No integration.*, fact.*, dimension.*, sequences.* two-part names remain in generated SQL"
+        - "wideworldimportersdw database prefix is removed"
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - consistency
+      test_cases:
+        - description: "integration schema reference"
+          input: "FROM integration.purchase_staging"
+          expected: "FROM inventory_stock.bronze.purchase_staging"
+        - description: "fact schema reference"
+          input: "FROM fact.purchase"
+          expected: "FROM inventory_stock.silver_fact.fact_purchase"
+        - description: "dimension schema reference with spaced table name"
+          input: "FROM dimension.[stock item]"
+          expected: "FROM inventory_stock.silver.stock_item"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: INHERITED
+
+  - id: SX-017
+    dimension: Syntax
+    name: CAST / CONVERT Type Conversion Mapping
+    intent: >
+      Map T-SQL type casting functions CAST() and CONVERT() to Spark SQL equivalents.
+      The Purchase ETL uses CAST(OrderDate AS date) for Date Key derivation at extract
+      time and CONVERT for ETL timestamp formatting. Spark SQL CAST syntax is largely
+      identical but requires T-SQL-specific type names (NVARCHAR, DATETIME, BIT) to be
+      replaced with Spark types (STRING, TIMESTAMP, BOOLEAN).
+    activation:
+      preconditions:
+        - "Source SQL contains CAST(), CONVERT(), TRY_CAST(), or TRY_CONVERT()"
+      scope: project
+    transformation:
+      source: |
+        CAST(po.OrderDate AS date)          -- Date Key derivation
+        CAST(col AS NVARCHAR(100))          -- string cast
+        CAST(col AS BIT)                    -- boolean cast
+        CONVERT(VARCHAR(10), LoadDate, 120) -- style 120 = YYYY-MM-DD
+        TRY_CAST(InputValue AS INT)
+      target: |
+        CAST(po.order_date AS DATE)                        -- identical; lowercase preferred
+        CAST(col AS STRING)                                -- NVARCHAR → STRING
+        CAST(col AS BOOLEAN)                               -- BIT → BOOLEAN
+        DATE_FORMAT(load_date, 'yyyy-MM-dd')               -- CONVERT style 120
+        TRY_CAST(input_value AS INT)                       -- Spark 3.3+; add version guard
+      algorithm: |
+        1. CAST(x AS type): syntax is identical in Spark SQL; map SQL Server types to Spark types per TY dimension rules:
+           NVARCHAR/VARCHAR/CHAR → STRING, DATETIME/DATETIME2 → TIMESTAMP, BIT → BOOLEAN,
+           INT/BIGINT → INT/BIGINT (unchanged), DECIMAL(p,s) → DECIMAL(p,s) (unchanged).
+        2. CONVERT(type, expr, style): if style is absent or 0 → rewrite as CAST(expr AS type).
+           If style is present, use Spark date/string functions:
+           - Style 120/126: DATE_FORMAT(expr, 'yyyy-MM-dd') or CAST(expr AS STRING)
+           - Style 103: TO_DATE(expr, 'dd/MM/yyyy')
+           - Other styles: emit a TODO for manual review.
+        3. TRY_CAST(x AS type): available in Spark SQL 3.3+; add a version guard comment.
+        4. CAST(OrderDate AS date) in the extract query → CAST(order_date AS DATE) in the
+           Databricks extract job; this is the Date Key derivation critical path — verify output matches dimension.date date values.
+        5. Preserve NULL propagation — Spark CAST raises error on failure (like T-SQL CAST);
+           use TRY_CAST for safe conversion.
+    validation:
+      success_criteria:
+        - "All CONVERT() calls with style codes are replaced with Spark date/string functions"
+        - "T-SQL-specific type names (NVARCHAR, BIT) are replaced with Spark types"
+        - "TRY_CAST used with Spark 3.3+ version guard"
+        - "CAST(OrderDate AS date) Date Key derivation produces DATE values matching dimension.date"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - description: "CAST for Date Key derivation"
+          input: "CAST(po.OrderDate AS date) AS [Date Key]"
+          expected: "CAST(po.order_date AS DATE) AS date_key"
+        - description: "NVARCHAR cast"
+          input: "CAST(col AS NVARCHAR(100))"
+          expected: "CAST(col AS STRING)"
+        - description: "BIT cast"
+          input: "CAST(col AS BIT)"
+          expected: "CAST(col AS BOOLEAN)"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+      product_status: EXTENDED   # by SX-P002 — adds CONVERT(CHAR(8), GETDATE()-N, 112) → DATE_FORMAT(DATE_SUB(current_date(), N), 'yyyyMMdd') pattern not covered by project rule
+
+# ── PRODUCT-SPECIFIC RULES (Purchase) ──
+
+product_rules:
+
+  - id: SX-P001
+    action: extend
+    extends_rule: SX-004
+    dimension: Syntax
+    intent: "Add the exact dbutils.jobs.taskValues pattern as the canonical replacement for EXEC Integration.GetLineageKey in Purchase ETL notebooks."
+    rationale: >
+      Project rule SX-004 defines the SEQUENCE → IDENTITY/sequence-store replacement
+      at the mechanism level but does not specify the Databricks Workflow task-value
+      propagation pattern used by the Purchase product. The Purchase product uses
+      dbutils.jobs.taskValues as the inter-task communication channel for lineage_key,
+      which is different from the direct IDENTITY read-after-insert pattern documented
+      in SX-004.
+    scope: "All Purchase ETL code that previously called EXEC Integration.GetLineageKey or SET @lineageKey = NEXT VALUE FOR sequences.lineagekey."
+    extended_behavior: |
+      Replace EXEC Integration.GetLineageKey (or any equivalent) with:
+
+        # In nb_extract_watermark (upstream task — opens lineage record):
+        lineage_key = open_lineage_record(spark, table_name="fact_purchase", ...)
+        dbutils.jobs.taskValues.set(key="lineage_key", value=lineage_key)
+
+        # In all downstream ETL tasks (consume lineage_key from upstream task):
+        lineage_key = dbutils.jobs.taskValues.get(
+            taskKey="nb_extract_watermark",
+            key="lineage_key"
+        )
+
+  - id: SX-P002
+    action: extend
+    extends_rule: SX-017
+    dimension: Syntax
+    intent: "Add the specific CONVERT(CHAR(8), GETDATE()-N, 112) date-arithmetic pattern conversion to DATE_FORMAT(DATE_SUB(current_date(), N), 'yyyyMMdd') which is not covered by the project SX-017 examples."
+    rationale: >
+      The Purchase product source contains date-format string generation using
+      CONVERT style 112 combined with GETDATE()-N arithmetic. This specific pattern
+      produces YYYYMMDD-format date strings for date-partitioned file paths or
+      filter parameters. The project SX-017 rule covers style 120 but not style 112
+      with date arithmetic; this extension adds the exact Spark equivalent.
+    scope: "Any CONVERT(CHAR(8), GETDATE()-N, 112) expression in Purchase-scope source code."
+    extended_behavior: |
+      Replace:
+        CONVERT(CHAR(8), GETDATE()-N, 112)
+      With:
+        DATE_FORMAT(DATE_SUB(current_date(), N), 'yyyyMMdd')
+
+      Where N is an integer literal or Python variable representing the number of days
+      to subtract from the current date. When N is a Python variable, inject it into
+      a spark.sql() f-string:
+        spark.sql(f"SELECT DATE_FORMAT(DATE_SUB(current_date(), {n}), 'yyyyMMdd')")
+
+      The output is a STRING column containing an 8-character date string in YYYYMMDD
+      format, semantically equivalent to the T-SQL source expression.
+
+  - id: SX-P003
+    action: extend
+    extends_rule: SX-003
+    dimension: Syntax
+    intent: "Add the pre-join step pattern (sk_resolver.py) as the canonical replacement for the T-SQL UPDATE staging SET key = (SELECT TOP(1) key FROM dim WHERE ...) pattern, separating the resolution from the staging UPDATE."
+    rationale: >
+      Project rule SX-003 describes the JOIN + ROW_NUMBER() replacement but implies
+      the resolution is performed inline in a SQL UPDATE statement. The Purchase
+      product moves this logic into sk_resolver.py as a pre-join step: the resolution
+      is performed as a DataFrame join operation before the MERGE, and the resolved
+      staging DataFrame (with surrogate keys populated) is written back to the staging
+      table. This separation makes the resolution testable and reusable.
+    scope: "All UPDATE staging SET key = (SELECT TOP(1)...) patterns in Purchase-scope source ETL."
+    extended_behavior: |
+      Replace:
+        UPDATE stg SET stg.[Supplier Key] = COALESCE(
+          (SELECT TOP(1) s.[Supplier Key] FROM Dimension.Supplier s WHERE ... ORDER BY [Valid From]), 0)
+        FROM Integration.Purchase_Staging stg;
+
+      With a call to sk_resolver.py before the MERGE step:
+
+        from src.common.sk_resolver import resolve_surrogate_keys
+
+        staging_df = resolve_surrogate_keys(
+            spark=spark,
+            staging_df=staging_df,
+            dim_table="inventory_stock.silver_dim.supplier",
+            natural_key_col="wwi_supplier_id",
+            probe_date_col="last_modified_when",
+            sk_col="supplier_key"
+        )
+        # Repeat for stock_item_key
+
+        # Write resolved staging_df back to bronze staging table before MERGE
+        staging_df.write.format("delta").mode("overwrite").saveAsTable(
+            "inventory_stock.bronze.purchase_staging"
+        )
+
+      The sk_resolver.py resolve_surrogate_keys() function applies:
+        - A LEFT JOIN with temporal range predicate
+        - ROW_NUMBER() deduplication (earliest valid_from)
+        - COALESCE(..., 0) fallback to unknown-member sentinel
+
+  - id: SX-P004
+    action: new
+    dimension: Syntax
+    intent: "Convert UPDATE Integration.Lineage SET [Data Load Completed] = ... inline lineage close pattern to a spark.sql UPDATE call with Python variable injection."
+    rationale: >
+      The Purchase product source contains an inline lineage-close UPDATE statement
+      embedded at the end of migratestagedpurchasedata. This specific UPDATE pattern
+      is not covered by any project SX rule. A product rule is required to document
+      the exact Spark SQL replacement, including the rows_merged count injection and
+      the lineage_key variable reference.
+    scope: "The inline UPDATE Integration.Lineage SET [Data Load Completed] = ... statement in the Purchase ETL procedure."
+    behavior: |
+      Replace:
+        UPDATE Integration.Lineage
+        SET [Data Load Completed] = SYSDATETIME()
+        WHERE [Lineage Key] = @LineageKey;
+
+      With (inline after the MERGE / fact-load step):
+        spark.sql(f"""
+            UPDATE inventory_stock.bronze.lineage_run
+            SET data_load_completed = current_timestamp(),
+                table_row_count     = {rows_merged},
+                was_successful      = true
+            WHERE lineage_key = {lineage_key}
+        """)
+
+      This statement must appear immediately after the fact_merge.py call that
+      returns rows_merged, within the same try block. On exception, the finally
+      block must call the equivalent with was_successful = false.

@@ -1,0 +1,70 @@
+# =============================================================================
+# Project  : Inventory_Stock_Project
+# Product  : Purchase
+# Task     : TASK-018
+# Title    : config/environment.yaml
+# Purpose  : Externalised configuration for the Purchase ETL product.
+#            All date filter boundaries and business validation parameters
+#            that would otherwise be hard-coded in ETL notebooks are defined
+#            here.  ETL notebooks load this file at startup via:
+#              import yaml
+#              with open("config/environment.yaml") as f:
+#                  cfg = yaml.safe_load(f)
+# Covers   : FR-008, FR-009, NFR-009
+# =============================================================================
+
+purchase:
+
+  # ---------------------------------------------------------------------------
+  # ETL operational parameters (FR-009, NFR-009)
+  # Notebooks must reference these keys; no date literals in src/etl/.
+  # ---------------------------------------------------------------------------
+  etl:
+
+    # Earliest date used as the lower boundary for the initial (full-history)
+    # load.  Acts as a safe sentinel so no hard-coded "1900-01-01" strings
+    # appear inside notebook code (FR-009).
+    initial_load_date: "1900-01-01"
+
+    # Number of days to look back when calculating the incremental batch
+    # window.  batch_date_min = run_date - batch_lookback_days.
+    # Increase this value to widen the reprocessing window for late-arriving
+    # records.
+    batch_lookback_days: 1
+
+    # Minimum row count in fact_purchase that triggers a Delta OPTIMIZE
+    # compaction after a load cycle (FR-008 conditional OPTIMIZE threshold).
+    # Set to 0 to disable the threshold guard and always run OPTIMIZE.
+    fact_optimize_row_threshold: 10000
+
+    # JDBC source connection — set when PD-001 resolves (pending)
+    jdbc_driver:   "{{JDBC_DRIVER_CLASS}}"
+    jdbc_user:     "{{JDBC_USER}}"
+    jdbc_password: "{{JDBC_PASSWORD}}"
+    source_table:  "{{SOURCE_TABLE_FQTN}}"
+
+  # ---------------------------------------------------------------------------
+  # Business-rule validation parameters (FR-009, DQR-005, DQR-006, DQR-007)
+  # Used by QA-P004 assertion checks in the ETL notebooks.
+  # ---------------------------------------------------------------------------
+  business_rules:
+
+    # --- DQR-005: Quantity non-negative check ---
+    # ordered_outers and ordered_quantity must be >= this floor value.
+    # Raising this above 0 would enforce a stricter minimum-order threshold.
+    min_ordered_quantity: 0   # ordered_quantity >= min_ordered_quantity
+    min_ordered_outers: 0     # ordered_outers  >= min_ordered_outers
+
+    # --- DQR-006: Date-key within batch window check ---
+    # date_key for each row must fall within the inclusive batch window
+    # [batch_date_min, batch_date_max].  batch_date_min is derived at runtime
+    # as run_date - etl.batch_lookback_days; batch_date_max is the run_date.
+    # The tolerance_days parameter allows a small grace period for timezone or
+    # calendar-boundary edge cases without widening the main lookback window.
+    date_window_tolerance_days: 0  # set > 0 to allow minor boundary slack
+
+    # --- DQR-007: Package non-null / non-empty check ---
+    # The `package` column must be present, non-null, and non-empty string.
+    # Set package_required to false only in environments where package is
+    # genuinely optional (e.g., a staging sandbox).
+    package_required: true

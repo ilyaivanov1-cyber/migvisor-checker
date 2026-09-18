@@ -1,0 +1,346 @@
+# Inventory_Stock_Project — Data Product Catalog
+# Generated: 2026-09-07 | Stage: catalog
+
+schemaVersion: "4.1"
+
+catalog:
+  projectName: Inventory_Stock_Project
+  projectDescription: >
+    Modernisation of the WideWorldImporters procurement and inventory workload
+    onto Databricks Delta Lake Unity Catalog. The project migrates the purchase
+    order transaction domain from a legacy SQL Server 2014 SSIS-orchestrated
+    batch into a governed, medallion-architecture data platform under the Unity
+    Catalog name `inventory_stock`. A confirmed staging-truncation bug in the
+    legacy SSIS pipeline is corrected as part of the migration.
+  sourceSystem:
+    platform: Microsoft SQL Server 2014
+    database: wideworldimportersdw
+  targetSystem:
+    platform: Databricks Delta Lake Unity Catalog
+    catalog: inventory_stock
+    schemaConvention: lowercase_snake_case
+    migrationMode: hybrid
+  generatedDate: "2026-09-07"
+
+products:
+
+  # ---------------------------------------------------------------------------
+  # 1. Purchase — PRIMARY / ACTIVE
+  # ---------------------------------------------------------------------------
+  - id: Purchase
+    displayName: Purchase
+    status: active
+    priority: primary
+    domain: Procurement / Purchasing
+    businessProcess: Procure-to-Pay
+    description: >
+      Covers the purchase order transaction domain sourced from the
+      WideWorldImporters star schema. Implements a medallion architecture
+      (bronze staging and control tables → silver dimensions and facts)
+      on Databricks Delta Lake Unity Catalog. Resolves SCD-2 surrogate keys
+      for supplier and stock item via a temporal range join helper. Corrects
+      the legacy SSIS staging-truncation bug by replacing per-run DELETE with
+      full OVERWRITE of the bronze staging table. Serves two Power BI reports
+      via Databricks SQL Warehouse.
+    architecture: medallion
+    tcpArtifacts:
+      asIs: products/Purchase/current/specifications/as-is.md
+      toBe: products/Purchase/current/specifications/to-be.md
+      productTransformationRules: products/Purchase/current/specifications/product-transformation-rules/
+
+    # -------------------------------------------------------------------------
+    # Source lineage (legacy references confined to this block)
+    # -------------------------------------------------------------------------
+    sourceLineage:
+      sourceDatabase: wideworldimportersdw
+      sourceTables:
+        - fact.purchase
+        - dimension.supplier
+        - dimension.stock item
+        - dimension.date
+      sourceIntegration:
+        - integration.purchase_staging
+        - integration.etl cutoff
+        - integration.lineage
+        - integration.migratestagedpurchasedata
+        - integration.getlastetlcutofftime
+        - integration.getlineagekey
+        - sequences.lineagekey
+        - application.configuration_reseedetl (Purchase-domain portions)
+      sourceOrchestration:
+        - SSIS pipeline_dailyetlmain (Purchase container)
+        - SSIS pipeline_item_truncate purchase_staging (bug: targets Order_Staging)
+        - SSIS pipeline_item_extract updated purchase data to staging
+        - SSIS pipeline_item_migrate staged purchase data
+
+    # -------------------------------------------------------------------------
+    # Output datasets
+    # -------------------------------------------------------------------------
+    outputDatasets:
+
+      facts:
+        - name: inventory_stock.silver_fact.fact_purchase
+          type: delta_table
+          layer: silver
+          description: >
+            Grain: one row per purchase order line × supplier × stock item ×
+            order date. CLUSTER BY (date_key, supplier_key). SCD-2 surrogate
+            keys resolved via temporal range join in sk_resolver.py. Upserted
+            via Spark SQL MERGE INTO in fact_merge.py.
+          clusteringKeys:
+            - date_key
+            - supplier_key
+          scdType: none
+
+      dimensions:
+        - name: inventory_stock.silver_dim.supplier
+          type: delta_table
+          layer: silver
+          scdType: 2
+          ownership: external
+          description: >
+            SCD-2 supplier dimension with _current view. Externally owned
+            (loaded by a separate product). Read dependency for Purchase ETL
+            surrogate key resolution.
+
+        - name: inventory_stock.silver_dim.stock_item
+          type: delta_table
+          layer: silver
+          scdType: 2
+          ownership: external
+          description: >
+            SCD-2 stock item dimension with _current view. Externally owned
+            (loaded by a separate product). Read dependency for Purchase ETL
+            surrogate key resolution.
+
+        - name: inventory_stock.silver_dim.date
+          type: delta_table
+          layer: silver
+          scdType: none
+          ownership: external
+          refreshStrategy: static
+          description: >
+            Date dimension — static reference table, no SCD required. Externally
+            owned (shared infrastructure). FK target for date_key in fact_purchase.
+
+      staging:
+        - name: inventory_stock.bronze.purchase_staging
+          type: delta_table
+          layer: bronze
+          description: >
+            Bronze landing table for incremental purchase records extracted from
+            source. Written in OVERWRITE mode per run to eliminate the legacy
+            SSIS staging-truncation bug. Includes lineage_key and _extracted_at_utc
+            audit columns.
+
+        - name: inventory_stock.bronze.etl_cutoff
+          type: delta_table
+          layer: bronze
+          description: >
+            High-watermark control table storing the last successfully processed
+            cutoff timestamp per entity. Replaces the legacy integration.etl cutoff
+            table.
+
+        - name: inventory_stock.bronze.lineage_run
+          type: delta_table
+          layer: bronze
+          description: >
+            ETL lineage and audit log table recording batch run metadata, row
+            counts, and success status. GENERATED ALWAYS AS IDENTITY surrogate
+            key replaces the legacy sequences.lineagekey sequence object.
+            Change Data Feed enabled.
+
+        - name: inventory_stock.bronze.dq_rejections
+          type: delta_table
+          layer: bronze
+          description: >
+            Centralised data quality rejection sink. Rows failing DQ assertions
+            (RI violations, business rule breaches) are written here with
+            lineage_key, rule_id, source table, PK value, and violation detail.
+
+    # -------------------------------------------------------------------------
+    # Input datasets (external dependencies at runtime)
+    # -------------------------------------------------------------------------
+    inputDatasets:
+      - name: inventory_stock.bronze.purchase_staging
+        role: primary_source
+        description: Populated by nb_extract_purchase at the start of each nightly run.
+      - name: inventory_stock.silver_dim.supplier
+        role: scd2_lookup
+        description: >
+          Required at runtime for surrogate key resolution. Must be loaded
+          before the Purchase ETL Workflow task executes (external dependency).
+      - name: inventory_stock.silver_dim.stock_item
+        role: scd2_lookup
+        description: >
+          Required at runtime for surrogate key resolution. Must be loaded
+          before the Purchase ETL Workflow task executes (external dependency).
+      - name: inventory_stock.silver_dim.date
+        role: fk_lookup
+        description: FK target for date_key. Static; no runtime load dependency.
+      - name: inventory_stock.bronze.etl_cutoff
+        role: watermark_control
+        description: >
+          Supplies the incremental extract window lower bound to
+          nb_extract_watermark at job start.
+
+    # -------------------------------------------------------------------------
+    # Orchestration
+    # -------------------------------------------------------------------------
+    orchestration:
+      platform: Databricks Workflows
+      primaryJob: nightly_etl_purchase
+      schedule: "0 2 * * *"
+      strategy: incremental_nightly
+      description: >
+        Nightly incremental ETL Workflow. nb_extract_watermark reads the
+        high-watermark from bronze.etl_cutoff, opens a lineage record in
+        bronze.lineage_run, and publishes lineage_key via taskValues.
+        nb_extract_purchase extracts rows updated since the watermark into
+        bronze.purchase_staging (OVERWRITE). migrate_staged_purchase_data
+        resolves SCD-2 surrogate keys via sk_resolver.py, performs a
+        Spark SQL MERGE INTO into silver_fact.fact_purchase via fact_merge.py,
+        executes five QA validation checks, and closes the lineage record.
+        Dimension loads (supplier, stock_item) are declared as upstream task
+        dependencies and must complete before the Purchase pipeline begins.
+
+    # -------------------------------------------------------------------------
+    # Data quality
+    # -------------------------------------------------------------------------
+    dataQuality:
+      assertionCount: 5
+      assertionTargets:
+        - inventory_stock.silver_fact.fact_purchase
+        - inventory_stock.bronze.purchase_staging
+      rejectionSink: inventory_stock.bronze.dq_rejections
+      rowCountReconciliation:
+        strategy: zero_tolerance
+        description: >
+          QA-P001: staging row count must equal merged fact row count after each
+          load. Mismatch raises RuntimeError and marks the Workflow task FAILED.
+      pendingThresholds:
+        - id: QA-DQ-01
+          description: >
+            Business-defined acceptable DQ failure thresholds for informational
+            assertions (QA-P002, QA-P004) not yet confirmed by stakeholders.
+
+    # -------------------------------------------------------------------------
+    # Consumers
+    # -------------------------------------------------------------------------
+    consumers:
+      - type: bi_reports
+        platform: Power BI
+        count: 2
+        accessEndpoint: Databricks SQL Warehouse
+        primaryDatasets:
+          - inventory_stock.silver_fact.fact_purchase
+          - inventory_stock.silver_dim.supplier
+          - inventory_stock.silver_dim.stock_item
+        reports:
+          - name: wwidw_purchase_and_sale_per_stockitem_dynamic
+            description: >
+              Cross-domain procurement-vs-sales comparison. Requires coordinated
+              cutover with the Sales_Orders product.
+          - name: wwidw_ordered_by_supplier
+            description: >
+              Supplier performance and fill-rate analytics.
+
+    # -------------------------------------------------------------------------
+    # SLA
+    # -------------------------------------------------------------------------
+    sla:
+      dataFreshness: daily
+      expectedLoadCompletionUtc: "06:00"
+      retentionPolicy:
+        silver: 7_years
+        bronze: 90_days
+
+    # -------------------------------------------------------------------------
+    # Governance
+    # -------------------------------------------------------------------------
+    governance:
+      platform: Unity Catalog
+      rowLevelSecurity: false
+      columnLevelSecurity: false
+      piiMasking:
+        enabled: false
+        description: No PII columns identified in the Purchase domain at this time.
+      accessRoleMatrix:
+        status: pending
+        description: >
+          Formal Unity Catalog role assignments for BI service principals,
+          data engineers, and data analysts not yet defined. silver_fact.fact_purchase
+          readable by BI service principals and analysts; bronze.* restricted to ETL
+          service principals; bronze.dq_rejections readable by data engineering team.
+
+    # -------------------------------------------------------------------------
+    # Pending decisions
+    # -------------------------------------------------------------------------
+    pendingDecisions:
+      - id: PD-001
+        description: >
+          Source connectivity: confirm JDBC connection profile and credentials
+          for the Databricks → SQL Server 2014 incremental extract in
+          nb_extract_purchase. Decision affects extract latency and source load.
+        owner: TBD
+        dueDate: TBD
+
+      - id: PD-002
+        description: >
+          reseed_purchase_environment.py scope: scope owner must confirm whether
+          application.configuration_reseedetl (Purchase portions) is retained as
+          a utility notebook or dropped entirely from the target codebase.
+          Sentinel row pre-seeding for key=0 rows in silver_dim.supplier and
+          silver_dim.stock_item is required regardless of this decision.
+        owner: TBD
+        dueDate: TBD
+
+      - id: PD-003
+        description: >
+          Unity Catalog access role matrix: define role assignments for BI analysts,
+          data engineers, and ETL service principals across all inventory_stock schemas.
+        owner: TBD
+        dueDate: TBD
+
+      - id: QA-DQ-01
+        description: >
+          Business DQ thresholds: stakeholders must confirm acceptable failure
+          rates for informational QA assertions (orphaned SK count, business rule
+          breach count) before go-live.
+        owner: TBD
+        dueDate: TBD
+
+  # ---------------------------------------------------------------------------
+  # 2. Inventory_Movement — FUTURE CANDIDATE
+  # ---------------------------------------------------------------------------
+  - id: Inventory_Movement
+    displayName: Inventory Movement
+    status: candidate
+    priority: future
+    domain: Inventory and Supply Chain
+    businessProcess: Stock Movement
+    description: >
+      Covers stock movement transaction facts sourced from the WideWorldImporters
+      inventory domain. Planned medallion architecture mirroring the Purchase
+      product pattern. No to-be specification exists yet.
+    architecture: medallion
+    tcpArtifacts:
+      asIs: null
+      toBe: null
+      productTransformationRules: null
+
+    sourceLineage:
+      sourceDatabase: wideworldimportersdw
+      sourceTables:
+        - fact.movement
+        - dimension.stock item
+        - dimension.supplier
+
+    outputDatasets: null
+    inputDatasets: null
+    orchestration: null
+    dataQuality: null
+    consumers: null
+    sla: null
+    governance: null
+    pendingDecisions: null

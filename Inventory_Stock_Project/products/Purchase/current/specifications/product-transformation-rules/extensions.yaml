@@ -1,0 +1,434 @@
+extensions:
+  - rule_id: "TY-012"
+    action: extend
+    dimension: "TY"
+    extension_id: "TY-P002"
+    original_intent: "Map DATETIME2(n) to TIMESTAMP_NTZ for all DATETIME2 columns."
+    extension_intent: "Define the full SCD-2 control column set for Purchase-scope dimension tables, including the complete set of validity, effective, and active-row flag columns with their exact target types and default values."
+    rationale: >
+      Project rule TY-012 maps DATETIME2 to TIMESTAMP_NTZ but does not specify the
+      complete SCD-2 control column pattern required by the Purchase product. The
+      product introduces a five-column SCD-2 control block that includes both
+      business-effective date columns (DATE, overridden by TY-P001) and technical
+      row-lifecycle columns (DATE for row open/close, BOOLEAN for active-row flag).
+      This extension formally documents the full pattern so code generators produce
+      the correct DDL block for every Purchase SCD-2 dimension table.
+    scope: "Every SCD-2 dimension table in the Purchase product scope (supplier, stock_item)."
+    extended_behavior: |
+      Every Purchase-scope SCD-2 dimension table must carry the following five control
+      columns, in addition to its natural-key and attribute columns:
+
+        valid_from         DATE     NOT NULL
+            -- Business effective date (overrides TY-012 per TY-P001)
+        valid_to           DATE     NOT NULL
+            -- Business expiry date   (overrides TY-012 per TY-P001)
+        row_effective_date DATE     NOT NULL
+            -- Technical SCD-2 row open date (when this row was written to the target)
+        row_expiry_date    DATE     NOT NULL DEFAULT DATE '9999-12-31'
+            -- Technical SCD-2 row close date; sentinel value 9999-12-31 for current row
+        is_current_row     BOOLEAN  NOT NULL DEFAULT TRUE
+            -- Active-row flag; TRUE for the currently valid version of the entity
+
+      Code generators must emit all five columns as a named block immediately after
+      the business attribute columns and before any audit or lineage columns.
+
+  - rule_id: "TY-005"
+    action: extend
+    dimension: "TY"
+    extension_id: "TY-P003"
+    original_intent: "Map DECIMAL(p,s) and NUMERIC(p,s) to Spark DECIMAL(p,s) preserving precision and scale."
+    extension_intent: "Add explicit mappings for SQL Server MONEY and SMALLMONEY types to DECIMAL(18,2) and DECIMAL(10,2) respectively, which are not covered by the project TY rules."
+    rationale: >
+      The project TY rules cover DECIMAL/NUMERIC but do not define mappings for the
+      SQL Server currency types MONEY and SMALLMONEY, which are present in the
+      Purchase product source schema. These types have fixed implicit precision and
+      scale (MONEY: 19,4 stored but exposed as 18,2 range; SMALLMONEY: 10,4 stored
+      but exposed as 10,2 range) and must be mapped to DECIMAL to avoid silent
+      precision loss or type errors in Databricks.
+    scope: "Any column or expression typed as MONEY or SMALLMONEY in Purchase-scope source DDL or ETL."
+    extended_behavior: |
+      Map SQL Server currency types as follows:
+        MONEY       →  DECIMAL(18,2)
+        SMALLMONEY  →  DECIMAL(10,2)
+
+      In ETL pipelines, divide source MONEY/SMALLMONEY values by 1 (no scaling) and
+      write as DECIMAL(18,2) / DECIMAL(10,2). The internal 4-decimal-place storage of
+      SQL Server currency types means that values are rounded to 2 decimal places on
+      write; document any rounding in the migration log and flag columns where the
+      original 4-decimal precision is business-significant for manual review.
+
+      CAST(x AS MONEY)        →  CAST(x AS DECIMAL(18,2))
+      CAST(x AS SMALLMONEY)   →  CAST(x AS DECIMAL(10,2))
+
+  - rule_id: "TY-009"
+    action: extend
+    dimension: "TY"
+    extension_id: "TY-P004"
+    original_intent: "Map VARCHAR/NVARCHAR to Spark SQL STRING."
+    extension_intent: "Add an explicit mapping for SQL Server geography CLR type, which is not a standard SQL type and requires decomposition into three target columns."
+    rationale: >
+      The Purchase product source schema includes geography CLR type columns that
+      have no direct Spark equivalent. The project TY rules cover all standard SQL
+      Server types but do not address CLR user-defined types. The geography type
+      must be decomposed into three separate STRING/DOUBLE columns to preserve
+      spatial data in a queryable form on Databricks.
+    scope: "Any column declared as the geography CLR type in Purchase-scope source DDL."
+    extended_behavior: |
+      A single geography column <col_name> is decomposed into three target columns:
+        <col_name>_wkt   STRING  -- Well-Known Text (WKT) representation of the geometry
+        <col_name>_lat   DOUBLE  -- Latitude extracted from the geography point
+        <col_name>_lon   DOUBLE  -- Longitude extracted from the geography point
+
+      In the source extract, use:
+        <col_name>.ToString()    to obtain WKT
+        <col_name>.Lat           to obtain latitude
+        <col_name>.Long          to obtain longitude
+
+      In Python ETL, parse via the source JDBC driver's geography deserialization
+      or via a pre-extract SQL query that calls the appropriate CLR methods.
+      Document the original column name and the decomposition rationale in column
+      metadata comments on all three target columns.
+
+  - rule_id: "OB-001"
+    action: extend
+    dimension: "OB"
+    extension_id: "OB-P001"
+    original_intent: "Migrate SCD-2 dimension tables to Delta Lake with _current views and SCD-2 pattern."
+    extension_intent: "Require a key=0 'Unknown' sentinel row bootstrap notebook for every SCD-2 dimension table in the Purchase product scope, ensuring the COALESCE fallback in surrogate key resolution always resolves to a valid row."
+    rationale: >
+      Project rule OB-001 defines the SCD-2 dimension structure but does not mandate
+      the bootstrap mechanism that pre-populates the key=0 unknown-member sentinel row.
+      The Purchase product's surrogate key resolution pattern (SCD-2 temporal JOIN with
+      COALESCE(..., 0) fallback) relies on this sentinel row being present at all times.
+      The product brief makes this an explicit migration target — a dedicated bootstrap
+      notebook must be generated and registered.
+    scope: "SCD-2 dimension tables in Purchase scope: inventory_stock.silver_dim.supplier, inventory_stock.silver_dim.stock_item."
+    extended_behavior: |
+      For each SCD-2 dimension table in Purchase scope, a dedicated bootstrap notebook
+      (src/init/bootstrap_<dim>_sentinel.py) must be generated that performs a MERGE
+      to upsert the key=0 sentinel row:
+
+        MERGE INTO inventory_stock.silver_dim.<dim> AS tgt
+        USING (SELECT
+                 0                   AS <dim>_key,
+                 0                   AS wwi_<dim>_id,
+                 'Unknown'           AS <dim_name_col>,
+                 DATE '1900-01-01'   AS valid_from,
+                 DATE '9999-12-31'   AS valid_to,
+                 DATE '1900-01-01'   AS row_effective_date,
+                 DATE '9999-12-31'   AS row_expiry_date,
+                 TRUE                AS is_current_row
+               ) AS src
+        ON tgt.<dim>_key = 0
+        WHEN MATCHED THEN UPDATE SET ...
+        WHEN NOT MATCHED THEN INSERT (...) VALUES (...);
+
+      The bootstrap notebook must:
+      - Be tagged INIT_ONLY in notebook metadata
+      - Run as the first task in environment initialisation (before any ETL run)
+      - NOT appear in the production nightly Workflow
+      - Be idempotent (MERGE, not INSERT — safe to re-run)
+      - Assert after execution that key=0 exists in the dimension table
+
+  - rule_id: "OB-003"
+    action: extend
+    dimension: "OB"
+    extension_id: "OB-P002"
+    original_intent: "Migrate integration.purchase_staging to a bronze Delta table with overwrite semantics."
+    extension_intent: "Require two additional audit columns (lineage_key BIGINT NOT NULL and _extracted_at_utc TIMESTAMP NOT NULL) on the Purchase staging table, beyond the project-level staging DDL pattern."
+    rationale: >
+      The Purchase product's staging table must carry lineage_key to propagate the
+      ETL run identifier to every staging row (per LN-006) and _extracted_at_utc to
+      record the exact UTC wall-clock time at which each row was extracted from the
+      source system, enabling fine-grained data freshness auditing and replay-window
+      calculation independent of the ETL cutoff watermark.
+    scope: "inventory_stock.bronze.purchase_staging staging Delta table."
+    extended_behavior: |
+      The following two audit columns are added to inventory_stock.bronze.purchase_staging
+      DDL in addition to the columns defined by OB-003:
+
+        lineage_key        BIGINT     NOT NULL
+            COMMENT 'FK to inventory_stock.bronze.lineage_run.lineage_key; identifies the ETL run that extracted this row'
+        _extracted_at_utc  TIMESTAMP  NOT NULL
+            COMMENT 'UTC timestamp at which this row was extracted from the SQL Server source; populated by the extract notebook from datetime.now(timezone.utc)'
+
+      lineage_key is populated from the Python variable returned by open_lineage_record()
+      at the start of the extract task. _extracted_at_utc is populated by the extract
+      notebook using datetime.now(timezone.utc) at the time each row is written to
+      the staging table, not at the time the pipeline started.
+
+  - rule_id: "OB-008"
+    action: extend
+    dimension: "OB"
+    extension_id: "OB-P003"
+    original_intent: "Migrate BI reports to Databricks SQL Warehouse with updated connection strings and renamed objects."
+    extension_intent: "Distinguish between aggregating/reporting views (must use CREATE OR REPLACE MATERIALIZED VIEW) and thin wrapper/alias views (must use CREATE OR REPLACE VIEW) when generating analytics views for the Purchase product."
+    rationale: >
+      The project OB rules do not specify how analytics views should be materialised.
+      The Purchase product explicitly requires that views performing aggregation or
+      reporting logic use Databricks materialized views for performance, while views
+      that are thin wrappers or aliases use regular (non-materialized) views to avoid
+      unnecessary compute cost and staleness complexity.
+    scope: "All analytics views generated for the Purchase product in the inventory_stock catalog."
+    extended_behavior: |
+      Apply the following classification rule to every analytics view generated for
+      the Purchase product:
+
+      MATERIALIZED VIEW (CREATE OR REPLACE MATERIALIZED VIEW):
+        - Views that contain GROUP BY, aggregation functions (SUM, COUNT, AVG, etc.),
+          WINDOW functions, or non-trivial joins that compress row counts
+        - Examples: purchase_summary_by_supplier, stock_item_order_totals
+
+      REGULAR VIEW (CREATE OR REPLACE VIEW):
+        - Views that are thin wrappers — SELECT * with a simple WHERE filter,
+          single-table renames, or alias views used for backward compatibility
+        - Examples: purchase_current (is_order_finalized = TRUE filter only),
+          fact_purchase_v (alias over silver_fact.fact_purchase)
+
+      Each generated view file must include a comment header stating its view class
+      (MATERIALIZED or REGULAR) and the classification rationale.
+
+  - rule_id: "OB-005"
+    action: extend
+    dimension: "OB"
+    extension_id: "OB-P004"
+    original_intent: "Migrate ETL stored procedures to Python notebooks and Databricks Workflow tasks."
+    extension_intent: "Promote scd2_merge.py, sk_resolver.py, and fact_merge.py as explicit, named migration targets that must be generated as shared Python helper modules, not inlined into individual ETL notebooks."
+    rationale: >
+      The project OB rules describe the high-level transformation of stored procedures
+      to Python notebooks but do not prescribe the decomposition into shared helper
+      libraries. The Purchase product explicitly designates three shared helpers as
+      migration targets. Treating them as first-class artifacts ensures they are
+      tracked, versioned, tested, and referenced consistently across all Purchase ETL
+      notebooks.
+    scope: "Purchase product ETL codebase under src/common/."
+    extended_behavior: |
+      The following three shared helper modules are explicit migration targets for the
+      Purchase product and must be generated as standalone files:
+
+        src/common/scd2_merge.py
+          - Encapsulates the SCD-2 dimension MERGE logic (open new version, close old version,
+            set is_current_row flag, populate row_effective_date / row_expiry_date)
+          - Accepts: spark, target_table, source_df, natural_key_col, effective_date_col
+          - Returns: rows_merged count
+
+        src/common/sk_resolver.py
+          - Encapsulates the surrogate key resolution pre-join step that replaces the
+            UPDATE staging SET key = (SELECT TOP(1)...) T-SQL pattern
+          - Accepts: spark, staging_df, dim_table, natural_key_col, probe_date_col, sk_col
+          - Returns: staging_df with <sk_col> populated (COALESCE to 0 for unresolved rows)
+
+        src/common/fact_merge.py
+          - Encapsulates the order-level delete+insert / MERGE pattern for fact_purchase
+          - Accepts: spark, staging_table, fact_table, join_key_col, lineage_key
+          - Returns: rows_merged count; emits conditional OPTIMIZE if rows_merged > threshold
+
+      Each module must have:
+        - Unit tests in tests/common/test_<module>.py
+        - A module-level docstring citing the source procedure it replaces
+        - Import from src/common/constants.py for catalog/schema/table constants
+
+  - rule_id: "PE-002"
+    action: extend
+    dimension: "PE"
+    extension_id: "PE-P001"
+    original_intent: "Use CLUSTER BY (Liquid Clustering) as the primary data layout strategy for fact and dimension tables."
+    extension_intent: "Add an alternative partitioning strategy for date-heavy fact tables: PARTITIONED BY (date_col) combined with ZORDER BY (fk_cols) as a row-store B-tree equivalent for cases where Liquid Clustering is not available or not optimal."
+    rationale: >
+      Project rule PE-002 prescribes CLUSTER BY as the sole strategy and explicitly
+      prohibits ZORDER for liquid-clustered tables. However, the Purchase product may
+      encounter runtimes earlier than DBR 13.3 or scenarios where a date-partitioned
+      layout with ZORDER provides better query plan selectivity for large date-range
+      scans combined with high-cardinality FK predicates. This extension defines the
+      alternative strategy and the conditions under which it is applied.
+    scope: "fact_purchase and any future fact tables in the Purchase product scope where the runtime is < DBR 13.3 or where the alternative strategy is explicitly selected."
+    extended_behavior: |
+      When Liquid Clustering (CLUSTER BY) is not available (runtime < DBR 13.3) or
+      when a date-column row-store partitioning is explicitly required, apply:
+
+        PARTITIONED BY (date_col)
+        -- followed by post-load OPTIMIZE with ZORDER:
+        OPTIMIZE inventory_stock.silver_fact.fact_purchase
+          ZORDER BY (supplier_key, stock_item_key)
+
+      Selection criteria:
+        - date_col must be a DATE or DATE-derived column with reasonable cardinality
+          (e.g., date_key: daily granularity, ~365 partitions per year — acceptable)
+        - fk_cols for ZORDER must be the high-cardinality FK columns most frequently
+          used in WHERE or JOIN predicates (supplier_key, stock_item_key for fact_purchase)
+
+      This alternative strategy is MUTUALLY EXCLUSIVE with CLUSTER BY on the same table.
+      Document the chosen strategy and the selection rationale in the table DDL header
+      comment. Default to CLUSTER BY (PE-002) when DBR >= 13.3 is confirmed.
+
+  - rule_id: "PE-003"
+    action: extend
+    dimension: "PE"
+    extension_id: "PE-P002"
+    original_intent: "Run a plain OPTIMIZE step after every nightly batch write to silver-layer Delta tables."
+    extension_intent: "Make the OPTIMIZE step conditional: run only when the number of rows merged in the current ETL run exceeds FACT_OPTIMIZE_ROW_THRESHOLD, avoiding unnecessary compute on low-volume nights."
+    rationale: >
+      Project rule PE-003 mandates an unconditional OPTIMIZE after every nightly merge.
+      The Purchase product operates on variable nightly volumes — some nights only a
+      handful of orders are modified. Running OPTIMIZE unconditionally wastes cluster
+      compute on near-zero-change nights. The conditional threshold pattern preserves
+      the compaction benefit on high-volume nights while eliminating wasted compute on
+      low-volume nights.
+    scope: "fact_purchase OPTIMIZE step in the Purchase nightly ETL Workflow task."
+    extended_behavior: |
+      Replace the unconditional OPTIMIZE call for fact_purchase with a conditional block:
+
+        # In src/etl/migrate_staged_purchase_data.py
+        FACT_OPTIMIZE_ROW_THRESHOLD = 10_000  # configurable via config/environment.yaml
+
+        rows_merged = <count returned by fact_merge.py MERGE step>
+
+        if rows_merged > FACT_OPTIMIZE_ROW_THRESHOLD:
+            spark.sql("OPTIMIZE inventory_stock.silver_fact.fact_purchase")
+            logger.info(f"OPTIMIZE executed: rows_merged={rows_merged} exceeded threshold={FACT_OPTIMIZE_ROW_THRESHOLD}")
+        else:
+            logger.info(f"OPTIMIZE skipped: rows_merged={rows_merged} below threshold={FACT_OPTIMIZE_ROW_THRESHOLD}")
+
+      FACT_OPTIMIZE_ROW_THRESHOLD must be:
+        - Defined in config/environment.yaml (externalised, not hard-coded)
+        - Readable via the constants.py module
+        - Documented in the ETL design document under "Post-Load Maintenance"
+
+      The unconditional OPTIMIZE rule (PE-003) continues to apply to silver_dim tables
+      (supplier, stock_item) — the conditional threshold applies only to fact_purchase.
+
+  - rule_id: "LN-003"
+    action: extend
+    dimension: "LN"
+    extension_id: "LN-P001"
+    original_intent: "Replace integration.getlineagekey procedure with a Python utility function that opens a lineage record and returns the IDENTITY-assigned lineage_key."
+    extension_intent: "Specify the exact lineage_key injection mechanism for the Purchase product: lineage_key is obtained via dbutils.jobs.taskValues.get from an upstream watermark task, not via a direct INSERT into lineage_run within the same task."
+    rationale: >
+      Project rule LN-003 specifies that open_lineage_record() inserts a row into
+      lineage_run and reads back the IDENTITY key. The Purchase product's Databricks
+      Workflow architecture separates lineage key generation into a dedicated upstream
+      task (nb_extract_watermark) that publishes the lineage_key as a task value. All
+      downstream ETL tasks in the Purchase Workflow obtain the lineage_key via
+      dbutils.jobs.taskValues.get rather than opening their own lineage records.
+      This extension documents the mechanism so that code generators produce the
+      correct injection pattern.
+    scope: "All Purchase ETL notebooks that consume lineage_key after nb_extract_watermark has run."
+    extended_behavior: |
+      In the Purchase product Databricks Workflow, lineage_key is obtained as follows:
+
+        # In all ETL notebooks downstream of nb_extract_watermark:
+        lineage_key = dbutils.jobs.taskValues.get(
+            taskKey="nb_extract_watermark",
+            key="lineage_key"
+        )
+
+      The upstream task nb_extract_watermark is responsible for:
+        1. Calling open_lineage_record() once per pipeline run
+        2. Publishing the returned integer via:
+           dbutils.jobs.taskValues.set(key="lineage_key", value=lineage_key)
+
+      No other Purchase ETL task calls open_lineage_record() directly.
+      All downstream tasks (staging truncate, staging load, SK resolution, fact merge)
+      must call dbutils.jobs.taskValues.get as shown above.
+
+      This pattern replaces the direct open_lineage_record() call documented in LN-003
+      for the Purchase product scope. LN-003 open_lineage_record() is still used, but
+      only inside nb_extract_watermark.
+
+  - rule_id: "SX-004"
+    action: extend
+    dimension: "SX"
+    extension_id: "SX-P001"
+    original_intent: "Replace NEXT VALUE FOR sequences.lineagekey with a Databricks-native lineage key generation pattern."
+    extension_intent: "Add the exact dbutils.jobs.taskValues pattern as the canonical replacement for EXEC Integration.GetLineageKey in Purchase ETL notebooks."
+    rationale: >
+      Project rule SX-004 defines the SEQUENCE → IDENTITY/sequence-store replacement
+      at the mechanism level but does not specify the Databricks Workflow task-value
+      propagation pattern used by the Purchase product. The Purchase product uses
+      dbutils.jobs.taskValues as the inter-task communication channel for lineage_key,
+      which is different from the direct IDENTITY read-after-insert pattern documented
+      in SX-004.
+    scope: "All Purchase ETL code that previously called EXEC Integration.GetLineageKey or SET @lineageKey = NEXT VALUE FOR sequences.lineagekey."
+    extended_behavior: |
+      Replace EXEC Integration.GetLineageKey (or any equivalent) with:
+
+        # In nb_extract_watermark (upstream task — opens lineage record):
+        lineage_key = open_lineage_record(spark, table_name="fact_purchase", ...)
+        dbutils.jobs.taskValues.set(key="lineage_key", value=lineage_key)
+
+        # In all downstream ETL tasks (consume lineage_key from upstream task):
+        lineage_key = dbutils.jobs.taskValues.get(
+            taskKey="nb_extract_watermark",
+            key="lineage_key"
+        )
+
+  - rule_id: "SX-017"
+    action: extend
+    dimension: "SX"
+    extension_id: "SX-P002"
+    original_intent: "Map T-SQL CAST/CONVERT type casting to Spark SQL equivalents."
+    extension_intent: "Add the specific CONVERT(CHAR(8), GETDATE()-N, 112) date-arithmetic pattern conversion to DATE_FORMAT(DATE_SUB(current_date(), N), 'yyyyMMdd') which is not covered by the project SX-017 examples."
+    rationale: >
+      The Purchase product source contains date-format string generation using
+      CONVERT style 112 combined with GETDATE()-N arithmetic. This specific pattern
+      produces YYYYMMDD-format date strings for date-partitioned file paths or
+      filter parameters. The project SX-017 rule covers style 120 but not style 112
+      with date arithmetic; this extension adds the exact Spark equivalent.
+    scope: "Any CONVERT(CHAR(8), GETDATE()-N, 112) expression in Purchase-scope source code."
+    extended_behavior: |
+      Replace:
+        CONVERT(CHAR(8), GETDATE()-N, 112)
+      With:
+        DATE_FORMAT(DATE_SUB(current_date(), N), 'yyyyMMdd')
+
+      Where N is an integer literal or Python variable representing the number of days
+      to subtract from the current date. When N is a Python variable, inject it into
+      a spark.sql() f-string:
+        spark.sql(f"SELECT DATE_FORMAT(DATE_SUB(current_date(), {n}), 'yyyyMMdd')")
+
+      The output is a STRING column containing an 8-character date string in YYYYMMDD
+      format, semantically equivalent to the T-SQL source expression.
+
+  - rule_id: "SX-003"
+    action: extend
+    dimension: "SX"
+    extension_id: "SX-P003"
+    original_intent: "Convert the TOP(1) correlated subquery surrogate key resolution pattern to a Spark SQL JOIN with ROW_NUMBER()."
+    extension_intent: "Add the pre-join step pattern (sk_resolver.py) as the canonical replacement for the T-SQL UPDATE staging SET key = (SELECT TOP(1) key FROM dim WHERE ...) pattern, separating the resolution from the staging UPDATE."
+    rationale: >
+      Project rule SX-003 describes the JOIN + ROW_NUMBER() replacement but implies
+      the resolution is performed inline in a SQL UPDATE statement. The Purchase
+      product moves this logic into sk_resolver.py as a pre-join step: the resolution
+      is performed as a DataFrame join operation before the MERGE, and the resolved
+      staging DataFrame (with surrogate keys populated) is written back to the staging
+      table. This separation makes the resolution testable and reusable.
+    scope: "All UPDATE staging SET key = (SELECT TOP(1)...) patterns in Purchase-scope source ETL."
+    extended_behavior: |
+      Replace:
+        UPDATE stg SET stg.[Supplier Key] = COALESCE(
+          (SELECT TOP(1) s.[Supplier Key] FROM Dimension.Supplier s WHERE ... ORDER BY [Valid From]), 0)
+        FROM Integration.Purchase_Staging stg;
+
+      With a call to sk_resolver.py before the MERGE step:
+
+        from src.common.sk_resolver import resolve_surrogate_keys
+
+        staging_df = resolve_surrogate_keys(
+            spark=spark,
+            staging_df=staging_df,
+            dim_table="inventory_stock.silver_dim.supplier",
+            natural_key_col="wwi_supplier_id",
+            probe_date_col="last_modified_when",
+            sk_col="supplier_key"
+        )
+        # Repeat for stock_item_key
+
+        # Write resolved staging_df back to bronze staging table before MERGE
+        staging_df.write.format("delta").mode("overwrite").saveAsTable(
+            "inventory_stock.bronze.purchase_staging"
+        )
+
+      The sk_resolver.py resolve_surrogate_keys() function applies:
+        - A LEFT JOIN with temporal range predicate
+        - ROW_NUMBER() deduplication (earliest valid_from)
+        - COALESCE(..., 0) fallback to unknown-member sentinel
