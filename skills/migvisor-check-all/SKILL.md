@@ -1,6 +1,6 @@
 ---
 name: migvisor-check-all
-description: Runs all 13 MigVisor deliverable checks in sequence against the auto-detected trainee workspace and writes a summary score table. Single command — no file paths needed.
+description: Runs all 21 MigVisor deliverable checks in sequence against the auto-detected trainee workspace and writes a summary score table. Single command — no file paths needed.
 ---
 
 # Skill: migvisor-check-all
@@ -19,7 +19,7 @@ description: Runs all 13 MigVisor deliverable checks in sequence against the aut
 
 ## Purpose
 
-Run all 13 MigVisor deliverable skills in sequence against one trainee workspace.
+Run all 21 MigVisor deliverable skills in sequence against one trainee workspace.
 No file paths needed — everything is resolved from `workspace.yaml`.
 At the end, print a single summary score table.
 
@@ -51,7 +51,9 @@ Run each skill below in order. For each:
 2. Resolve the trainee file and reference file using the workspace paths.
 3. Score the deliverable.
 4. Write the check report to `{checks_dir}/{trainee_name}/{task-group}/`.
-5. Print a one-line progress update: `✓ [N/13] <skill-name> — <score>/100 (<grade>)`
+5. Print a one-line progress update: `✓ [N/21] <skill-name> — <score>/100 (<grade>)`
+
+If a trainee file is missing, mark that check as **[MISSING] — 0/100** and continue to the next.
 
 | # | Skill | Trainee file (relative to trainee_workspace) | Reference file (relative to reference_workspace) | Output dir |
 |---|---|---|---|---|
@@ -68,14 +70,20 @@ Run each skill below in order. For each:
 | 11 | migvisor-task-checker-data-dictionary | `products/{product}/current/codebase/docs/data-dictionary.md` | `module_5/codebase/docs/data_dictionary.md` | `data-dictionary/` |
 | 12 | migvisor-task-checker-pipeline-runbook | `products/{product}/current/codebase/docs/runbook.md` | `module_5/codebase/docs/pipeline_runbook.md` | `pipeline-runbook/` |
 | 13 | migvisor-task-checker-validation-report | `products/{product}/current/codebase/validation-report.md` | `module_5/reports/validation/report.md` | `validation/` |
-
-If a trainee file is missing, mark that check as **[MISSING] — 0/100** and continue to the next.
+| 14 | migvisor-task-checker-architecture-diagram | `products/{product}/current/codebase/docs/architecture_diagram.md` | `module_5/codebase/docs/architecture_diagram.md` | `architecture/` |
+| 15 | migvisor-task-checker-go-live-checklist | `products/{product}/current/codebase/docs/go_live_checklist.md` | `module_5/codebase/docs/go_live_checklist.md` | `go-live/` |
+| 16 | migvisor-task-checker-bi-connections | `products/{product}/current/codebase/docs/bi/bi_connections.md` | `module_5/codebase/config/bi_connections.md` | `bi-connections/` |
+| 17 | migvisor-task-checker-secrets-setup | `products/{product}/current/codebase/config/secrets_setup.md` | `module_5/codebase/config/secrets_setup.md` | `secrets-setup/` |
+| 18 | migvisor-task-checker-secrets-rotation-runbook | `products/{product}/current/codebase/config/secrets_rotation_runbook.md` | `module_5/codebase/config/secrets_rotation_runbook.md` | `secrets-rotation/` |
+| 19 | migvisor-task-checker-uc-permission-audit | `products/{product}/current/codebase/config/uc_permission_audit.sql` | `module_5/codebase/config/uc_permission_audit.sql` | `uc-permission-audit/` |
+| 20 | migvisor-task-checker-uc-setup | `products/{product}/current/codebase/config/uc_setup.sql` | `module_5/codebase/config/uc_setup.sql` | `uc-setup/` |
+| 21 | migvisor-task-checker-secrets-config | `products/{product}/current/codebase/config/secrets_config.py` | `module_5/codebase/config/secrets_config.py` | `secrets-config/` |
 
 ---
 
 ## Step 3 — Write summary report
 
-After all 13 checks, write a summary file to:
+After all 21 checks, write a summary file to:
 `{checks_dir}/{trainee_name}/SUMMARY.md`
 
 ```markdown
@@ -104,6 +112,14 @@ grade: <grade>
 | 11 | data-dictionary | TASK-DD-001 | .../100 | ... |
 | 12 | pipeline-runbook | TASK-RB-001 | .../100 | ... |
 | 13 | validation-report | TASK-VR-001 | .../100 | ... |
+| 14 | architecture-diagram | TASK-AD-001 | .../100 | ... |
+| 15 | go-live-checklist | TASK-GL-001 | .../100 | ... |
+| 16 | bi-connections | TASK-BI-001 | .../100 | ... |
+| 17 | secrets-setup | TASK-SS-001 | .../100 | ... |
+| 18 | secrets-rotation-runbook | TASK-SR-001 | .../100 | ... |
+| 19 | uc-permission-audit | TASK-UC-001 | .../100 | ... |
+| 20 | uc-setup | TASK-UC-002 | .../100 | ... |
+| 21 | secrets-config | TASK-SC-001 | .../100 | ... |
 | | **Average** | | **<avg>/100** | **<grade>** |
 
 ## Top scores
@@ -129,11 +145,11 @@ Print the final score table in the conversation:
 ║  Score: <avg>/100 · Grade: <grade>                               ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-| # | Skill                  | Score    | Grade      |
-|---|------------------------|----------|------------|
-| 1 | scope                  | .../100  | ...        |
+| #  | Skill                    | Score    | Grade      |
+|----|--------------------------|----------|------------|
+| 1  | scope                    | .../100  | ...        |
 ...
-|   | Average                | .../100  | ...        |
+|    | Average                  | .../100  | ...        |
 ```
 
 Follow with 3–4 sentences: overall grade, strongest deliverable, weakest deliverable, top priority fix.

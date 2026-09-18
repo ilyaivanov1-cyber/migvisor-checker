@@ -33,6 +33,38 @@ Scope/catalog names differ between reference (globalpurchase) and participant (e
 
 ## Step 1 — Resolve files
 
+### Workspace-aware resolution (preferred)
+
+Read `workspace.yaml` at the project root:
+
+```yaml
+trainee_workspace: auto        # auto-detect OR explicit path
+reference_workspace: ./reference/answers
+product: Purchase
+checks_dir: ./checks
+```
+
+**Auto-detection** (when `trainee_workspace: auto`):
+- Scan the project root for any folder containing both `products/` and `project/` subdirectories.
+- If exactly one found → use it. Trainee name = folder name.
+- If multiple found → list them and ask: "Multiple trainee workspaces found: [list]. Run with `trainee=<name>` to select one."
+- If none found → ask the user to provide the path explicitly.
+
+Resolved paths after detection:
+
+| | Path |
+|---|---|
+| Trainee file | `{trainee_workspace}/products/{product}/current/codebase/config/secrets_config.py` |
+| Reference file | `{reference_workspace}/module_5/codebase/config/secrets_config.py` |
+| Trainee name | folder name of `{trainee_workspace}` |
+| Output dir | `{checks_dir}/{trainee_name}/secrets-config/` |
+
+**Override at any time** with explicit flags:
+```
+participant=path/to/file  reference=path/to/ref
+```
+
+
 1. Identify the trainee name:
    - If only one subfolder exists under `trainees/`, use it automatically.
    - If multiple exist, use the `trainee=<name>` argument or ask.

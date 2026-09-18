@@ -32,16 +32,16 @@ Catalog/schema names differ between reference (globalpurchase) and participant (
 Read `workspace.yaml` at the project root:
 
 ```yaml
-trainee_workspace: auto        # auto-detect OR explicit path e.g. ./Inventory_Stock_Project
+trainee_workspace: auto        # auto-detect OR explicit path
 reference_workspace: ./reference/answers
 product: Purchase
 checks_dir: ./checks
 ```
 
 **Auto-detection** (when `trainee_workspace: auto`):
-- Scan the project root for any folder that contains both `products/` and `project/` subdirectories.
-- If exactly one such folder is found → use it automatically (trainee name = folder name).
-- If multiple are found → list them and ask: "Multiple trainee workspaces found: [list]. Run with `trainee=<name>` to select one."
+- Scan the project root for any folder containing both `products/` and `project/` subdirectories.
+- If exactly one found → use it. Trainee name = folder name.
+- If multiple found → list them and ask: "Multiple trainee workspaces found: [list]. Run with `trainee=<name>` to select one."
 - If none found → ask the user to provide the path explicitly.
 
 Resolved paths after detection:

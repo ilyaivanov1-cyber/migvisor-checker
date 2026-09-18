@@ -71,6 +71,38 @@ Auto-detection fallback order for participant:
 
 ### Step 1 — Resolve Files
 
+### Workspace-aware resolution (preferred)
+
+Read `workspace.yaml` at the project root:
+
+```yaml
+trainee_workspace: auto        # auto-detect OR explicit path
+reference_workspace: ./reference/answers
+product: Purchase
+checks_dir: ./checks
+```
+
+**Auto-detection** (when `trainee_workspace: auto`):
+- Scan the project root for any folder containing both `products/` and `project/` subdirectories.
+- If exactly one found → use it. Trainee name = folder name.
+- If multiple found → list them and ask: "Multiple trainee workspaces found: [list]. Run with `trainee=<name>` to select one."
+- If none found → ask the user to provide the path explicitly.
+
+Resolved paths after detection:
+
+| | Path |
+|---|---|
+| Trainee file | `{trainee_workspace}/products/{product}/current/codebase/config/secrets_rotation_runbook.md` |
+| Reference file | `{reference_workspace}/module_5/codebase/config/secrets_rotation_runbook.md` |
+| Trainee name | folder name of `{trainee_workspace}` |
+| Output dir | `{checks_dir}/{trainee_name}/secrets-rotation/` |
+
+**Override at any time** with explicit flags:
+```
+participant=path/to/file  reference=path/to/ref
+```
+
+
 1. Apply override paths if provided via `participant=` / `reference=` flags.
 2. Otherwise run auto-detection above. If multiple `trainees/` subdirectories are found and no `trainee=` flag is given, abort with: *"Multiple trainee folders found: [list]. Specify with `trainee=<name>`."*
 3. Record the resolved trainee name (`trainees/<name>/...` → `<name>`; use `unknown_trainee` if not under `trainees/`).
