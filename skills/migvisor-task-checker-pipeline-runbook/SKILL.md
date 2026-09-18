@@ -72,20 +72,28 @@ Auto-detection fallback order for participant:
 
 ### Workspace-aware resolution (preferred)
 
-This skill supports **workspace mode** — it resolves files automatically from the
-migVisor project structure instead of requiring explicit paths.
+Read `workspace.yaml` at the project root to resolve all paths:
 
-| Setting | Value |
+```yaml
+trainee_workspace: ./Inventory_Stock_Project   # root of trainee's migVisor project
+reference_workspace: ./reference/answers        # root of reference answer files
+product: Purchase                               # product folder name
+checks_dir: ./checks                            # where reports are written
+```
+
+Resolved paths (substitute values from workspace.yaml):
+
+| | Path |
 |---|---|
-| Trainee workspace | `./Inventory_Stock_Project` |
-| Reference workspace | `C:/Users/IlyaIvanov1/Documents/migvisor_2.1.1_training/migVisor_workspace/Inventory_Stock_Project` |
-| Trainee file | `./Inventory_Stock_Project/products/Purchase/current/codebase/docs/runbook.md` |
-| Reference file | `C:/Users/IlyaIvanov1/Documents/migvisor_2.1.1_training/migVisor_workspace/Inventory_Stock_Project/products/Purchase/current/codebase/docs/runbook.md` |
+| Trainee file | `{trainee_workspace}/products/{product}/current/codebase/docs/runbook.md` |
+| Reference file | `{reference_workspace}/module_5/codebase/docs/pipeline_runbook.md` |
+| Trainee name | basename of `{trainee_workspace}` (e.g. `Inventory_Stock_Project`) |
+| Output dir | `{checks_dir}/{trainee_name}/pipeline-runbook/` |
 
 **Resolution order:**
 1. Explicit `participant=<path>` / `reference=<path>` flags — always win.
-2. Workspace paths above — used when no explicit flags are given.
-3. Legacy fallback — `trainees/<name>/<file>` + `reference/<file>` (if workspace paths do not exist).
+2. Paths derived from `workspace.yaml` above — used when no flags given.
+3. Legacy fallback — `trainees/<name>/<file>` + `reference/<file>` (if `workspace.yaml` is missing).
 
 ---
 
