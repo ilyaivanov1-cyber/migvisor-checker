@@ -1,0 +1,404 @@
+dimension: Platform
+prefix: PL
+project: "Purchasing_Project"
+product: "Purchases"
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-21"
+inheritance:
+  project_rules_version: "20260921-161200"
+  applied_overrides: []       # rule IDs overridden from project
+  applied_extensions: []      # rule IDs extended from project
+  applied_deactivations: []   # rule IDs removed from project set
+  new_rules: []               # product-only rule IDs added
+note: >
+  No PL-dimension product customizations exist for Purchases: override.yaml,
+  extensions.yaml, and deactivations.yaml are absent from
+  products/Purchases/current/specifications/product-transformation-rules/, and
+  new-rules.yaml contains only CX-P01 (dimension: Custom), no PL entries. This
+  matches the historical precedent from the pre-split GlobalSales_Project-era
+  PL-platform.yaml for Purchases, which also recorded full, unmodified
+  inheritance for this dimension. All 10 project-level PL rules (PL-001
+  through PL-010) apply to Purchases unchanged.
+
+  This holds with even greater certainty under Purchasing_Project's new rule
+  set than it did under the old one: because Purchasing_Project's PL rules
+  were authored fresh directly from Purchases' own re-parented as-is analysis
+  (Purchases is currently the project's only data product), the project-level
+  rules already encode every Purchases-specific pattern that would otherwise
+  motivate a product-level override or extension — including the exact
+  sequences.lineagekey replacement (PL-004), the Integration.MigrateStagedPurchaseData
+  full-replace fact load on fact.purchase (PL-006), the Supplier/StockItem
+  valid-time key resolution (PL-007), the SSIS pipeline_item_extract/migrate
+  orchestration (PL-005, PL-010), and — unique to this project's split
+  architecture — the cross-catalog conformed-dimension sharing decision for
+  dimension.supplier/dimension.stock item (PL-008) and the cross-catalog
+  downstream-dependency exposure for all three GlobalSales_Project-owned
+  consumers of fact.purchase, including the lineage-graph-discovered
+  wwidw-ordered-by-supplier report (PL-009). No pattern documented in
+  as-is.md or product-scope.md falls outside this coverage.
+
+rules:
+
+  - id: PL-001
+    dimension: Platform
+    name: "Platform Identity and Engine Contract Declaration"
+    intent: "Establish the authoritative mapping between Microsoft SQL Server 2014 (source engine, wideworldimportersdw, Purchases-domain subset) and Databricks with Delta Lake (target engine, new independent Unity Catalog `purchasing`), anchoring every other PL rule and explicitly scoping engine disposition to the four schemas this project owns."
+    activation:
+      preconditions:
+        - "Any SQL Server 2014 object in Purchasing_Project's in-scope schemas (`dimension`, `fact`, `integration`, `sequences` — per modernization-plan.md §3/§6) is being migrated to Databricks."
+      scope: project
+    transformation:
+      source: "Microsoft SQL Server 2014 engine running T-SQL, hosting `wideworldimportersdw`, restricted to the Purchases domain subset: `fact.purchase`; `dimension.supplier`, `dimension.stock item`, `dimension.date`; `integration.purchase_staging`, `integration.migratestagedpurchasedata`, `integration.lineage`, `integration.getlineagekey`, `integration.etl cutoff`, `integration.etl_cutoff_view2024`; `sequences.lineagekey`. Orchestrated by an SSIS pipeline (`pipeline_item_extract updated purchase data to staging`) calling `integration.getpurchaseupdates`."
+      target: "Databricks Runtime on Delta Lake, registered under a brand-new, independent Unity Catalog named `purchasing` — not a schema or extension of GlobalSales_Project's `globalsales` catalog. Three-part naming `purchasing.<layer>.<table>` throughout."
+      algorithm:
+        - "Confirm the engine-disposition scope is exactly the four schemas listed in modernization-plan.md §3/§6 (`dimension`, `fact`, `integration`, `sequences`). Do not assume GlobalSales_Project's `analytics`/`application` schema dispositions apply — neither schema is in Purchasing_Project's scope."
+        - "Inventory this project's source-engine features in use: SSIS package orchestration, one SEQUENCE object (`sequences.lineagekey`), SCD2 valid-time (correlated TOP(1)) key-resolution logic, and a DELETE-then-INSERT full-replace fact load pattern. Classify each as (a) directly mappable, (b) redesign required, (c) drop with justification."
+        - "Pin Databricks Runtime version (DBR >= 13.3 LTS, required for Unity Catalog GA features) for every notebook/cluster/workflow created under the `purchasing` catalog."
+        - "Record explicitly in the engine-disposition matrix that `purchasing` is a net-new, independently governed Unity Catalog, distinct from `globalsales` — this fact gates PL-008 and PL-009 below and must not be silently assumed away by copying GlobalSales_Project artifacts verbatim."
+    validation:
+      success_criteria:
+        - "An engine-disposition matrix exists covering exactly the objects listed in modernization-plan.md §6 (dimension, fact, integration, sequences schemas) and is referenced by PL-002 through PL-010."
+        - "No generated artifact for this project references the `globalsales` catalog as if it were this project's own catalog."
+        - "DBR version is pinned to >= 13.3 LTS in all cluster/workflow configuration files under `purchasing`."
+      quality_dimensions:
+        - conformity
+        - completeness
+      test_cases:
+        - input: "Object inventory from modernization-plan.md §6 (dimension.supplier, dimension.stock item, dimension.date, fact.purchase, integration.purchase_staging, integration.migratestagedpurchasedata, integration.lineage, integration.getlineagekey, integration.etl cutoff, integration.etl_cutoff_view2024, sequences.lineagekey)"
+          expected: "Every listed object has a disposition entry (mappable / redesign / drop) in the engine-disposition matrix before any downstream PL rule is applied."
+          notes: "No `analytics.*` or `application.*` entries should appear — those schemas are out of scope for this project."
+        - input: "Generated DDL/notebook file referencing a fully-qualified object name"
+          expected: "Every reference uses `purchasing.<schema>.<table>`, never `globalsales.<schema>.<table>`, for objects this project owns."
+    inheritance:
+      level: project
+      override: "A product may not override the anchor rule itself, only extend it with product-specific engine feature notes."
+      extend: "A product may append additional engine features discovered during its own as-is analysis to the disposition matrix."
+      deactivate: "Never — this rule anchors the entire PL dimension for the project."
+
+  - id: PL-002
+    dimension: Platform
+    name: "Schema Namespace Mapping — SQL Server Schemas to purchasing.<layer>.<table>"
+    intent: "Map each of Purchasing_Project's four in-scope SQL Server schemas (`dimension`, `fact`, `integration`, `sequences`) to its Databricks Unity Catalog three-part name under the new `purchasing` catalog, enforcing lowercase_snake_case and a consistent medallion-layer assignment distinct from GlobalSales_Project's `globalsales.*` naming."
+    activation:
+      preconditions:
+        - "Any SQL Server object with a schema qualifier from `dimension`, `fact`, `integration`, or `sequences` is referenced in Purchasing_Project's migration scope."
+      scope: project
+    transformation:
+      source: "SQL Server two-part names (`schema.object`) within `wideworldimportersdw`, restricted to schemas `dimension`, `fact`, `integration`, `sequences` (per modernization-plan.md §3). No `analytics` or `application` schema exists in this project's scope."
+      target: "Databricks Unity Catalog three-part names under catalog `purchasing` (not `globalsales`)."
+      algorithm:
+        - "Apply the canonical schema mapping: dimension.* -> purchasing.silver_dim.*; fact.* -> purchasing.silver_fact.*; integration.* -> purchasing.bronze.* (staging/audit objects) or purchasing.silver_fact.* (the load procedure's logic, re-expressed as a notebook — the procedure itself has no direct table equivalent); sequences.* -> eliminated, replaced per PL-004."
+        - "Convert all object names to lowercase_snake_case; strip SQL Server bracket quoting (e.g. `[Purchase Order ID]` -> `purchase_order_id`; `dimension.[stock item]` -> `silver_dim.stock_item`)."
+        - "Replace every two-part `schema.object` reference in T-SQL with the three-part `purchasing.schema.table` reference in generated Spark SQL / Delta DDL."
+        - "Generate `CREATE CATALOG IF NOT EXISTS purchasing` and `CREATE SCHEMA IF NOT EXISTS purchasing.<layer>` bootstrap statements before any table DDL — this catalog does not yet exist and must not be assumed to inherit `globalsales`'s schema structure."
+        - "Update cross-schema references (e.g. `integration.migratestagedpurchasedata` reading `integration.purchase_staging` and writing `fact.purchase`) to use the new three-part `purchasing.*` names on both sides."
+    validation:
+      success_criteria:
+        - "Each of the four in-scope schemas has a documented target mapping entry under `purchasing`."
+        - "No generated DDL/DML uses a two-part name without the `purchasing.` catalog prefix."
+        - "All object names conform to lowercase_snake_case with no bracket-quoted identifiers."
+      quality_dimensions:
+        - conformity
+        - consistency
+      test_cases:
+        - input: "`dimension.[stock item]`, `fact.purchase`, `integration.[etl cutoff]`, `sequences.lineagekey`"
+          expected: "`purchasing.silver_dim.stock_item`, `purchasing.silver_fact.purchase`, `purchasing.bronze.etl_cutoff`, eliminated (no Delta object; see PL-004)"
+        - input: "`SHOW SCHEMAS IN purchasing`"
+          expected: "Returns at least `bronze`, `silver_dim`, `silver_fact`; does not return `sequences`."
+          notes: "Confirms the schema is bootstrapped independently of `globalsales` and that eliminated schemas are not carried forward."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: PL-003
+    dimension: Platform
+    name: "Storage Format Migration — Purchases-Domain Tables and Views to Delta Lake"
+    intent: "Convert every SQL Server table and view in Purchasing_Project's scope (fact.purchase; dimension.supplier, dimension.stock item, dimension.date; integration.purchase_staging, integration.lineage, integration.etl cutoff; the integration.etl_cutoff_view2024 reporting view) to Delta Lake format with ACID guarantees."
+    activation:
+      preconditions:
+        - "Any SQL Server table or view listed in modernization-plan.md §6.1–§6.3 is in the migration scope."
+      scope: project
+    transformation:
+      source: "SQL Server row-store tables (`fact.purchase`, `dimension.supplier`, `dimension.[stock item]`, `dimension.date`, `integration.purchase_staging`, `integration.lineage`, `integration.[etl cutoff]`) and one indexed/regular view (`integration.etl_cutoff_view2024`)."
+      target: "Databricks Delta Lake tables (`CREATE TABLE ... USING DELTA`) for every source table, and a Delta Lake view (`CREATE VIEW purchasing.bronze.etl_cutoff_view2024 AS ...`) for the reporting view — views are not materialized as tables."
+      algorithm:
+        - "Generate `CREATE TABLE ... USING DELTA` DDL for every source table in §6.1–§6.3. Do not carry over any SQL Server index definitions."
+        - "Map SQL Server types to Delta/Spark SQL types per the project's TY-dimension rules, with attention to the columns evidenced in the as-is model: `datetime2` (Valid From/To, Last Edited/Modified When) -> `TIMESTAMP`; `nvarchar(n)` (Supplier, Stock Item, Package, Category, PrimaryContact) -> `STRING`; `bit` (Is Order Finalized) -> `BOOLEAN`; `decimal` (UnitPrice) -> `DECIMAL(p,s)`; `int`/`bigint` surrogate keys -> `INT`/`BIGINT`."
+        - "Recreate `integration.etl_cutoff_view2024` as a Delta view over `purchasing.bronze.etl_cutoff`, preserving its cutoff/watermark reporting semantics rather than materializing it as a table."
+        - "Enable `delta.enableChangeDataFeed = true` on `purchasing.silver_fact.purchase` so downstream cross-catalog consumers (see PL-009) can subscribe incrementally rather than re-scanning the full table."
+        - "Set `delta.autoOptimize.optimizeWrite = true` and `delta.autoOptimize.autoCompact = true` on the small, high-churn `purchasing.bronze.purchase_staging` and `purchasing.bronze.lineage` tables, which are truncated/reloaded every ETL cycle per the as-is model."
+    validation:
+      success_criteria:
+        - "Every table in §6.1–§6.3 has a corresponding `CREATE TABLE ... USING DELTA` statement."
+        - "`integration.etl_cutoff_view2024` is migrated as a Delta view, not a materialized table."
+        - "`purchasing.silver_fact.purchase` has Change Data Feed enabled."
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "Generated DDL file set for the Purchases domain"
+          expected: "One `CREATE TABLE ... USING DELTA` per §6.1–§6.3 table, and one `CREATE VIEW` (not `CREATE TABLE`) for `etl_cutoff_view2024`."
+        - input: "`DESCRIBE EXTENDED purchasing.silver_fact.purchase`"
+          expected: "`delta.enableChangeDataFeed` = `true`."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: PL-004
+    dimension: Platform
+    name: "SEQUENCE Object Replacement — sequences.lineagekey"
+    intent: "Eliminate the SQL Server SEQUENCE object `sequences.lineagekey` and replace it with a Databricks-native, auditable counter, since the as-is analysis (§5.4) shows lineage keys are read back (`SELECT TOP(1) [Lineage Key] ... ORDER BY [Lineage Key] DESC`) for human-auditable batch bookkeeping, not merely as an opaque surrogate."
+    activation:
+      preconditions:
+        - "`sequences.lineagekey` exists as a SQL Server SEQUENCE object and is referenced by `integration.getlineagekey` / `integration.migratestagedpurchasedata` to stamp `fact.purchase.[Lineage Key]` and `integration.lineage` entries."
+      scope: project
+    transformation:
+      source: "`sequences.lineagekey`, issued via `integration.getlineagekey` and consumed by `integration.migratestagedpurchasedata`, which selects the current open batch's `[Lineage Key]` from `integration.lineage` (`WHERE [Table Name] = 'Purchase' AND [Data Load Completed] IS NULL ORDER BY [Lineage Key] DESC`), stamps it onto every inserted `fact.purchase` row, then marks the batch complete and advances `integration.[etl cutoff]`."
+      target: "A dedicated Delta counter table `purchasing.bronze.sequence_counters (sequence_name STRING, next_val BIGINT)` with an atomic MERGE-based increment (Strategy C), preserving the human-readable, auditable, monotonic semantics the lineage bookkeeping logic depends on. `monotonically_increasing_id()` (Strategy A) is explicitly rejected here because it is not human-readable/auditable and the as-is logic reads the value back by ordering, not just assigning it."
+      algorithm:
+        - "Create `purchasing.bronze.sequence_counters` seeded with `('lineagekey', <max existing value>)`."
+        - "Implement the atomic increment as a MERGE: `MERGE INTO sequence_counters t USING (SELECT 'lineagekey' AS sequence_name) s ON t.sequence_name = s.sequence_name WHEN MATCHED THEN UPDATE SET t.next_val = t.next_val + 1 WHEN NOT MATCHED THEN INSERT VALUES ('lineagekey', 1)`."
+        - "Reproduce the open-batch lookup (`WHERE table_name = 'purchase' AND data_load_completed IS NULL`) against `purchasing.bronze.lineage`, using the incremented `next_val` as the new batch's lineage key rather than `NEXT VALUE FOR`."
+        - "Remove all `CREATE SEQUENCE`, `NEXT VALUE FOR sequences.lineagekey` expressions from generated artifacts; ensure `purchasing` has no `sequences` schema (confirms PL-002)."
+    validation:
+      success_criteria:
+        - "Zero `CREATE SEQUENCE` / `NEXT VALUE FOR` expressions in generated artifacts."
+        - "`purchasing.bronze.sequence_counters` exists and its increments are unique under concurrent load."
+        - "`SHOW SCHEMAS IN purchasing` does not return `sequences`."
+      quality_dimensions:
+        - uniqueness
+        - validity
+      test_cases:
+        - input: "100 concurrent MERGE increments against `purchasing.bronze.sequence_counters` for `sequence_name = 'lineagekey'`"
+          expected: "100 distinct, monotonically increasing `next_val` values with zero duplicates."
+        - input: "`SHOW SCHEMAS IN purchasing`"
+          expected: "No schema named `sequences` is returned."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: PL-005
+    dimension: Platform
+    name: "ETL Pattern Migration — Purchase Staging and Load Procedure to Bronze/Silver Notebook"
+    intent: "Replace the SSIS-orchestrated staging-and-procedure pattern (`integration.getpurchaseupdates` -> `integration.purchase_staging` -> `integration.migratestagedpurchasedata`) with a Databricks-native Bronze-to-Silver notebook pattern, preserving the incremental-extraction, inner-join-completeness, and calculated-field (`Ordered Quantity`) logic documented in the as-is analysis."
+    activation:
+      preconditions:
+        - "`integration.getpurchaseupdates` and `integration.purchase_staging` exist and are populated by an SSIS dataflow, and `integration.migratestagedpurchasedata` reads staging to load `fact.purchase`."
+      scope: project
+    transformation:
+      source: "SSIS dataflow `pipeline_item_extract updated purchase data to staging` executes `integration.getpurchaseupdates`, which inner-joins `Purchasing.PurchaseOrders`, `Purchasing.PurchaseOrderLines`, `Warehouse.StockItems`, `Warehouse.PackageTypes`, filters on a `@LastCutoff`/`@NewCutoff` watermark window against the greater of header/line `LastEditedWhen`, computes `Ordered Quantity = OrderedOuters * QuantityPerOuter`, and writes the result into `integration.purchase_staging` (truncate-and-reload each cycle)."
+      target: "A Databricks notebook reading source-equivalent tables (or their already-migrated upstream equivalents), applying the same incremental watermark filter and inner-join completeness semantics, writing into `purchasing.bronze.purchase_staging` with `_source_file`, `_ingested_at`, `_batch_id` audit columns added; the load into `purchasing.silver_fact.purchase` is a separate MERGE step (see PL-006 and PL-007), not a plain upsert, because the source procedure performs a full replace-by-natural-key load, not a row-level upsert."
+      algorithm:
+        - "Implement the `GetPurchaseUpdates` extraction logic as a notebook cell reading the upstream OLTP-equivalent Bronze tables, preserving the exact inner-join completeness filter (rows without a matching header, line, stock item, or package type are excluded) and the `Ordered Quantity` calculation."
+        - "Write the extraction result into `purchasing.bronze.purchase_staging` with the three audit columns; do not truncate-and-reload — filter by `_batch_id` instead, since Delta append is preferable to SQL Server's truncate/reload pattern."
+        - "Preserve the incremental cutoff/watermark filter by reading the current watermark from `purchasing.bronze.etl_cutoff` (per PL-003) before each run and writing the advanced watermark back after a successful load."
+        - "Do not implement the fact load as a plain `WHEN MATCHED UPDATE / WHEN NOT MATCHED INSERT` MERGE — dispatch to PL-006 for the load pattern and PL-007 for dimension-key resolution, both of which this staging step feeds."
+    validation:
+      success_criteria:
+        - "The extraction notebook reproduces the inner-join completeness filter and the `Ordered Quantity` calculation with identical results to the source procedure on a replayed historical batch."
+        - "`purchasing.bronze.purchase_staging` carries `_source_file`, `_ingested_at`, `_batch_id` on every row."
+        - "The watermark read/advance logic matches the source's `@LastCutoff`/`@NewCutoff` semantics."
+      quality_dimensions:
+        - completeness
+        - accuracy
+      test_cases:
+        - input: "A batch of purchase order lines where one line has no matching `PackageTypeID` in `warehouse.packagetypes`"
+          expected: "That line is excluded from `purchasing.bronze.purchase_staging`, matching the source inner-join completeness filter."
+        - input: "`OrderedOuters = 4`, `QuantityPerOuter = 12` for a given stock item"
+          expected: "`Ordered Quantity = 48` written to `purchasing.bronze.purchase_staging`."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: PL-006
+    dimension: Platform
+    name: "Full-Replace-by-Natural-Key Fact Load — fact.purchase DELETE+INSERT to Scoped Delta MERGE"
+    intent: "Replace the DELETE-then-INSERT full-replace load of `fact.purchase` keyed on `[WWI Purchase Order ID]` — flagged as an unresolved migration risk in modernization-plan.md §3.1 risk 4 — with a Delta MERGE that reproduces the same atomic, order-scoped replace semantics, including implicit removal of lines dropped from a re-submitted purchase order."
+    activation:
+      preconditions:
+        - "`integration.migratestagedpurchasedata` performs `DELETE p FROM Fact.Purchase p WHERE p.[WWI Purchase Order ID] IN (SELECT [WWI Purchase Order ID] FROM Integration.Purchase_Staging)` immediately followed by `INSERT Fact.Purchase (...) SELECT ... FROM Integration.Purchase_Staging` inside a single transaction."
+      scope: project
+    transformation:
+      source: "T-SQL full-replace pattern (as-is §4.4 steps 4–5): every existing `Fact.Purchase` row for any `WWI Purchase Order ID` present in the current staging batch is deleted, then the current staged line set for those orders is inserted — both inside one `BEGIN TRAN`/`COMMIT`. A purchase order line dropped between two ETL runs is correctly removed as a side effect of the blanket per-order DELETE."
+      target: "A Delta MERGE against `purchasing.silver_fact.purchase` keyed on `wwi_purchase_order_id` (plus a line-level discriminator if the grain requires it), with a `WHEN NOT MATCHED BY SOURCE` clause scoped to only the purchase order IDs present in the current staged batch — not an unconditional delete."
+      algorithm:
+        - "Build the staged batch as a view/DataFrame limited to the current `_batch_id` from `purchasing.bronze.purchase_staging`."
+        - "Generate: `MERGE INTO purchasing.silver_fact.purchase t USING staged_batch s ON t.wwi_purchase_order_id = s.wwi_purchase_order_id AND t.purchase_order_line_id = s.purchase_order_line_id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT * WHEN NOT MATCHED BY SOURCE AND t.wwi_purchase_order_id IN (SELECT DISTINCT wwi_purchase_order_id FROM staged_batch) THEN DELETE`."
+        - "Add a post-MERGE assertion that the count of distinct `wwi_purchase_order_id` values affected equals the count of distinct `wwi_purchase_order_id` values in the staged batch, proving the delete scope did not leak beyond the current batch."
+        - "Document in the ETL notebook header that this table uses the scoped-replace MERGE pattern (not the plain upsert pattern from PL-005), so the distinction is auditable in code review."
+    validation:
+      success_criteria:
+        - "The generated MERGE's `WHEN NOT MATCHED BY SOURCE` clause is always predicated on the current batch's `wwi_purchase_order_id` set — never unconditional."
+        - "A purchase order line present in batch N but absent from batch N+1 (for the same order) is absent from `purchasing.silver_fact.purchase` after processing batch N+1."
+        - "Re-running the same batch twice leaves row counts and content unchanged for the affected purchase orders."
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "Purchase order `PO-1001` has 3 lines in batch N and only 2 of those lines in batch N+1 (one line cancelled)"
+          expected: "After processing batch N+1, `purchasing.silver_fact.purchase` has exactly 2 rows for `PO-1001`."
+        - input: "Batch touching only `PO-1001`, with an unrelated pre-existing `PO-2002` already in the table"
+          expected: "Rows for `PO-2002` are completely unaffected by the MERGE."
+          notes: "Proves the WHEN NOT MATCHED BY SOURCE delete scope is bounded to the current batch's natural keys, per modernization-plan.md §3.1 risk 4."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: PL-007
+    dimension: Platform
+    name: "Valid-Time (SCD2) Dimension Key Resolution — Supplier / Stock Item Correlated Lookup to Range-Join"
+    intent: "Replace the correlated `TOP(1) ... ORDER BY [Valid From]` valid-time lookups that resolve `Supplier Key` and `Stock Item Key` against SCD2 dimensions with a Spark-native range-join pattern, and explicitly document that `Date Key` requires no equivalent lookup — it is pre-resolved and used only as a declarative FK target — per modernization-plan.md §3.1 risk 5."
+    activation:
+      preconditions:
+        - "`integration.migratestagedpurchasedata` resolves `[Supplier Key]` and `[Stock Item Key]` via `COALESCE((SELECT TOP(1) ... WHERE p.[Last Modified When] > [Valid From] AND <= [Valid To] ORDER BY [Valid From]), 0)` against `dimension.supplier` and `dimension.[stock item]`."
+      scope: project
+    transformation:
+      source: "Correlated valid-time subquery (as-is §5.2/§5.3): match the staging row's business key (`WWI Supplier ID` / `WWI Stock Item ID`) against the dimension's business key, restrict to the SCD2 window containing `[Last Modified When]` (strictly after `[Valid From]`, up to and including `[Valid To]`), take the earliest-`[Valid From]` match on ties, default to key `0` (Unknown) if no window matches. `Date Key` by contrast is a plain `CAST(po.OrderDate AS date)` performed in extraction with no dimension lookup at load time (confirmed in as-is §4.4 note)."
+      target: "A single shared range-join + window-function resolver applied to `purchasing.silver_dim.supplier` and `purchasing.silver_dim.stock_item`: `LEFT JOIN ... ON business_key = business_key AND last_modified_when > valid_from AND last_modified_when <= valid_to`, `ROW_NUMBER() OVER (PARTITION BY staging_row_id ORDER BY valid_from ASC)`, `COALESCE(resolved_key, 0)`. `Date Key` requires no lookup — it is cast/passed through and declared as an FK constraint against `purchasing.silver_dim.date` for referential documentation only."
+      algorithm:
+        - "Implement one shared Python/SQL helper `resolve_scd2_key(staging_df, dimension_df, business_key_col, surrogate_key_col, as_of_col)` used identically for both `supplier` and `stock_item` resolution — do not duplicate the join logic per dimension."
+        - "Use `>` / `<=` exactly matching the source boundary semantics (`> Valid From AND <= Valid To`); do not substitute `>=`/`<` without validating against the as-is boundary behavior."
+        - "For `Date Key`, generate only a `CAST(order_date AS DATE)` pass-through plus a declared FK constraint to `purchasing.silver_dim.date`; do not generate a lookup/join for this column, since none exists in the source."
+        - "Add a data-quality check comparing the Unknown-key (`0`) resolution rate between source and target for a representative historical batch, flagging any material increase as a boundary regression."
+    validation:
+      success_criteria:
+        - "The shared resolver reproduces identical `Supplier Key` and `Stock Item Key` assignments to the source T-SQL logic on a side-by-side historical batch replay."
+        - "No lookup/join logic is generated for `Date Key`; it is a pass-through cast with a declarative FK only."
+        - "The Unknown-key fallback rate on the target matches the source within a documented tolerance."
+      quality_dimensions:
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "Staging row with `last_modified_when` falling exactly on a `dimension.supplier` row's `valid_to` boundary"
+          expected: "Resolver matches that window (inclusive upper bound), mirroring the source's `<=` semantics."
+        - input: "Staging row whose `wwi_stock_item_id` has no matching dimension row"
+          expected: "Resolved `stock_item_key = 0` (Unknown)."
+        - input: "Staging row's `order_date` column"
+          expected: "Passed through as `date_key = CAST(order_date AS DATE)` with zero dimension lookups performed, matching as-is §4.4's confirmed no-lookup behavior for Date Key."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: PL-008
+    dimension: Platform
+    name: "Cross-Catalog Conformed Dimension Sharing Strategy — Supplier / Stock Item"
+    intent: "Resolve modernization-plan.md §3.1 risk 1: `dimension.supplier` (net-new to this domain) and `dimension.stock item` (already migrated by GlobalSales_Project/Sales_Orders, and also needed by GlobalSales_Project's future Inventory_Stock candidate product) are conformed dimensions now split across two independently governed Unity Catalogs (`purchasing` and `globalsales`) as a direct consequence of this project's split from GlobalSales_Project. This pattern does not exist in a single-project PL rule set and must be resolved before build."
+    activation:
+      preconditions:
+        - "A dimension in Purchasing_Project's scope (`dimension.supplier`, `dimension.stock item`) is also required — already or prospectively — by an object owned by GlobalSales_Project."
+      scope: project
+    transformation:
+      source: "In the pre-split source system, `Dimension.Supplier` and `Dimension.[Stock Item]` are single conformed SCD2 dimension tables shared by all consumers within one `wideworldimportersdw` database — there was no cross-catalog boundary."
+      target: "Two candidate target strategies, to be decided per dimension before build (currently [USER INPUT REQUIRED] per modernization-plan.md §3.1 risk 1): (A) Duplicate-and-independently-maintain — each catalog (`purchasing`, `globalsales`) maintains its own copy of the dimension (`purchasing.silver_dim.stock_item` and `globalsales.silver_dim.stock_item`), accepting an eventual-consistency/drift risk that must be monitored; or (B) Single-system-of-record with cross-catalog grants — designate one catalog as the authoritative owner of each dimension and grant the other catalog's principals `SELECT` via Unity Catalog three-level-namespace reads (e.g. `purchasing`'s pipelines read `globalsales.silver_dim.stock_item` directly, since GlobalSales_Project/Sales_Orders migrated it first)."
+      algorithm:
+        - "Do not silently default to Strategy A or B — this is an explicit architectural decision the modernization plan marks unresolved; record whichever is chosen in both projects' modernization plans before any dimension-load task is built."
+        - "For `dimension.stock item` (already migrated by GlobalSales_Project): recommend Strategy B by default, since GlobalSales_Project is the existing system of record — grant Purchasing_Project's service principal `SELECT` on `globalsales.silver_dim.stock_item` rather than re-migrating it."
+        - "For `dimension.supplier` (net-new to this domain, and prospectively needed by GlobalSales_Project's Inventory_Stock candidate product): recommend Purchasing_Project become the system of record and grant GlobalSales_Project's future Inventory_Stock pipelines `SELECT` on `purchasing.silver_dim.supplier`."
+        - "If Strategy A (duplication) is chosen instead for either dimension, add a reconciliation notebook comparing row counts and SCD2 validity windows between the two catalog copies on a scheduled basis, and document the accepted drift tolerance."
+        - "Whichever strategy is chosen, ensure PL-007's key-resolution notebooks reference the resolved catalog-qualified table name (`purchasing.silver_dim.*` or `globalsales.silver_dim.*` per decision), not a hardcoded assumption."
+    validation:
+      success_criteria:
+        - "A documented decision (Strategy A or B, per dimension) exists in the project modernization plan before the corresponding build task starts."
+        - "If Strategy B is chosen, the cross-catalog GRANT statements exist and are verified to work end-to-end from the consuming catalog."
+        - "If Strategy A is chosen, a reconciliation notebook exists and runs on a defined schedule."
+      quality_dimensions:
+        - consistency
+        - uniqueness
+      test_cases:
+        - input: "Decision record for `dimension.stock item` sharing strategy"
+          expected: "Either a Strategy B GRANT (`GRANT SELECT ON globalsales.silver_dim.stock_item TO <purchasing_service_principal>`) is verified working, or a Strategy A reconciliation notebook is verified running on schedule — one of the two, not neither."
+          notes: "[USER INPUT REQUIRED] — modernization-plan.md §3.1 risk 1 explicitly leaves this open; this rule blocks the corresponding dimension-load SmartBuilder task until a decision is recorded."
+        - input: "Purchasing_Project's Supplier Key resolution notebook (PL-007) at build time"
+          expected: "References the catalog-qualified table name matching whichever strategy was decided for `dimension.supplier`, not a hardcoded `purchasing.silver_dim.supplier` assumption if Strategy A/B changes ownership."
+    inheritance:
+      level: project
+      override: "A product may not unilaterally override the sharing-strategy decision; it must be recorded at project level and coordinated with GlobalSales_Project."
+      extend: "A product may add reconciliation or monitoring detail specific to its own consumption pattern."
+      deactivate: "Only once both dimensions' sharing strategy is fully decided, implemented, and verified — this rule then converts to a standing operational note rather than a blocking gate."
+
+  - id: PL-009
+    dimension: Platform
+    name: "Cross-Catalog Downstream Dependency Exposure — GlobalSales_Project Artifacts Reading purchasing.fact.purchase"
+    intent: "Resolve modernization-plan.md §3.1 risks 2–3: three GlobalSales_Project/Sales_Orders-owned analytical artifacts (`globalsales.mart.v_order_to_year_analytics`, the `wwidw purchase and sale per stockitem dynamic` report, and the `wwidw-ordered-by-supplier` report) read `fact.purchase` directly. Once this domain moves to `purchasing.silver_fact.purchase`, these become genuine cross-catalog dependencies that did not exist before the project split and are unique to Purchasing_Project's architecture."
+    activation:
+      preconditions:
+        - "An object outside Purchasing_Project's catalog (specifically, owned by GlobalSales_Project) has a READ dependency on `fact.purchase` or a dimension this project owns."
+      scope: project
+    transformation:
+      source: "Pre-split, `Analytics.v_OrderToYearAnalytics`, `wwidw purchase and sale per stockitem dynamic`, and `wwidw-ordered-by-supplier` all read `Fact.Purchase` within the same source database with no catalog boundary at all (as-is §2, §4.5)."
+      target: "One of two coordinated resolutions, to be decided jointly with the GlobalSales_Project/Sales_Orders owning team before cutover: (A) Cross-catalog Unity Catalog grant — `GRANT SELECT ON purchasing.silver_fact.purchase TO <globalsales_principal>` and repoint the three artifacts' `FROM` clauses to the three-part `purchasing.silver_fact.purchase` name; or (B) Federate/replicate — expose a read-only replica or Delta Sharing view of `purchasing.silver_fact.purchase` inside `globalsales` (e.g. `globalsales.silver_fact.purchase_ext`) so the three artifacts' SQL does not need to change."
+      algorithm:
+        - "Enumerate the three affected artifacts exactly as identified in modernization-plan.md §3.1 risks 2–3, and confirm no additional GlobalSales_Project consumer of `fact.purchase` exists beyond these three before finalizing scope."
+        - "Default recommendation: Strategy A (direct cross-catalog grant), since `delta.enableChangeDataFeed` is already enabled on `purchasing.silver_fact.purchase` (PL-003), making an incremental Delta Sharing/federation layer (Strategy B) unnecessary overhead unless GlobalSales_Project has a governance reason to avoid direct cross-catalog reads."
+        - "If Strategy A is chosen: issue `GRANT USE CATALOG ON CATALOG purchasing TO <globalsales_principal>`, `GRANT USE SCHEMA ON SCHEMA purchasing.silver_fact TO <globalsales_principal>`, `GRANT SELECT ON TABLE purchasing.silver_fact.purchase TO <globalsales_principal>`, then update the three artifacts to reference `purchasing.silver_fact.purchase` in place of any prior `globalsales.*` assumption."
+        - "Communicate the cutover plan and required artifact repointing to the GlobalSales_Project/Sales_Orders owning team before this project's `fact.purchase` load task ships, since these are their artifacts, not Purchasing_Project's."
+        - "Note that the `Analytics.v_OrderToYearAnalytics` dependency is a fuzzy `Package`-matched correlated subquery (as-is §4.3/§4.4 step 7), not a keyed join — flag to the owning team that this join was already unreliable pre-migration and is a candidate for redesign independent of the cross-catalog concern."
+    validation:
+      success_criteria:
+        - "All three artifacts identified in modernization-plan.md §3.1 risks 2–3 have a documented, agreed cross-catalog access resolution (Strategy A or B) before Purchasing_Project's `fact.purchase` cutover."
+        - "The GlobalSales_Project/Sales_Orders owning team has acknowledged the resolution plan."
+        - "Post-cutover, all three artifacts execute successfully against `purchasing.silver_fact.purchase` (directly or via the federation/replica layer) with no broken references."
+      quality_dimensions:
+        - consistency
+        - completeness
+      test_cases:
+        - input: "`globalsales.mart.v_order_to_year_analytics` definition, post-cutover"
+          expected: "Its `Package`-matched subquery against the purchase fact resolves successfully via the agreed cross-catalog access path (Strategy A grant or Strategy B replica), returning non-error results."
+        - input: "Cross-catalog GRANT statements for `purchasing.silver_fact.purchase`"
+          expected: "Verified functional from a `globalsales`-catalog principal's session before the three artifacts are repointed."
+          notes: "Coordinate timing with GlobalSales_Project/Sales_Orders per modernization-plan.md §3.1 risks 2–3 — this is a cross-team, cross-project dependency, not solely a Purchasing_Project build task."
+    inheritance:
+      level: project
+      override: "A product may not override the cross-project resolution strategy unilaterally; it requires GlobalSales_Project/Sales_Orders sign-off."
+      extend: "A product may extend this rule with additional consumer-specific repointing detail as new cross-catalog consumers are discovered."
+      deactivate: "Only once all three identified consumers are confirmed migrated to the agreed access pattern and no further GlobalSales_Project consumers of `fact.purchase` remain undocumented."
+
+  - id: PL-010
+    dimension: Platform
+    name: "SSIS Orchestration to Databricks Workflows — Purchase Extraction and Load Pipeline"
+    intent: "Replace the SSIS pipeline that orchestrates `integration.getpurchaseupdates` extraction and `integration.migratestagedpurchasedata` load (as-is §3.2, §4.4 step 2) with an equivalent Databricks Workflow, preserving step order, cutoff/watermark advancement, and lineage bookkeeping."
+    activation:
+      preconditions:
+        - "An SSIS package or dataflow orchestrates the Purchases extraction/load sequence (`pipeline_item_truncate purchase_staging` -> `pipeline_item_extract updated purchase data to staging` -> `integration.migratestagedpurchasedata`)."
+      scope: project
+    transformation:
+      source: "SSIS dataflow steps: truncate `Integration.Purchase_Staging`, execute `Integration.GetPurchaseUpdates` with the current cutoff watermarks to populate staging, then execute `Integration.MigrateStagedPurchaseData` (key resolution, DELETE+INSERT replace, lineage/cutoff bookkeeping) — all currently parameterized generically for the `purchase` table alongside other domains' equivalent steps in the pre-split GlobalSales_Project pipeline."
+      target: "A dedicated Databricks Workflow scoped only to Purchasing_Project (not shared with GlobalSales_Project's own workflow, since this domain now belongs to an independent catalog and project): a task DAG of (1) Bronze extraction notebook (PL-005), (2) Silver key-resolution + scoped-MERGE notebook (PL-006, PL-007), (3) lineage/cutoff bookkeeping task."
+      algorithm:
+        - "Define a standalone Databricks Workflow JSON for Purchasing_Project — do not attempt to remain a parameterized step within any workflow still owned by GlobalSales_Project, since the two projects are now independently governed."
+        - "Map SSIS step order to `task_key` dependencies: extraction task -> key-resolution/MERGE task -> lineage bookkeeping task, `depends_on` chained in that order."
+        - "Configure `email_notifications.on_failure` for the workflow's owning team (Purchasing_Project stakeholders, per modernization-plan.md §10 — currently [USER INPUT REQUIRED])."
+        - "Set the workflow schedule to match the source's ETL cadence; convert to Databricks Quartz 6-field cron format."
+        - "Generate the Workflow JSON to `codebase/config/workflows/purchasing_purchase_load.json`."
+    validation:
+      success_criteria:
+        - "A standalone Databricks Workflow JSON exists for the Purchases extraction/load pipeline, independent of any GlobalSales_Project workflow."
+        - "Task dependencies in the workflow DAG match the source SSIS step order (extract -> resolve/merge -> bookkeeping)."
+        - "Workflow JSON validates against the Databricks Jobs API 2.1 schema."
+      quality_dimensions:
+        - conformity
+        - completeness
+      test_cases:
+        - input: "`codebase/config/workflows/purchasing_purchase_load.json`"
+          expected: "Validates against the Databricks Jobs API 2.1 schema with three tasks in the order extract -> resolve/merge -> bookkeeping, and no shared task_key collision with any GlobalSales_Project workflow file."
+        - input: "A simulated task failure in the bookkeeping task"
+          expected: "`email_notifications.on_failure` recipients receive the alert."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false

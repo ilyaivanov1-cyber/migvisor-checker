@@ -1,0 +1,313 @@
+# Purchasing_Project — Data Product Catalog
+# Generated: 2026-09-22 | Stage: catalog
+
+schemaVersion: "4.1"
+
+catalog:
+  projectName: Purchasing_Project
+  projectDescription: >
+    Standalone modernization of the supplier-purchasing domain onto Databricks
+    Delta Lake, under a new independent Unity Catalog `purchasing`. Split out
+    of GlobalSales_Project so the Purchases data product has its own
+    project-level scope, transformation rules, and pipeline, fully decoupled
+    from the Sales/Orders, Inventory/Stock, and Finance Analytics domains that
+    remain in GlobalSales_Project.
+  sourceSystem:
+    platform: Microsoft SQL Server 2014
+    database: wideworldimportersdw
+  targetSystem:
+    platform: Databricks Delta Lake Unity Catalog
+    catalog: purchasing
+    schemaConvention: lowercase_snake_case
+    migrationMode: derived
+  generatedDate: "2026-09-22"
+
+products:
+
+  # ---------------------------------------------------------------------------
+  # 1. Purchases — PRIMARY / ACTIVE
+  # ---------------------------------------------------------------------------
+  - id: Purchases
+    displayName: Purchases
+    status: active
+    priority: primary
+    domain: Procurement / Supplier Purchase Order
+    businessProcess: Supplier purchase order fulfillment tracking
+    description: >
+      Supplier purchase order transaction fact (`purchasing.fact.purchase`),
+      capturing ordered versus received quantities by date, supplier, and
+      stock item, sourced via a Databricks-native Bronze-to-Silver notebook
+      and Workflow pipeline (extraction → dimension key resolution → scoped
+      Delta MERGE) running under the standalone Unity Catalog `purchasing`.
+      No output view or report is owned by this product; three
+      GlobalSales_Project-owned analytical artifacts read `fact.purchase`
+      directly across the new catalog boundary.
+    architecture: bronze_silver
+    tcpArtifacts:
+      asIs: products/Purchases/current/specifications/as-is.md
+      toBe: products/Purchases/current/specifications/to-be.md
+      productTransformationRules: products/Purchases/current/specifications/product-transformation-rules/
+
+    # -------------------------------------------------------------------------
+    # Source lineage (legacy references confined to this block)
+    # -------------------------------------------------------------------------
+    sourceLineage:
+      sourceDatabase: wideworldimportersdw
+      sourceTables:
+        - fact.purchase
+        - dimension.supplier
+        - dimension.stock item
+        - dimension.date
+      sourceIntegration:
+        - integration.purchase_staging
+        - integration.migratestagedpurchasedata
+        - integration.lineage
+        - integration.getlineagekey
+        - integration.etl cutoff
+        - integration.etl_cutoff_view2024
+        - sequences.lineagekey
+      sourceUpstreamInformational:
+        - wideworldimporters.purchasing.purchaseorders
+        - wideworldimporters.purchasing.purchaseorderlines
+        - wideworldimporters.warehouse.stockitems
+        - wideworldimporters.warehouse.packagetypes
+        - wideworldimporters.integration.getpurchaseupdates
+
+    # -------------------------------------------------------------------------
+    # Output datasets
+    # -------------------------------------------------------------------------
+    outputDatasets:
+
+      facts:
+        - name: purchasing.fact.purchase
+          type: delta_table
+          layer: silver
+          description: >
+            Grain: one row per purchase order line as of the current load
+            window. Loaded via a scoped Delta MERGE targeted-replace keyed on
+            wwi_purchase_order_id, reproducing the source's atomic
+            delete-then-insert-by-order-ID semantics. Partitioned by date_key,
+            Z-ORDERed on (supplier_key, stock_item_key), Change Data Feed
+            enabled.
+          partitionBy: date_key
+          zorderBy:
+            - supplier_key
+            - stock_item_key
+          scdType: none
+
+      dimensions:
+        - name: purchasing.dim.supplier
+          type: delta_table
+          layer: silver
+          scdType: 2
+          description: >
+            Net-new conformed supplier dimension, first migrated by this
+            product. SCD Type 2 (valid-time) history with a Delta-native
+            surrogate key.
+
+        - name: purchasing.dim.stock_item
+          type: delta_table
+          layer: silver
+          scdType: 2
+          crossCatalog: true
+          conformedDimensionDuplicateOf: globalsales.dim.stock_item
+          description: >
+            Reused conformed dimension already migrated by
+            GlobalSales_Project/Sales_Orders. Cross-catalog sharing strategy
+            (independently duplicated copy vs. Unity Catalog grant) is
+            [USER INPUT REQUIRED] (PL-008/OB-002).
+
+        - name: purchasing.dim.date
+          type: delta_table
+          layer: silver
+          scdType: none
+          crossCatalog: true
+          conformedDimensionDuplicateOf: globalsales.dim.date
+          description: >
+            Reused conformed date dimension already migrated by
+            GlobalSales_Project/Sales_Orders. Referenced only as a
+            declarative FK target for fact.purchase.date_key — no active
+            load-time lookup is performed. Cross-catalog sharing strategy is
+            [USER INPUT REQUIRED] (PL-008/OB-002).
+
+      staging:
+        - name: purchasing.stg.purchase_staging
+          type: delta_table
+          layer: bronze
+          description: >
+            Landing table for the incremental extraction/enrichment task;
+            transient, write-once-read-once, no persistent optimization
+            applied (PE-004).
+        - name: purchasing.stg.dq_rejections
+          type: delta_table
+          layer: bronze
+          description: >
+            Data quality rejection sink for row-count reconciliation (QA-001)
+            and referential-integrity (QA-003) failures, keyed by lineage_key.
+        - name: purchasing.meta.lineage
+          type: delta_table
+          layer: bronze
+          description: Shared cross-cutting ETL infrastructure — batch/lineage bookkeeping.
+        - name: purchasing.meta.sequence_state
+          type: delta_table
+          layer: bronze
+          description: >
+            Delta counter table replacing the eliminated sequences.lineagekey
+            SEQUENCE object (PL-004); backs get_next_lineage_key().
+        - name: purchasing.meta.etl_cutoff
+          type: delta_table
+          layer: bronze
+          description: High-watermark control table for the Purchase incremental extraction.
+        - name: purchasing.meta.v_etl_cutoff
+          type: view
+          layer: bronze
+          description: Cutoff/watermark reporting view over purchasing.meta.etl_cutoff.
+
+      mart: []
+      # No output view or report is owned by this product (to-be.md §3.2/§3 note).
+
+    # -------------------------------------------------------------------------
+    # Input datasets (external dependencies at runtime)
+    # -------------------------------------------------------------------------
+    inputDatasets:
+      - name: purchasing.stg.purchase_staging
+        role: primary_source
+        description: >
+          Populated by the incremental extraction/enrichment task, delta-filtered
+          against purchasing.meta.etl_cutoff.
+      - name: globalsales.dim.stock_item
+        role: external_dependency
+        crossCatalog: true
+        description: >
+          Owned by GlobalSales_Project. Read for stock_item_key valid-time
+          resolution; cross-catalog sharing mechanism [USER INPUT REQUIRED]
+          (PL-008/OB-002).
+      - name: globalsales.dim.date
+        role: external_dependency
+        crossCatalog: true
+        description: >
+          Owned by GlobalSales_Project. Declarative FK target for date_key
+          only; cross-catalog sharing mechanism [USER INPUT REQUIRED]
+          (PL-008/OB-002).
+
+    # -------------------------------------------------------------------------
+    # Orchestration
+    # -------------------------------------------------------------------------
+    orchestration:
+      platform: Databricks Workflows
+      primaryJob: purchase_extract_enrich -> purchase_key_resolve -> fact.purchase MERGE -> lineage/cutoff bookkeeping
+      schedule: "[USER INPUT REQUIRED]"
+      strategy: incremental_watermark
+      description: >
+        Incremental extraction bounded by purchasing.meta.etl_cutoff, followed
+        by valid-time (SCD2) range-join key resolution for supplier_key and
+        stock_item_key (falling back to Unknown key 0), a scoped Delta MERGE
+        targeted-replace into purchasing.fact.purchase keyed on
+        wwi_purchase_order_id, and lineage/watermark bookkeeping that advances
+        only after the MERGE commits successfully.
+
+    # -------------------------------------------------------------------------
+    # Data quality
+    # -------------------------------------------------------------------------
+    dataQuality:
+      assertionCount: 3
+      assertionTargets:
+        - purchasing.fact.purchase
+      rejectionSink: purchasing.stg.dq_rejections
+      rowCountReconciliation:
+        strategy: zero_tolerance
+        blocking: true
+        description: >
+          QA-001: staged vs. post-load distinct wwi_purchase_order_id counts
+          must match exactly after each MERGE; mismatch raises a blocking
+          PipelineAlert.
+      pendingThresholds:
+        - id: QA-002
+          description: >
+            Unknown-key (supplier_key/stock_item_key = 0) fallback-rate
+            baseline threshold not yet confirmed by stakeholders. Non-blocking
+            monitoring only until set.
+
+    # -------------------------------------------------------------------------
+    # Consumers
+    # -------------------------------------------------------------------------
+    consumers:
+      - type: cross_catalog_consumers
+        platform: Power BI / Databricks SQL
+        count: 3
+        owner: GlobalSales_Project/Sales_Orders
+        accessEndpoint: "[USER INPUT REQUIRED] (PL-009/OB-008 — cross-catalog exposure mechanism not yet decided)"
+        primaryDatasets:
+          - globalsales.mart.v_order_to_year_analytics
+          - "wwidw purchase and sale per stockitem dynamic (BI report)"
+          - "wwidw-ordered-by-supplier (BI report)"
+
+    # -------------------------------------------------------------------------
+    # SLA
+    # -------------------------------------------------------------------------
+    sla:
+      dataFreshness: incremental
+      expectedLoadCompletionUtc: "[USER INPUT REQUIRED]"
+      retentionPolicy:
+        silver: "[USER INPUT REQUIRED]"
+        bronze: "[USER INPUT REQUIRED]"
+
+    # -------------------------------------------------------------------------
+    # Governance
+    # -------------------------------------------------------------------------
+    governance:
+      platform: Unity Catalog
+      catalogName: purchasing
+      rowLevelSecurity: "[USER INPUT REQUIRED]"
+      columnLevelSecurity: "[USER INPUT REQUIRED]"
+      accessRoleMatrix:
+        status: pending
+        description: Data Access and Restrictions not yet defined (to-be.md field 8, [USER INPUT REQUIRED]).
+
+    # -------------------------------------------------------------------------
+    # Pending decisions
+    # -------------------------------------------------------------------------
+    pendingDecisions:
+      - id: PL-008/OB-002
+        description: >
+          Conformed-dimension cross-catalog sharing strategy for
+          purchasing.dim.stock_item and purchasing.dim.date: independently
+          duplicate/maintain under purchasing, or a cross-catalog
+          grant/reference back to globalsales.
+        owner: TBD
+        dueDate: TBD
+
+      - id: PL-009/OB-008
+        description: >
+          Cross-catalog exposure mechanism for the three GlobalSales_Project-owned
+          consumers reading purchasing.fact.purchase directly
+          (v_order_to_year_analytics, wwidw purchase and sale per stockitem
+          dynamic, wwidw-ordered-by-supplier) — Unity Catalog cross-catalog
+          GRANT SELECT vs. federated/replicated read-only copy. Must be
+          resolved jointly with GlobalSales_Project/Sales_Orders before
+          re-pointing these artifacts.
+        owner: TBD
+        dueDate: TBD
+
+      - id: QA-002
+        description: >
+          Business-confirmed baseline threshold for the supplier_key /
+          stock_item_key Unknown-key (0) fallback rate is not yet set.
+        owner: TBD
+        dueDate: TBD
+
+      - id: CX-P02
+        description: >
+          Process Type, Data Access and Restrictions, and Business DQ Rules
+          (to-be.md fields 3, 8, 12) remain [USER INPUT REQUIRED].
+        owner: TBD
+        dueDate: TBD
+
+      - id: CX-P03
+        description: >
+          Project boundaries (temporal range of data to migrate,
+          organizational owning team) and stakeholder assignments (project
+          owner, business lead, technical lead, sign-off) remain [USER INPUT
+          REQUIRED] per modernization-plan.md §8/§10.
+        owner: TBD
+        dueDate: TBD

@@ -1,0 +1,610 @@
+# Product mode consolidation note: no override.yaml, extensions.yaml,
+# deactivations.yaml, or new-rules.yaml entries were found for dimension NM
+# at products/Purchases/current/specifications/product-transformation-rules/
+# for Purchasing_Project (the only action file present, new-rules.yaml, is
+# scoped entirely to dimension CX/prefix CX-P and contains zero NM entries).
+# Verified against Purchasing_Project's NEW NM-naming.yaml (generated fresh
+# in project mode, project_rules_version 20260921-160000, catalog
+# `purchasing`, narrowed schema scope dimension/fact/integration/sequences)
+# rather than assumed: every one of the 10 new project rules (NM-001..NM-010,
+# including the new NM-010 cross-catalog reference rule unique to this
+# project's split topology) already covers Purchases' evidenced patterns
+# directly -- dimension.supplier space-free naming (NM-001/NM-003),
+# dimension.stock item / integration.etl cutoff space-mapping (NM-002),
+# purchasing catalog schema mapping (NM-003), the etl_cutoff_view2024 view
+# (NM-004), purchase_staging/etl_cutoff/lineage staging exceptions (NM-005),
+# migratestagedpurchasedata/getlineagekey procedure naming (NM-006),
+# sequences.lineagekey disposition (NM-007), fact.purchase PK/FK naming
+# (NM-008), the full set of bracket-quoted space-containing fact.purchase /
+# dimension.supplier / integration.purchase_staging columns (NM-009), and
+# the cross-catalog reused-dimension / Sales_Orders-owned-consumer naming
+# concern (NM-010) -- were all authored directly against Purchases' own
+# as-is.md and product-scope.md content (this product was the primary
+# evidence source for the project-level rule set). This matches the
+# historical precedent recorded in the old (GlobalSales_Project-labeled,
+# now-superseded) product-transformation-rules/NM-naming.yaml, whose thin
+# index declared zero overrides/extensions/deactivations for this dimension.
+# Conclusion: full, unchanged inheritance -- no product-specific
+# customization applied.
+dimension: Naming
+prefix: NM
+project: "Purchasing_Project"
+product: "Purchases"
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-21"
+inheritance:
+  project_rules_version: "20260921-160000"
+  applied_overrides: []       # rule IDs overridden from project
+  applied_extensions: []      # rule IDs extended from project
+  applied_deactivations: []   # rule IDs removed from project set
+  new_rules: []               # product-only rule IDs added
+
+rules:
+
+  - id: NM-001
+    dimension: Naming
+    name: "General Case Conversion to lowercase_snake_case"
+    intent: >
+      Convert all SQL Server object names (tables, columns, views, procedures) in the
+      Purchasing domain that use PascalCase, camelCase, or mixed case into
+      Databricks-compliant lowercase_snake_case. Databricks identifiers are case-folded
+      to lowercase by default; enforcing snake_case at migration time prevents silent
+      collision bugs and keeps the new `purchasing` catalog consistent from its first
+      commit, rather than inheriting ambiguity from the source OLTP/DW naming.
+    activation:
+      preconditions:
+        - "Source object name contains one or more uppercase letters"
+        - "Source object name does not already match the pattern ^[a-z][a-z0-9_]*$"
+        - "Object type is one of: table, view, column, schema, procedure, sequence"
+      scope: project
+    transformation:
+      source: "Any identifier using PascalCase or camelCase (e.g., PurchaseOrderID, SupplierReference, IsOrderFinalized, LastEditedWhen, QuantityPerOuter)"
+      target: "Equivalent identifier in lowercase_snake_case"
+      algorithm:
+        - "Insert an underscore before each uppercase letter that is immediately preceded by a lowercase letter or digit (boundary detection: camelCase -> camel_case)."
+        - "Insert an underscore before an uppercase letter followed by a lowercase letter when the preceding character is also uppercase (handles acronyms: WWISupplierID -> wwi_supplier_id)."
+        - "Convert the entire resulting string to lowercase."
+        - "Collapse any consecutive underscores into a single underscore."
+        - "Strip leading and trailing underscores."
+    validation:
+      success_criteria:
+        - "All migrated Purchasing identifiers match the pattern ^[a-z][a-z0-9_]*$"
+        - "No two distinct source identifiers within the Purchasing scope produce the same target identifier (collision check)"
+        - "Column names in generated DDL for dimension.supplier, dimension.stock item, dimension.date, and fact.purchase contain no uppercase characters"
+      quality_dimensions:
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "SupplierReference"
+          expected: "supplier_reference"
+          notes: "dimension.supplier column, per as-is §3.1 ER diagram"
+        - input: "IsOrderFinalized"
+          expected: "is_order_finalized"
+          notes: "fact.purchase source-side attribute (as [Is Order Finalized]; combined with NM-009)"
+        - input: "QuantityPerOuter"
+          expected: "quantity_per_outer"
+          notes: "warehouse.stockitems input used to derive Ordered Quantity, as-is §5.1"
+        - input: "PurchaseOrderID"
+          expected: "purchase_order_id"
+        - input: "LastEditedWhen"
+          expected: "last_edited_when"
+    inheritance:
+      level: project
+      override: "A product may override the boundary-detection regex if Purchases' own objects use a naming convention this algorithm mis-splits."
+      extend: "A product may extend the acronym-handling step with a Purchasing-domain acronym dictionary (e.g., WWI)."
+      deactivate: "Not deactivable -- this is the baseline case-conversion rule underlying NM-002 through NM-010."
+
+  - id: NM-002
+    dimension: Naming
+    name: "Space-Containing Table/View/Schema Names to snake_case with Explicit Mapping"
+    intent: >
+      Rename the small set of SQL Server table/schema names in the Purchasing project's
+      in-scope object list (modernization-plan.md §6) that contain literal space
+      characters to valid Databricks snake_case identifiers. Spaces are illegal in
+      unquoted Databricks identifiers. The mapping table below is deliberately scoped
+      to ONLY the objects in this project's §6 in-scope inventory -- it does not
+      include space-bearing objects that belong to other GlobalSales_Project domains
+      (e.g., `dimension.payment method`, `dimension.transaction type`, `fact.stock
+      holding`), since those remain out of scope for Purchasing_Project per §7.
+    activation:
+      preconditions:
+        - "Source object name contains one or more space characters"
+        - "Object type is one of: table, view, schema"
+        - "Object is within Purchasing_Project's in-scope inventory (modernization-plan.md §6)"
+      scope: project
+    transformation:
+      source: "Object name containing space characters at the table/view/schema level (e.g., `dimension.stock item`, `integration.etl cutoff`)"
+      target: "Lowercase snake_case name derived by replacing spaces with underscores, then applying NM-001, under the `purchasing` catalog"
+      algorithm:
+        - "Look up the source (schema, name) pair in the mapping_table below."
+        - "If found, use the mapped target_schema and target_name directly -- no further transformation needed."
+        - "If not found (handles future discoveries within Purchasing scope only), replace all space characters with underscores, then apply the NM-001 case-conversion algorithm."
+        - "Log any unmapped space-bearing name as a migration warning for human review."
+      mapping_table:
+        - source_schema: "dimension"
+          source_name: "stock item"
+          target_schema: "purchasing.dim"
+          target_name: "stock_item"
+        - source_schema: "integration"
+          source_name: "etl cutoff"
+          target_schema: "purchasing.stg"
+          target_name: "etl_cutoff"
+    validation:
+      success_criteria:
+        - "No generated DDL or ETL references contain quoted or unquoted table/view/schema identifiers with spaces"
+        - "Both known space-bearing source table/schema names in Purchasing's scope resolve to the identifiers in the mapping_table"
+        - "Migration log contains zero warnings for unmapped space-bearing table/view/schema names within Purchasing scope (initial baseline)"
+      quality_dimensions:
+        - accuracy
+        - completeness
+      test_cases:
+        - input: "dimension.stock item"
+          expected: "purchasing.dim.stock_item"
+          notes: "Reused dimension per modernization-plan.md §6.1; conformed with GlobalSales_Project's own dimension.stock item"
+        - input: "integration.etl cutoff"
+          expected: "purchasing.stg.etl_cutoff"
+          notes: "Shared cross-cutting ETL infrastructure per modernization-plan.md §6.3"
+        - input: "dimension.supplier"
+          expected: "purchasing.dim.supplier"
+          notes: "Net-new dimension, no space in source name -- no mapping_table entry required; NM-001 + NM-003 handle it directly"
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may add new rows to the mapping_table when it introduces additional space-bearing table/view/schema names not yet catalogued here."
+      deactivate: false
+
+  - id: NM-003
+    dimension: Naming
+    name: "Schema to Catalog.Schema Mapping"
+    intent: >
+      Map each SQL Server schema actually in scope for Purchasing_Project
+      (modernization-plan.md §3/§6: dimension, fact, integration, sequences) to the
+      corresponding three-part Databricks Unity Catalog identifier under the project's
+      OWN, independent catalog `purchasing` -- distinct from GlobalSales_Project's
+      `globalsales` catalog even though both migrate the same source database. The
+      `analytics` and `application` schemas are intentionally NOT mapped here: they
+      remain owned by GlobalSales_Project (§7) and are out of scope for this project.
+    activation:
+      preconditions:
+        - "Source object uses one of the Purchasing_Project in-scope schemas: dimension, fact, integration, sequences"
+        - "Target environment is Databricks Unity Catalog, catalog `purchasing`"
+      scope: project
+    transformation:
+      source: "<source_schema>.<object_name> -- one of dimension | fact | integration | sequences"
+      target: "<catalog>.<target_schema>.<object_name>, catalog = purchasing"
+      algorithm:
+        - "Parse the source three-part (database.schema.object) or two-part (schema.object) identifier."
+        - "Look up the source schema in the schema_mapping table below."
+        - "If target_schema is null (sequences), apply rule NM-007 instead and emit a migration warning."
+        - "Prepend the catalog name `purchasing` to form the full three-part Unity Catalog identifier: purchasing.<target_schema>.<object_name_after_NM-001>."
+        - "Apply NM-001 to the object_name component."
+        - "If the object is `analytics.*` or `application.*`, do NOT apply this rule -- flag as out-of-scope per modernization-plan.md §7 and route to the cross-project handling in NM-010 instead."
+      schema_mapping:
+        - source_schema: "dimension"
+          target_schema: "dim"
+          rationale: "Conformed dimensions of the Kimball model (supplier, stock item, date), consistent with GlobalSales_Project's own dimension->dim convention for the sake of eventual cross-catalog readability"
+        - source_schema: "fact"
+          target_schema: "fact"
+          rationale: "Fact table (fact.purchase) retains its semantic layer name for clarity"
+        - source_schema: "integration"
+          target_schema: "stg"
+          rationale: "Integration/staging area maps to the standard `stg` layer convention"
+        - source_schema: "sequences"
+          target_schema: null
+          rationale: >
+            Sequence objects are not migrated (see NM-007); this schema has no
+            target counterpart under the `purchasing` catalog. Any reference to
+            sequences.lineagekey must be replaced per the sequences disposition rule.
+    validation:
+      success_criteria:
+        - "Every generated DDL statement for the Purchasing domain uses a three-part `purchasing.<schema>.<table>` identifier"
+        - "No object from the `sequences` schema appears in generated DDL without a NM-007 warning"
+        - "No `analytics.*` or `application.*` object is mapped under the `purchasing` catalog"
+      quality_dimensions:
+        - accuracy
+        - consistency
+        - completeness
+      test_cases:
+        - input: "dimension.Supplier"
+          expected: "purchasing.dim.supplier"
+          notes: "Net-new conformed dimension per modernization-plan.md §5/§6.1"
+        - input: "dimension.Stock Item"
+          expected: "purchasing.dim.stock_item"
+          notes: "Reused dimension; independently maintained under `purchasing` per modernization-plan.md §3.1 risk 1 pending final cross-project dimension-sharing decision"
+        - input: "dimension.Date"
+          expected: "purchasing.dim.date"
+          notes: "Reused dimension; FK target only, no active load-time lookup (as-is §4.4 note)"
+        - input: "fact.Purchase"
+          expected: "purchasing.fact.purchase"
+        - input: "integration.Purchase_Staging"
+          expected: "purchasing.stg.purchase_staging"
+        - input: "sequences.LineageKey"
+          expected: "NM-007 disposition -- not migrated"
+        - input: "analytics.v_OrderToYearAnalytics"
+          expected: "out of scope -- remains globalsales.mart.v_order_to_year_analytics; see NM-010 for the cross-catalog read-back concern"
+          notes: "Owned by GlobalSales_Project/Sales_Orders; modernization-plan.md §3.1 risk 2"
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may add new schema_mapping entries only if it introduces a source schema within Purchasing_Project's own scope not yet catalogued here."
+      deactivate: false
+
+  - id: NM-004
+    dimension: Naming
+    name: "View Naming Convention (v_ Prefix, Stale-Suffix Removal)"
+    intent: >
+      Standardise view naming for the one view in Purchasing_Project's in-scope
+      inventory (`integration.etl_cutoff_view2024`, modernization-plan.md §6.3) using a
+      lowercase `v_` prefix, and strip naming artifacts that do not belong in a
+      permanent target identifier -- specifically the redundant word "view" (already
+      conveyed by the `v_` prefix) and the trailing year token, which reads as a
+      dated/versioned snapshot name rather than a stable reporting view name.
+    activation:
+      preconditions:
+        - "Source object type is VIEW"
+        - "Object is within Purchasing_Project's in-scope inventory (modernization-plan.md §6.3)"
+      scope: project
+    transformation:
+      source: "View name may already contain the literal substring `view` and/or a trailing 4-digit year token (e.g., integration.etl_cutoff_view2024)"
+      target: "purchasing.stg (or the schema-mapped target) view name using lowercase `v_` prefix, with redundant `view` wording and trailing year tokens removed"
+      algorithm:
+        - "Apply NM-001 to the source view name to get a snake_case base."
+        - "Strip any embedded standalone token `view` from the base name (case-insensitive), since the `v_` prefix already conveys object type."
+        - "Strip any trailing 4-digit year token (regex \\d{4}$) and the underscore preceding it; log the removed year for human review, since it may indicate a versioning need that should be handled via Delta table versioning/time travel rather than the object name."
+        - "Collapse any resulting double underscore."
+        - "If the resulting base does not start with `v_`, prepend `v_`."
+        - "Combine with the NM-003 catalog.schema prefix."
+      note: "v_ prefix is applied ONLY to SQL views (CREATE VIEW statements), not to Delta tables or notebooks."
+    validation:
+      success_criteria:
+        - "The generated CREATE VIEW statement for the cutoff-reporting view matches ^v_[a-z][a-z0-9_]*$ with no embedded `view` token and no trailing year digits"
+        - "Re-running the rule on an already-prefixed name does not produce `v_v_` double prefix"
+      quality_dimensions:
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "integration.etl_cutoff_view2024 (VIEW)"
+          expected: "purchasing.stg.v_etl_cutoff"
+          notes: "modernization-plan.md §6.3; redundant 'view' token and trailing year '2024' stripped per algorithm steps 2-3"
+        - input: "dimension.Supplier (TABLE)"
+          expected: "purchasing.dim.supplier"
+          notes: "No v_ prefix applied -- object is a table, not a view"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: NM-005
+    dimension: Naming
+    name: "Staging Table Naming Convention (_staging Suffix) with Control-Table Exceptions"
+    intent: >
+      Preserve and standardise the `_staging` suffix convention for the Purchasing
+      domain's landing table (`integration.purchase_staging`) while explicitly
+      excluding the two shared cross-cutting control tables in the same `integration`
+      schema (`integration.etl cutoff`, `integration.lineage`) from the suffix, since
+      they are bookkeeping/watermark tables, not per-batch landing tables, per
+      modernization-plan.md §6.3.
+    activation:
+      preconditions:
+        - "Source object resides in the `integration` schema"
+        - "Object type is TABLE (not view or procedure)"
+        - "Object is within Purchasing_Project's in-scope inventory (modernization-plan.md §6.3)"
+      scope: project
+    transformation:
+      source: "Tables in the integration schema, one already suffixed (integration.purchase_staging), two control tables that must NOT be suffixed (integration.etl cutoff, integration.lineage)"
+      target: "purchasing.stg landing table carries `_staging` suffix in snake_case; control tables retain their bare snake_case name"
+      algorithm:
+        - "Apply NM-001 (case conversion) and NM-002 (space removal) to the source table name."
+        - "Apply NM-003 schema mapping (integration -> purchasing.stg)."
+        - "If the object is a named control-table exception (etl_cutoff, lineage), keep the name unchanged -- do not append `_staging`."
+        - "Otherwise, if the resulting snake_case name already ends with `_staging`, keep it unchanged; if not, append `_staging`."
+      exceptions:
+        - "integration.etl cutoff -> purchasing.stg.etl_cutoff (control/watermark table, no suffix)"
+        - "integration.lineage -> purchasing.stg.lineage (control/bookkeeping table, no suffix)"
+    validation:
+      success_criteria:
+        - "purchasing.stg.purchase_staging is the only Delta table in purchasing.stg ending with `_staging`"
+        - "purchasing.stg.etl_cutoff and purchasing.stg.lineage exist without a `_staging` suffix"
+      quality_dimensions:
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "integration.Purchase_Staging"
+          expected: "purchasing.stg.purchase_staging"
+          notes: "Already suffixed -- no change; as-is §3.2"
+        - input: "integration.etl cutoff"
+          expected: "purchasing.stg.etl_cutoff"
+          notes: "Named control-table exception -- modernization-plan.md §6.3"
+        - input: "integration.Lineage"
+          expected: "purchasing.stg.lineage"
+          notes: "Named control-table exception -- modernization-plan.md §6.3"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: NM-006
+    dimension: Naming
+    name: "Stored Procedure Naming (SQL Server -> Databricks Python/Notebook Functions)"
+    intent: >
+      Map the two SQL Server stored procedures in Purchasing_Project's in-scope
+      inventory (modernization-plan.md §6.3: `integration.migratestagedpurchasedata`,
+      `integration.getlineagekey`) to Databricks equivalents -- Python functions or SQL
+      notebooks -- using a consistent lowercase_snake_case naming scheme, since
+      Databricks has no native stored procedure object. The upstream OLTP extraction
+      procedure `wideworldimporters.integration.getpurchaseupdates` is explicitly
+      informational/out-of-scope per §3/§6.5 and receives no target name under this
+      rule.
+    activation:
+      preconditions:
+        - "Source object type is PROCEDURE"
+        - "Source object is within Purchasing_Project's in-scope inventory (modernization-plan.md §6.3), not the informational §6.5 upstream list"
+      scope: project
+    transformation:
+      source: "SQL Server stored procedures in all-lowercase concatenated form (e.g., integration.migratestagedpurchasedata, integration.getlineagekey)"
+      target: "Python function with snake_case name in the ETL module for this project's Purchasing pipeline"
+      algorithm:
+        - "Apply best-effort word-boundary splitting using a SQL/English vocabulary list on the all-lowercase concatenated name."
+        - "Apply NM-001 case conversion to obtain the snake_case base name."
+        - "Map the source schema to a Python module name using NM-003 schema mapping."
+        - "Record the mapping in the project's procedure-inventory artifact for traceability; flag heuristic splits for human review."
+        - "For objects in the §6.5 informational upstream list, do NOT emit a target name -- log as OUT_OF_SCOPE / informational only."
+    validation:
+      success_criteria:
+        - "Both in-scope procedures have a documented target Python name in the inventory"
+        - "No target Python name contains uppercase letters or spaces"
+        - "The out-of-scope upstream procedure is logged as informational only, with no target identifier generated"
+      quality_dimensions:
+        - accuracy
+        - completeness
+      test_cases:
+        - input: "integration.migratestagedpurchasedata"
+          expected: "migrate_staged_purchase_data"
+          notes: "modernization-plan.md §6.3 risk 4/5; split_method: heuristic; review_required: true"
+        - input: "integration.getlineagekey"
+          expected: "get_lineage_key"
+          notes: "modernization-plan.md §6.3, shared cross-cutting lineage infrastructure; split_method: heuristic; review_required: true"
+        - input: "wideworldimporters.integration.getpurchaseupdates"
+          expected: "OUT_OF_SCOPE (informational only)"
+          notes: "modernization-plan.md §3/§6.5 -- upstream OLTP extraction procedure, not migrated"
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+
+  - id: NM-007
+    dimension: Naming
+    name: "Sequence Object Disposition (Not Migrated)"
+    intent: >
+      Declare that the SQL Server SEQUENCE object in Purchasing_Project's in-scope
+      inventory (`sequences.lineagekey`, modernization-plan.md §6.4) is not migrated to
+      Databricks. Delta Lake uses auto-incrementing BIGINT GENERATED ALWAYS AS IDENTITY
+      columns or application-generated surrogate keys instead. This ensures no
+      sequence object name appears in target DDL under the `purchasing` catalog and
+      that the lineage-key issuance logic (currently reading from this sequence via
+      `integration.getlineagekey`, per as-is §5.4) is flagged for replacement.
+    activation:
+      preconditions:
+        - "Source object type is SEQUENCE"
+        - "Source object resides in the `sequences` schema and is within Purchasing_Project's in-scope inventory"
+      scope: project
+    transformation:
+      source: "sequences.lineagekey -- SEQUENCE object backing lineage/batch key issuance (modernization-plan.md §6.4; as-is §5.4)"
+      target: "No target object is created; surrogate key strategy replaces sequence usage (disposition: NOT_MIGRATED)"
+      algorithm:
+        - "Scan `integration.getlineagekey` and `integration.migratestagedpurchasedata` for references to NEXT VALUE FOR sequences.lineagekey."
+        - "Emit a migration task flagged as MANUAL_REWRITE with the recommended replacement strategy: BIGINT GENERATED ALWAYS AS IDENTITY on purchasing.stg.lineage, or a monotonically_increasing_id()/UUID strategy if cross-session ordering guarantees are required."
+        - "Do NOT emit any CREATE SEQUENCE or equivalent DDL in the target."
+        - "Log the count of sequence references in the migration report."
+    validation:
+      success_criteria:
+        - "Zero CREATE SEQUENCE statements appear in any generated purchasing.* target DDL"
+        - "The NEXT VALUE FOR reference inside integration.getlineagekey has a corresponding MANUAL_REWRITE task"
+        - "The `sequences` schema has no mapped target schema (confirmed by NM-003)"
+      quality_dimensions:
+        - accuracy
+        - completeness
+      test_cases:
+        - input: "sequences.lineagekey"
+          expected: "none (no DDL emitted)"
+          notes: "modernization-plan.md §6.4; MANUAL_REWRITE task created; IDENTITY column recommended on purchasing.stg.lineage.lineage_key"
+        - input: "NEXT VALUE FOR sequences.lineagekey in integration.getlineagekey"
+          expected: "none (no DDL emitted)"
+          notes: "as-is §5.4; MANUAL_REWRITE task: replace with monotonically_increasing_id() or IDENTITY"
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+
+  - id: NM-008
+    dimension: Naming
+    name: "Index and Constraint Naming Convention"
+    intent: >
+      Establish a consistent naming convention for the constraints evidenced on
+      Purchasing_Project's fact table: `fact.purchase` carries an IDENTITY-backed
+      composite primary key (`Purchase Key` + `Date Key`, as-is §3.2) and FK
+      constraints to `dimension.date`, `dimension.supplier`, and `dimension.stock
+      item` (as-is §3.1). Delta Lake/Unity Catalog does not enforce foreign keys or
+      traditional indexes, but supports PRIMARY KEY and informational constraints;
+      naming them consistently aids documentation and lineage traceability across the
+      new `purchasing` catalog.
+    activation:
+      preconditions:
+        - "Source object is a PRIMARY KEY or FOREIGN KEY constraint on an object within Purchasing_Project's in-scope inventory"
+        - "Target environment is Databricks Unity Catalog, catalog `purchasing`"
+      scope: project
+    transformation:
+      source: "SQL Server composite PK on Fact.Purchase (Purchase Key, Date Key) and FK constraints to Dimension.Date / Dimension.Supplier / Dimension.Stock Item"
+      target: "Lowercase snake_case constraint name with type prefix, table name, and column(s), under purchasing.fact/purchasing.dim"
+      algorithm:
+        - "Identify the constraint type (PRIMARY KEY or FOREIGN KEY) from the source DDL."
+        - "Apply NM-001 to the table name and column name components."
+        - "Build the target name using the naming_templates: primary_key = pk_<table_name>."
+        - "For FOREIGN KEY constraints: emit a documentation record only (no DDL) -- Delta Lake/Unity Catalog does not enforce foreign keys; document as informational lineage only, consistent with the valid-time dimension key resolution logic described in as-is §5.2/§5.3."
+        - "For any index request: defer to the PE (Performance) dimension rule for Z-ORDER / liquid clustering decisions; do not generate CREATE INDEX DDL."
+    validation:
+      success_criteria:
+        - "The PRIMARY KEY constraint name on purchasing.fact.purchase matches ^pk_purchase$"
+        - "No CREATE INDEX or CREATE FOREIGN KEY statements appear in any generated purchasing.* DDL"
+        - "All three FK relationships (date, supplier, stock item) are documented as informational lineage records"
+      quality_dimensions:
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "PK (Purchase Key, Date Key) on Fact.Purchase"
+          expected: "pk_purchase"
+          notes: "as-is §3.2; composite key becomes a single named PRIMARY KEY constraint on purchasing.fact.purchase"
+        - input: "FK Fact.Purchase -> Dimension.Supplier (Supplier Key)"
+          expected: "NOT_MIGRATED (foreign key -- informational lineage)"
+          notes: "as-is §3.1/§5.2 -- valid-time lookup, not an enforced FK at load time"
+        - input: "FK Fact.Purchase -> Dimension.[Stock Item] (Stock Item Key)"
+          expected: "NOT_MIGRATED (foreign key -- informational lineage)"
+          notes: "as-is §3.1/§5.3"
+        - input: "FK Fact.Purchase -> Dimension.Date (Date Key)"
+          expected: "NOT_MIGRATED (foreign key -- informational lineage, declarative FK target only)"
+          notes: "as-is §4.4 note -- no active load-time lookup against Dimension.Date"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: NM-009
+    dimension: Naming
+    name: "Space-Containing Column Names to snake_case"
+    intent: >
+      Rename SQL Server bracket-quoted, space-containing COLUMN names on
+      Purchasing_Project's in-scope objects to valid Databricks snake_case
+      identifiers. The Purchases as-is analysis (§3.1, §4.1, §4.3) confirms this is
+      the dominant column-naming convention across `fact.purchase`,
+      `integration.purchase_staging`, and `dimension.supplier` (e.g.,
+      `[WWI Purchase Order ID]`, `[Ordered Outers]`, `[Received Outers]`,
+      `[Is Order Finalized]`, `[Supplier Key]`, `[Stock Item Key]`, `[Date Key]`,
+      `[Lineage Key]`, `[WWI Supplier ID]`, `[WWI Stock Item ID]`,
+      `[Last Modified When]`). Column names with embedded spaces are illegal in
+      unquoted Databricks identifiers, so every bracket-quoted column in scope must be
+      resolved at migration time.
+    activation:
+      preconditions:
+        - "Source column name is bracket-quoted and contains one or more space characters (e.g., [WWI Purchase Order ID])"
+        - "Object type is COLUMN on an object within Purchasing_Project's in-scope inventory (modernization-plan.md §6)"
+      scope: project
+    transformation:
+      source: "Bracket-quoted, space-containing column name (e.g., Fact.Purchase.[WWI Purchase Order ID], Fact.Purchase.[Ordered Quantity])"
+      target: "Lowercase snake_case column identifier with spaces replaced by underscores, under purchasing.fact/purchasing.dim/purchasing.stg"
+      algorithm:
+        - "Strip the enclosing square brackets from the source column name."
+        - "Replace all space characters with underscores."
+        - "Apply the NM-001 case-conversion algorithm to the underscored result (handles embedded acronyms, e.g. WWI)."
+        - "Preserve business-key prefix conventions verbatim in snake_case form (e.g., WWI Supplier ID -> wwi_supplier_id) -- do not strip the WWI prefix, since it distinguishes source-system business keys from DW surrogate keys."
+        - "Apply to every column on every migrated Purchasing object regardless of whether the parent object itself was renamed under NM-002."
+    validation:
+      success_criteria:
+        - "No generated DDL or ETL code for purchasing.fact.purchase, purchasing.dim.supplier, or purchasing.stg.purchase_staging references a bracket-quoted or space-containing column identifier"
+        - "All column identifiers in generated DDL match ^[a-z][a-z0-9_]*$"
+        - "Every bracket-quoted column name observed across the Purchases as-is file resolves to a valid snake_case target"
+      quality_dimensions:
+        - accuracy
+        - completeness
+        - consistency
+      test_cases:
+        - input: "[WWI Purchase Order ID]"
+          expected: "wwi_purchase_order_id"
+          notes: "as-is §3.1/§4.1 -- fact.purchase and integration.purchase_staging, also the DELETE+INSERT replace key (modernization-plan.md §3.1 risk 4)"
+        - input: "[Ordered Outers]"
+          expected: "ordered_outers"
+          notes: "as-is §1.1/§4.1 -- fact.purchase measure"
+        - input: "[Ordered Quantity]"
+          expected: "ordered_quantity"
+          notes: "as-is §4.1/§5.1 -- calculated measure (Ordered Outers x Quantity Per Outer)"
+        - input: "[Received Outers]"
+          expected: "received_outers"
+          notes: "as-is §1.1/§4.1"
+        - input: "[Is Order Finalized]"
+          expected: "is_order_finalized"
+          notes: "as-is §1.1/§4.1"
+        - input: "[Supplier Key]"
+          expected: "supplier_key"
+          notes: "as-is §4.1/§5.2 -- valid-time-resolved surrogate key, falls back to 0 (Unknown)"
+        - input: "[Stock Item Key]"
+          expected: "stock_item_key"
+          notes: "as-is §4.1/§5.3 -- valid-time-resolved surrogate key, falls back to 0 (Unknown)"
+        - input: "[WWI Supplier ID]"
+          expected: "wwi_supplier_id"
+          notes: "as-is §4.1/§5.2 -- source business key preserved with WWI prefix per algorithm step 4"
+        - input: "[WWI Stock Item ID]"
+          expected: "wwi_stock_item_id"
+          notes: "as-is §4.1/§5.3"
+        - input: "[Lineage Key]"
+          expected: "lineage_key"
+          notes: "as-is §4.1/§5.4 -- administrative batch identifier; see NM-007 for the backing sequences.lineagekey disposition"
+        - input: "[Last Modified When]"
+          expected: "last_modified_when"
+          notes: "as-is §4.1/§5.2/§5.3 -- as-of timestamp used for the valid-time dimension lookups"
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may append additional test_cases as new space-containing column names are discovered."
+      deactivate: false
+
+  - id: NM-010
+    dimension: Naming
+    name: "Cross-Catalog Reference Naming for Reused Conformed Dimensions and Facts"
+    intent: >
+      Establish an explicit naming/reference convention for the cross-project sharing
+      concerns unique to Purchasing_Project's split-off topology (modernization-plan.md
+      §3.1 risks 1-3): the reused conformed dimensions `dimension.stock item` and
+      `dimension.date` are also owned/maintained by GlobalSales_Project, and three
+      GlobalSales_Project/Sales_Orders-owned artifacts
+      (`globalsales.mart.v_order_to_year_analytics`,
+      `wwidw purchase and sale per stockitem dynamic`, `wwidw-ordered-by-supplier`) read
+      `fact.purchase` directly and will become cross-catalog dependents once
+      `fact.purchase` lives under `purchasing` instead of `globalsales`. Until the
+      architectural decision in risk 1 (duplicate vs. cross-catalog share) is resolved,
+      this rule fixes the naming so that whichever path is chosen, references are
+      unambiguous and self-documenting.
+    activation:
+      preconditions:
+        - "Object is a conformed dimension reused from GlobalSales_Project (dimension.stock item, dimension.date) OR a GlobalSales_Project-owned object reading purchasing.fact.purchase"
+        - "Target environment is Databricks Unity Catalog spanning both the `purchasing` and `globalsales` catalogs"
+      scope: project
+    transformation:
+      source: "Reused dimension or cross-catalog consumer object identified in modernization-plan.md §3.1 risks 1-3"
+      target: "Either an independently-maintained purchasing.dim.<name> copy, or an explicit cross-catalog reference of the form globalsales.<schema>.<object> -> purchasing.<schema>.<object>, never an unqualified/ambiguous name"
+      algorithm:
+        - "If the architectural decision (risk 1) is 'duplicate': name the Purchasing-side copy identically to its GlobalSales-side counterpart under NM-003 (purchasing.dim.stock_item, purchasing.dim.date) and tag it in metadata as `conformed_dimension_duplicate_of: globalsales.dim.<name>` so lineage tools can still associate the two."
+        - "If the architectural decision (risk 1) is 'cross-catalog share': do NOT create a purchasing.dim.<name> copy; instead register a Unity Catalog cross-catalog grant/reference and document it under the canonical name globalsales.dim.<name> with an alias note `referenced_by: purchasing.fact.purchase`."
+        - "For the three GlobalSales_Project/Sales_Orders-owned objects reading fact.purchase (risk 2/3), always reference the fact table by its fully-qualified new name purchasing.fact.purchase in any updated view/report definition -- never by the old globalsales.fact.purchase path, which will no longer exist."
+        - "Record every cross-catalog reference (in either direction) in the project's manifest as a named dependency, not as an inline unqualified table name, so the GlobalSales_Project/Sales_Orders owning team can be notified per modernization-plan.md §3.1 risk 2 note."
+    validation:
+      success_criteria:
+        - "No generated DDL or view definition references `fact.purchase` without the `purchasing.` catalog qualifier"
+        - "Every reused dimension (stock item, date) has a documented disposition (duplicate or cross-catalog share) recorded in the project manifest before build"
+        - "All three known GlobalSales_Project/Sales_Orders cross-catalog dependents are listed by fully-qualified name in the migration report for coordinated sign-off"
+      quality_dimensions:
+        - consistency
+        - completeness
+        - coverage
+      test_cases:
+        - input: "globalsales.mart.v_order_to_year_analytics (reads fact.purchase via Package-keyed subquery)"
+          expected: "must be updated to reference purchasing.fact.purchase explicitly; flagged as a coordinated cross-project decision"
+          notes: "modernization-plan.md §3.1 risk 2; as-is §2/§4.5"
+        - input: "wwidw purchase and sale per stockitem dynamic (BI report; reads fact.purchase, fact.sale, dimension.stock item, dimension.date)"
+          expected: "must be updated to reference purchasing.fact.purchase and purchasing.dim.stock_item/date (or their cross-catalog-shared equivalents) explicitly"
+          notes: "modernization-plan.md §3.1 risk 3; as-is §2/§4.5"
+        - input: "wwidw-ordered-by-supplier (BI report; reads fact.purchase, dimension.supplier, dimension.date)"
+          expected: "must be updated to reference purchasing.fact.purchase and purchasing.dim.supplier/date explicitly"
+          notes: "modernization-plan.md §3.1 risk 3; as-is §2/§4.5 -- discovered via lineage traversal, not originally in product-scope.md §5"
+        - input: "dimension.stock item (reused, disposition undecided)"
+          expected: "either purchasing.dim.stock_item tagged conformed_dimension_duplicate_of: globalsales.dim.stock_item, or a documented cross-catalog grant to globalsales.dim.stock_item"
+          notes: "modernization-plan.md §3.1 risk 1 -- open architectural question, not yet resolved; rule fixes naming for either outcome"
+    inheritance:
+      level: project
+      override: "A product may override the disposition (duplicate vs. cross-catalog share) once modernization-plan.md §3.1 risk 1 is formally resolved."
+      extend: "A product may extend the cross-catalog dependent list if further GlobalSales_Project-owned consumers of fact.purchase are discovered."
+      deactivate: "Deactivable once risk 1/2/3 are resolved and a single, permanent sharing mechanism is implemented and documented elsewhere."

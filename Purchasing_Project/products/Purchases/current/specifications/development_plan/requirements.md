@@ -1,0 +1,37 @@
+# Purchases — Requirements
+_Generated: 2026-09-22 | Pipeline stage: requirements_
+
+---
+
+## 1. Functional Requirements
+
+| ID | Title | Description | Priority | Acceptance Criterion | Source |
+|---|---|---|---|---|---|
+| FR-001 | Ingest incremental purchase staging batches | The pipeline must extract purchase order line records into `purchasing.stg.purchase_staging`, bounded by the high-watermark recorded in `purchasing.meta.etl_cutoff`, so each run processes only records added or modified since the prior successful cutoff. | must-have | For any run, 100% of source rows with a modification timestamp after the prior watermark and up to the new watermark are present in `purchasing.stg.purchase_staging` for that batch; no row outside the window is included. | Input Ports — `x-inputPorts.purchase_staging` |
+| FR-002 | Resolve supplier key via valid-time lookup | The pipeline must resolve `supplier_key` for each staged row via a valid-time (SCD2) range-join against `purchasing.dim.supplier`, matching the dimension version whose effective window contains the transaction date, falling back to the Unknown key `0` when no matching window exists. | must-have | For every staged row, the resolved `supplier_key` equals the surrogate key of the `purchasing.dim.supplier` row whose valid-from/valid-to window contains the row's transaction date, or `0` if no such window exists — verified for 100% of rows in the batch. | Input Ports — `x-inputPorts.supplier_dimension`; Details |
+| FR-003 | Resolve stock item key via valid-time lookup | The pipeline must resolve `stock_item_key` for each staged row via the same valid-time range-join pattern against `purchasing.dim.stock_item`, falling back to `0` when unresolved. The physical cross-catalog access mechanism for `purchasing.dim.stock_item` is pending resolution of PL-008/OB-002 and does not change this row-level resolution behavior. | must-have | For every staged row, the resolved `stock_item_key` equals the surrogate key of the `purchasing.dim.stock_item` row whose valid-from/valid-to window contains the row's transaction date, or `0` if no such window exists — verified for 100% of rows in the batch. | Input Ports — `x-inputPorts.stock_item_dimension`; Details |
+| FR-004 | Compute ordered quantity as a stored column | The pipeline must compute `ordered_quantity` as `ordered_outers * quantity_per_outer` prior to load and persist it as a materialized (stored) column on `purchasing.fact.purchase`, not as a computed/generated column. | must-have | For 100% of rows in `purchasing.fact.purchase`, `ordered_quantity` equals `ordered_outers * quantity_per_outer`; the column definition contains no `GENERATED ALWAYS AS` clause. | Details (description / valueProposition) |
+| FR-005 | Assign a lineage key to every loaded row | The pipeline must assign a non-null `lineage_key` to every row loaded into `purchasing.fact.purchase`, issued from `purchasing.meta.sequence_state`, so each row is traceable to the batch that loaded it. | must-have | 100% of rows in `purchasing.fact.purchase` carry a non-null `lineage_key` that resolves to an entry in `purchasing.meta.lineage` for the loading run. | Details (description / valueProposition) |
+| FR-006 | Load via scoped Delta MERGE keyed on purchase order | The pipeline must load resolved records into `purchasing.fact.purchase` via a scoped Delta `MERGE` keyed on `wwi_purchase_order_id`, replacing only the rows belonging to purchase orders present in the current batch and leaving all other rows unchanged. | must-have | After a run, rows for any `wwi_purchase_order_id` present in the batch exactly match the batch's resolved data, and rows for purchase orders absent from the batch are byte-identical to their pre-run state. | Details (description / valueProposition) |
+| FR-007 | Expose the primary output to cross-catalog consumers | The pipeline must expose `purchasing.fact.purchase` via a defined output access profile so the three known cross-catalog consumers can read it without direct, ungoverned table access. | must-have | `[OWNER INPUT REQUIRED — define measurable threshold once the cross-catalog exposure mechanism (PL-009/OB-008) is decided]` | Output Ports — `dataAccess.default` |
+| FR-008 | Refresh output on an incremental cadence | The pipeline must refresh `purchasing.fact.purchase` on the incremental cadence committed for this product, advancing the watermark only after a successful, fully-validated run. | should-have | Each successful run advances `purchasing.meta.etl_cutoff` to reflect the newly processed batch, and no watermark advance occurs on a failed or partially-validated run. | SLA — `SLA.default.updateFrequency` |
+
+---
+
+## 2. Non-Functional Requirements
+
+| ID | Title | Description | Priority | Acceptance Criterion | Source |
+|---|---|---|---|---|---|
+| NFR-001 | Meet committed uptime for the primary output | The pipeline and its serving layer must maintain an uptime level for `purchasing.fact.purchase` access sufficient to support the three known cross-catalog consumers. | could-have | `[OWNER INPUT REQUIRED — define measurable threshold]` | SLA — `SLA.default.uptime` |
+| NFR-002 | Meet committed latency for the primary output | Access to `purchasing.fact.purchase` by cross-catalog consumers must complete within a committed latency bound. | could-have | `[OWNER INPUT REQUIRED — define measurable threshold]` | SLA — `SLA.default.latency` |
+| NFR-003 | Enforce access control on the primary output | Access to `purchasing.fact.purchase` must be governed by an explicit role/permission matrix under Unity Catalog, including any required row- or column-level security policy. | must-have | `[OWNER INPUT REQUIRED — define measurable threshold once the access role matrix and row/column-level security policy are defined]` | Organizational standards — pending (`catalog.yaml` governance.rowLevelSecurity / columnLevelSecurity) |
+
+---
+
+## 3. Data Quality Requirements
+
+| ID | Title | Description | Priority | Acceptance Criterion | Source |
+|---|---|---|---|---|---|
+| NFR-004 | Reconcile row counts between staging and the fact table | After each run, the count of distinct `wwi_purchase_order_id` values in the staged batch must reconcile exactly with the count reflected in `purchasing.fact.purchase` post-load. | must-have | Zero-tolerance: any mismatch between staged and post-load distinct `wwi_purchase_order_id` counts blocks the run and raises an alert before the watermark advances. | Data Quality — `dataQuality.default` (consistency, QA-001) |
+| NFR-005 | Monitor unknown-key fallback rate for dimension resolution | The pipeline must track the rate at which `supplier_key` or `stock_item_key` resolves to the Unknown key `0`, against a rolling historical baseline, to surface upstream dimension data-quality issues. | should-have | `[OWNER INPUT REQUIRED — define measurable threshold; business-confirmed baseline pending QA-002]` | Data Quality — `dataQuality.default` (accuracy, QA-002) |
+| NFR-006 | Enforce referential conformity to dimension tables | The pipeline must assert that every `supplier_key`, `stock_item_key`, and `date_key` written to `purchasing.fact.purchase` resolves to an existing row in its respective dimension table, routing violations to `purchasing.stg.dq_rejections`. | should-have | Zero orphaned foreign keys are permitted to pass undetected; any row failing the referential-integrity assertion is written to `purchasing.stg.dq_rejections` within the same run, non-blocking. | Data Quality — `dataQuality.default` (conformity, QA-003) |

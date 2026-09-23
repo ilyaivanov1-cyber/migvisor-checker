@@ -1,0 +1,292 @@
+dimension: Quality
+prefix: QA
+project: "Purchasing_Project"
+product: "Purchases"
+source_platform: "Microsoft SQL Server 2014 (T-SQL)"
+target_platform: "Databricks (Delta Lake lakehouse)"
+generated: "2026-09-21"
+inheritance:
+  project_rules_version: "20260921-151140"
+  applied_overrides: []       # rule IDs overridden from project
+  applied_extensions: []      # rule IDs extended from project
+  applied_deactivations: []   # rule IDs removed from project set
+  new_rules: ["QA-001", "QA-002", "QA-003"]  # product-only rule IDs added
+note: >
+  QA is not an active dimension at the Purchasing_Project level -- no
+  project-level QA-quality.yaml exists. This is a product-only dimension
+  file for Purchases: all 3 rules below originate from
+  product-transformation-rules/QA-quality.yaml (written by
+  migvisor-product-transformation-rules-agent) and are copied through
+  unchanged as new_rules, since there is no project-level QA rule set to
+  inherit from, override, extend, or deactivate against. Purchases'
+  as-is analysis and product-scope.md (§9, risks 1 and 2) evidence two
+  concrete, unmonitored data-quality exposures specific to how
+  fact.purchase is loaded: (1) the full replace-by-natural-key
+  DELETE-then-INSERT pattern has no row-count reconciliation check today
+  (QA-001), and (2) the valid-time dimension-key resolution for Supplier
+  Key / Stock Item Key silently falls back to the Unknown sentinel key 0
+  with no visibility into the fallback rate (QA-002). QA-003 adds
+  referential-integrity assertions for fact.purchase's foreign keys.
+  No numeric business-rule thresholds (e.g. plausibility bounds on
+  Received Outers vs. Ordered Outers) are asserted here, since no such
+  threshold is evidenced in the Purchases as-is analysis. Contract
+  conformance fix applied during consolidation: all `test_cases` entries
+  in the source file used only `description` and `expected_result` keys
+  (missing the contract-required `input` key, and using `expected_result`
+  instead of `expected`). Each test case below has been reformatted to
+  the standard `description` / `input` / `expected` shape used across
+  this project's dimension files, without altering the evidenced scenario
+  or outcome content. All other contract fields (id, dimension, name,
+  intent, activation, transformation, validation, inheritance) were
+  already present and conformant in the source file. Reference-correction
+  pass applied on project split from GlobalSales_Project: the project
+  header, catalog name (globalsales -> purchasing), fact_purchase /
+  dim_supplier / dim_stock_item / dim_date identifiers (-> purchasing's
+  fact.purchase / dim.supplier / dim.stock_item / dim.date naming per
+  OB-001/OB-002/OB-003 and NM-003), and cross-referenced rule IDs
+  (PL-011->PL-006, PL-012->PL-007, OB-013->OB-005, PE-009->PE-007,
+  SX-018->SX-004) were updated to Purchasing_Project's current rule set;
+  no rule intent, activation, transformation algorithm, or validation
+  criteria was altered.
+
+rules:
+  - id: QA-001
+    dimension: Quality
+    name: Row-Count Reconciliation for the fact.purchase Replace-by-Order-ID Load
+    intent: >
+      The source DELETE-then-INSERT load keyed on [WWI Purchase Order ID]
+      (evidenced in Integration.MigrateStagedPurchaseData, addressed on
+      the target side by PL-006 / OB-005 / PE-007's MERGE / targeted-
+      replace pattern) has no assertion today that the number of staged
+      rows for a batch's affected purchase order IDs matches the number
+      of rows present in fact.purchase for those same IDs after the load
+      completes. This closes product-scope.md §9 risk 1 (partial-write
+      window) by making the reconciliation an explicit, automated check
+      rather than an assumption.
+    activation:
+      preconditions:
+        - fact.purchase is loaded via the targeted-replace / MERGE INTO
+          operation defined by PE-007 / OB-005 for a batch of
+          [WWI Purchase Order ID] values.
+      scope: product
+    transformation:
+      source: |
+        -- No reconciliation exists in the source T-SQL procedure; DELETE
+        -- and INSERT row counts are not compared against each other or
+        -- against the staging batch.
+        DELETE FROM Fact.Purchase WHERE [WWI Purchase Order ID] IN (...);
+        INSERT INTO Fact.Purchase (...) SELECT ... FROM Integration.Purchase_Staging;
+      target: |
+        staged_count = staging_batch_df.select("wwi_purchase_order_id").distinct().count()
+        # ... MERGE INTO purchasing.fact.purchase per PE-007 / OB-005 ...
+        post_load_count = (
+            spark.table("purchasing.fact.purchase")
+            .filter(col("wwi_purchase_order_id").isin(batch_order_ids))
+            .count()
+        )
+        if staged_count != post_load_count:
+            write_dq_rejection(
+                table="stg.dq_rejections",
+                check="row_count_reconciliation",
+                lineage_key=lineage_key,
+                detail=f"staged={staged_count} post_load={post_load_count}",
+            )
+            raise PipelineAlert("fact.purchase row-count reconciliation failed")
+      algorithm:
+        - "Step 1: Before the MERGE / targeted-replace runs, capture the distinct count of wwi_purchase_order_id values in the staging batch."
+        - "Step 2: After the load completes, count rows in purchasing.fact.purchase for the same set of wwi_purchase_order_id values."
+        - "Step 3: Assert the two counts match exactly — zero tolerance, since replace-by-key semantics guarantee a 1:1 supersession, not an approximate one."
+        - "Step 4: On mismatch, write a rejection record to purchasing.stg.dq_rejections keyed by lineage_key, and raise a pipeline alert. Do not allow the batch to complete silently."
+      notes: >
+        This is a blocking check: a mismatch indicates the replace
+        operation did not fully complete (partial-write window), which
+        is exactly the failure mode PL-006 / OB-005's MERGE redesign is
+        meant to prevent structurally — this rule adds the runtime proof
+        that it did.
+    validation:
+      success_criteria:
+        - Zero unresolved row-count mismatches between staged batch and
+          post-load fact.purchase rows for the same natural keys across
+          all pipeline runs.
+        - Every mismatch produces a traceable rejection row in
+          purchasing.stg.dq_rejections keyed by lineage_key, plus a
+          pipeline alert.
+      quality_dimensions:
+        - completeness
+        - consistency
+      test_cases:
+        - description: "Full replace-by-order-ID load reconciles staged count to post-load count."
+          input: "Batch replaces 3 existing fact.purchase lines for WWI Purchase Order ID 1001 with 2 new staged lines for the same order ID (staged_count = 2)."
+          expected: "Reconciliation passes: post_load_count == staged_count == 2; no rejection row written."
+        - description: "Partial-write failure leaves post-load count at zero against a non-zero staged batch."
+          input: "Load DELETEs existing rows for a batch but fails before completing the INSERT (e.g. a transient cluster failure), leaving 0 post-load rows against a staged_count > 0."
+          expected: "Reconciliation fails; rejection row written to stg.dq_rejections keyed by lineage_key; pipeline alert raised; batch not marked successful."
+    inheritance:
+      level: product
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: QA-002
+    dimension: Quality
+    name: Unknown-Key (0) Fallback Rate Monitoring for Supplier Key / Stock Item Key Resolution
+    intent: >
+      The valid-time correlated key-resolution pattern addressed by
+      PL-007 / SX-004 falls back to the Unknown sentinel key 0 via
+      COALESCE when no matching Valid From / Valid To window is found on
+      dimension.supplier or dimension.stock item. PL-007 / SX-004 define
+      how the fallback is executed correctly on the target platform, but
+      neither rule — nor any other project rule — requires measuring or
+      monitoring how often the fallback actually fires. Product-scope.md
+      §9 risk 2 explicitly flags that silent Unknown-key coercion can
+      mask upstream dimension data-quality issues if left unmonitored.
+      This rule makes that fallback rate an observable, tracked metric
+      per load, non-blocking, and closes the gap PL-007 / SX-004 leave
+      open.
+    activation:
+      preconditions:
+        - fact.purchase resolves supplier_key and/or stock_item_key via
+          the range-join / window-function pattern defined by PL-007 /
+          SX-004, with a COALESCE(..., 0) fallback to the Unknown key.
+      scope: product
+    transformation:
+      source: |
+        -- Source resolves the fallback silently, with no monitoring:
+        [Supplier Key] = ISNULL((
+            SELECT TOP(1) [Supplier Key] FROM Dimension.Supplier s
+            WHERE s.[WWI Supplier ID] = ps.[WWI Supplier ID]
+              AND ps.[Last Modified When] >= s.[Valid From]
+              AND ps.[Last Modified When] < s.[Valid To]
+            ORDER BY s.[Valid From] DESC
+        ), 0)
+      target: |
+        resolved_df = staging_batch_df.withColumn(
+            "supplier_key",
+            F.coalesce(resolved_supplier_key_col, F.lit(0))
+        )
+        unknown_rate = (
+            resolved_df.filter(col("supplier_key") == 0).count()
+            / resolved_df.count()
+        )
+        record_dq_metric(
+            table="stg.dq_rejections",
+            check="unknown_key_fallback_rate",
+            lineage_key=lineage_key,
+            metric_name="supplier_key_unknown_rate",
+            metric_value=unknown_rate,
+        )
+        if unknown_rate > UNKNOWN_KEY_RATE_BASELINE_THRESHOLD:
+            flag_for_review(check="supplier_key_unknown_rate", lineage_key=lineage_key)
+        # Repeat identically for stock_item_key.
+      algorithm:
+        - "Step 1: After key resolution (per PL-007 / SX-004) for supplier_key and stock_item_key independently, compute the percentage of rows in the batch where the resolved key equals 0 (Unknown)."
+        - "Step 2: Record both fallback rates as metrics traceable via lineage_key, alongside (not instead of) the row-level fact data — do not drop or mask the Unknown-key rows themselves."
+        - "Step 3: Compare each rate against a rolling baseline (established from historical batches); this is a non-blocking, informational check — do not fail or halt the load on a high fallback rate."
+        - "Step 4: When a rate exceeds the baseline threshold, flag the batch for data-quality review (e.g. a rejection/metrics row in stg.dq_rejections) rather than silently proceeding with no visibility."
+        - "Step 5: The specific numeric baseline/threshold value is an operational tuning parameter to be set once historical fallback rates are observed in the target environment — not hardcoded by this rule."
+      notes: >
+        Deliberately non-blocking: the Unknown-key fallback itself is
+        legitimate, expected behavior per PL-007 (a genuinely unresolved
+        dimension row should load as Unknown rather than fail the batch).
+        The gap this rule closes is visibility, not the fallback
+        mechanism itself.
+    validation:
+      success_criteria:
+        - Every fact.purchase load batch records a supplier_key and a
+          stock_item_key Unknown-fallback rate metric, traceable via
+          lineage_key.
+        - A batch whose fallback rate exceeds the established baseline
+          is flagged for review without blocking the load.
+      quality_dimensions:
+        - validity
+        - timeliness
+      test_cases:
+        - description: "Fallback rate within historical baseline passes without a review flag."
+          input: "Batch where 2% of rows resolve supplier_key = 0 against a historical baseline of 1-3%."
+          expected: "Metric recorded; no review flag raised."
+        - description: "Fallback rate exceeding historical baseline triggers a non-blocking review flag."
+          input: "Batch where 20% of rows resolve stock_item_key = 0 against a historical baseline of 1-3%."
+          expected: "Metric recorded; review flag raised; load completes successfully (non-blocking)."
+    inheritance:
+      level: product
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: QA-003
+    dimension: Quality
+    name: Referential Integrity Assertion for fact.purchase Dimension Foreign Keys
+    intent: >
+      After fact.purchase is loaded, assert that every non-null foreign
+      key column (supplier_key, stock_item_key, date_key) resolves to an
+      existing row in its respective target dimension table, using a
+      LEFT ANTI JOIN. This is distinct from QA-002 (which monitors the
+      legitimate, intentional Unknown-key-0 fallback rate): QA-003 guards
+      against a foreign key value that is neither a valid resolved key
+      nor the Unknown sentinel — i.e. a value that should structurally
+      be impossible after PL-007 / SX-004's resolution logic runs, but
+      which a referential-integrity check would still catch if the
+      resolution logic itself regresses.
+    activation:
+      preconditions:
+        - fact.purchase has completed a load batch via PE-007 / OB-005's
+          targeted-replace pattern, with supplier_key, stock_item_key,
+          and date_key populated per PL-007 / SX-004.
+      scope: product
+    transformation:
+      source: |
+        -- No referential-integrity check exists in the source T-SQL
+        -- procedure; SQL Server foreign key constraints, if present,
+        -- are declarative and not evidenced as enforced in the load
+        -- procedure itself.
+      target: |
+        orphans = (
+            spark.table("purchasing.fact.purchase").alias("f")
+            .filter(col("f.supplier_key").isNotNull())
+            .join(
+                spark.table("purchasing.dim.supplier").alias("d"),
+                col("f.supplier_key") == col("d.supplier_key"),
+                "left_anti",
+            )
+        )
+        if orphans.count() > 0:
+            write_dq_rejection(
+                table="stg.dq_rejections",
+                check="referential_integrity_supplier_key",
+                lineage_key=lineage_key,
+                detail=orphans,
+            )
+        # Repeat identically for stock_item_key -> purchasing.dim.stock_item and
+        # date_key -> purchasing.dim.date.
+      algorithm:
+        - "Step 1: For each of supplier_key, stock_item_key, and date_key on fact.purchase, run a LEFT ANTI JOIN against the corresponding dimension table's surrogate key column."
+        - "Step 2: Any row surviving the anti-join (i.e. a foreign key value with no matching dimension row, including value 0 if the Unknown-key bootstrap row is missing from the dimension) is written to purchasing.stg.dq_rejections, traceable via lineage_key."
+        - "Step 3: Treat this as non-blocking and informational for the current load (the batch is not halted), but any non-zero orphan count is a signal that PL-007 / SX-004's resolution logic, or the Unknown-key sentinel bootstrap row, needs investigation."
+        - "Step 4: Any future product-specific business-rule assertion (e.g. plausibility bounds between Received Outers and Ordered Outers) should be added as an additional, explicitly stakeholder-confirmed check under this same rule's algorithm — no such threshold is defined here, since none is evidenced in the Purchases as-is analysis."
+      notes: >
+        Extensibility hook only for business-rule assertions — no
+        concrete numeric threshold is asserted by this rule. Adding one
+        requires explicit stakeholder sign-off, consistent with the
+        project's no-hardcoded-business-factor convention (mirrored from
+        the PL / PE dimensions' evidenced-pattern-only approach).
+    validation:
+      success_criteria:
+        - Zero unresolved orphaned foreign keys in fact.purchase across
+          supplier_key, stock_item_key, and date_key after every load
+          batch, or every orphan is traceable via a lineage_key-tagged
+          row in stg.dq_rejections.
+      quality_dimensions:
+        - accuracy
+        - consistency
+      test_cases:
+        - description: "Unknown sentinel key (0) resolves correctly against the dimension bootstrap row."
+          input: "fact.purchase row with supplier_key = 0, where the Unknown sentinel bootstrap row exists in purchasing.dim.supplier."
+          expected: "No orphan reported for key 0 rows, provided the Unknown sentinel bootstrap row has been created in purchasing.dim.supplier."
+        - description: "A supplier_key matching neither a valid resolved key nor the Unknown sentinel signals a resolution-logic regression."
+          input: "fact.purchase row with a supplier_key value that matches neither a real resolved key nor 0 (a data corruption or resolution-logic regression scenario)."
+          expected: "Orphan detected, written to stg.dq_rejections with lineage_key; load still completes (non-blocking)."
+    inheritance:
+      level: product
+      override: false
+      extend: true
+      deactivate: false

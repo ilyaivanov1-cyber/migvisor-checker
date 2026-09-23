@@ -1,0 +1,9 @@
+projectName: Purchasing_Project
+version: "20260921-160000"
+created: "2026-09-21T16:00:00Z"
+mode: hybrid
+pipeline:
+  stage: rules
+  completedSteps:
+    - modernization-plan
+    - rules

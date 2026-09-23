@@ -1,0 +1,648 @@
+dimension: Syntax
+prefix: SX
+project: "Purchasing_Project"
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-21"
+note: >
+  Freshly authored for Purchasing_Project (split from GlobalSales_Project).
+  No prior project-level SX file exists for this project — the stability
+  guard's "absent" branch applies. All 11 rules below are grounded strictly
+  in T-SQL syntax patterns evidenced in the Purchases as-is analysis
+  (products/Purchases/current/specifications/as-is.md, authored under
+  GlobalSales_Project prior to the split): the GetPurchaseUpdates procedure
+  header, the correlated TOP(1) valid-time SCD2 key-resolution pattern for
+  Supplier Key / Stock Item Key, the DECLARE @LineageKey scalar-subquery
+  capture, the alias-prefixed join-delete replace phase, the BEGIN TRAN/COMMIT
+  wrapper around the delete+insert replace, pervasive bracket-quoted
+  space-containing identifiers and schema-qualified two-part object
+  references (dimension.*, fact.*, integration.*, sequences.*), the IDENTITY
+  surrogate key column on Fact.Purchase, and the STRING_AGG-wrapped
+  correlated TOP-N-without-ORDER-BY derived table in the cross-project
+  v_OrderToYearAnalytics view. No patterns from other GlobalSales_Project
+  domains (Sales/Orders, Inventory/Stock, Finance Analytics) are included.
+  All schema-qualification targets use the new independent Unity Catalog
+  name `purchasing`, not `globalsales`.
+
+rules:
+
+  - id: SX-001
+    dimension: Syntax
+    name: Procedure Header Directives Removal (SET NOCOUNT / SET XACT_ABORT)
+    intent: >
+      Remove the T-SQL session-level directives SET NOCOUNT ON and
+      SET XACT_ABORT ON from the header of Integration.GetPurchaseUpdates
+      (and any equivalent Purchases-domain procedure), which have no direct
+      Spark SQL equivalent — their intent is handled by Delta Lake's
+      transactional guarantees and Python exception handling.
+    activation:
+      preconditions:
+        - "Source procedure body contains SET NOCOUNT ON or SET NOCOUNT OFF"
+        - "Source procedure body contains SET XACT_ABORT ON or SET XACT_ABORT OFF"
+      scope: project
+    transformation:
+      source: |
+        CREATE PROCEDURE Integration.GetPurchaseUpdates
+        @LastCutoff datetime2(7),
+        @NewCutoff datetime2(7)
+        WITH EXECUTE AS OWNER
+        AS
+        BEGIN
+            SET NOCOUNT ON;
+            SET XACT_ABORT ON;
+            ...
+        END;
+      target: |
+        # SET NOCOUNT ON removed: not applicable in Spark SQL
+        # SET XACT_ABORT ON removed: Delta Lake ACID handles atomicity
+        def get_purchase_updates(last_cutoff, new_cutoff):
+            ...
+      algorithm:
+        - "Identify all occurrences of SET NOCOUNT {ON|OFF} and SET XACT_ABORT {ON|OFF} inside the procedure body."
+        - "Remove each statement and replace with a single-line comment documenting the removal and reason."
+        - "Do not remove surrounding blank lines or comments to preserve readability."
+        - "Flag any remaining session-level SET <option> statements not covered by this rule for manual review."
+    validation:
+      success_criteria:
+        - "No SET NOCOUNT or SET XACT_ABORT statements remain in generated code"
+        - "A comment explaining the removal is present at each removal site"
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "SET NOCOUNT ON;\nSET XACT_ABORT ON;\nSELECT 1;"
+          expected: "# SET NOCOUNT ON removed: not applicable in Spark SQL\n# SET XACT_ABORT ON removed: Delta Lake ACID handles atomicity\nSELECT 1;"
+          notes: "Evidenced verbatim in Integration.GetPurchaseUpdates's procedure header."
+    inheritance:
+      level: project
+      override: "A product-level override.yaml may narrow the fallback comment wording."
+      extend: "A product-level extensions.yaml may add handling for additional SET directives evidenced in that product's own procedures."
+      deactivate: "May be deactivated only if a future product in this project provably contains no SET NOCOUNT/XACT_ABORT usage."
+
+  - id: SX-002
+    dimension: Syntax
+    name: EXECUTE AS / WITH EXECUTE AS OWNER Removal
+    intent: >
+      Remove the WITH EXECUTE AS OWNER clause from the
+      Integration.GetPurchaseUpdates procedure definition. Databricks uses
+      Unity Catalog service principals and cluster-level permissions rather
+      than T-SQL impersonation context switching.
+    activation:
+      preconditions:
+        - "Source stored procedure definition contains WITH EXECUTE AS <context> (OWNER, CALLER, SELF, or a named user)"
+      scope: project
+    transformation:
+      source: |
+        CREATE PROCEDURE Integration.GetPurchaseUpdates
+        @LastCutoff datetime2(7),
+        @NewCutoff datetime2(7)
+        WITH EXECUTE AS OWNER
+        AS
+        BEGIN
+            ...
+        END;
+      target: |
+        # WITH EXECUTE AS OWNER removed: use Unity Catalog service principal permissions
+        # TODO: grant the Databricks service principal equivalent read access to
+        # purchasing.purchasing.purchaseorders, purchasing.warehouse.stockitems, etc.
+        def get_purchase_updates(last_cutoff, new_cutoff):
+            ...
+      algorithm:
+        - "Remove WITH EXECUTE AS <context> from the CREATE PROCEDURE / CREATE FUNCTION header."
+        - "Add a comment pointing to Unity Catalog service-principal permission configuration in place of the removed clause."
+        - "Emit a security TODO comment enumerating the objects the impersonated context previously needed access to."
+        - "Do not remove any business logic that followed the header."
+    validation:
+      success_criteria:
+        - "No WITH EXECUTE AS clause remains in generated code"
+        - "A security TODO comment is present identifying the equivalent Unity Catalog grants needed"
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "CREATE PROCEDURE Integration.GetPurchaseUpdates @LastCutoff datetime2(7), @NewCutoff datetime2(7) WITH EXECUTE AS OWNER AS BEGIN SET NOCOUNT ON; ... END;"
+          expected: "# TODO: configure Unity Catalog service principal permissions (was WITH EXECUTE AS OWNER)\ndef get_purchase_updates(last_cutoff, new_cutoff):\n    ..."
+          notes: "Evidenced verbatim in the GetPurchaseUpdates SQL Code block in as-is §5.1."
+    inheritance:
+      level: project
+      override: "A product override may substitute a specific Unity Catalog grant statement once the service principal is finalised."
+      extend: false
+      deactivate: "May be deactivated only if no procedure in this project's scope uses EXECUTE AS."
+
+  - id: SX-003
+    dimension: Syntax
+    name: CAST-to-date Passthrough
+    intent: >
+      Preserve the T-SQL CAST(<expr> AS date) construct used to derive
+      Date Key from Purchasing.PurchaseOrders.OrderDate — CAST syntax is
+      identical in Spark SQL for this simple type-narrowing case, so this
+      rule documents the passthrough and the accompanying type mapping
+      rather than a syntax rewrite.
+    activation:
+      preconditions:
+        - "Source SQL contains CAST(<expr> AS date) with no CONVERT-style format code and no TRY_CAST"
+      scope: project
+    transformation:
+      source: |
+        SELECT CAST(po.OrderDate AS date) AS [Date Key]
+        FROM Purchasing.PurchaseOrders AS po
+      target: |
+        SELECT CAST(po.order_date AS DATE) AS date_key
+        FROM purchasing.purchasing.purchaseorders AS po
+      algorithm:
+        - "Retain CAST(<expr> AS <type>) syntax unchanged — identical in Spark SQL."
+        - "Apply snake_case column renaming per the project's NM dimension rules to the casted expression and alias."
+        - "Map the SQL Server date type keyword to the equivalent Spark SQL DATE type per the project's TY dimension rules."
+        - "Do not introduce TRY_CAST or CONVERT here — neither is evidenced in this construct."
+    validation:
+      success_criteria:
+        - "CAST syntax compiles without modification in Databricks SQL"
+        - "Resulting column name and type follow NM/TY dimension conventions"
+      quality_dimensions:
+        - accuracy
+        - conformity
+      test_cases:
+        - input: "CAST(po.OrderDate AS date) AS [Date Key]"
+          expected: "CAST(po.order_date AS DATE) AS date_key"
+          notes: "Evidenced in Integration.GetPurchaseUpdates's extraction SELECT (as-is §5.1)."
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may extend this rule if it evidences CONVERT-style or TRY_CAST variants not seen in Purchases."
+      deactivate: false
+
+  - id: SX-004
+    dimension: Syntax
+    name: SCD2 Valid-Time Correlated TOP(1) Subquery Key Resolution Conversion
+    intent: >
+      Convert the T-SQL correlated TOP(1) ... ORDER BY [Valid From] scalar
+      subquery pattern — wrapped in COALESCE(..., 0) for an Unknown-key
+      fallback — used to resolve Supplier Key and Stock Item Key against
+      the SCD Type-2 Dimension.Supplier and Dimension.[Stock Item] valid-time
+      windows in Integration.MigrateStagedPurchaseData, into a set-based
+      Spark SQL / Delta Lake range-predicate join.
+    activation:
+      preconditions:
+        - "Source contains UPDATE <staging_alias> SET <key_col> = COALESCE((SELECT TOP(1) <surrogate_key> FROM <dim> WHERE <business_key_match> AND <asof_column> > <dim>.[Valid From] AND <asof_column> <= <dim>.[Valid To] ORDER BY <dim>.[Valid From]), 0) FROM <staging_table> AS <staging_alias>"
+        - "Referenced dimension table implements SCD Type-2 versioning with Valid From / Valid To columns"
+      scope: project
+    transformation:
+      source: |
+        UPDATE p
+            SET p.[Supplier Key] = COALESCE((SELECT TOP(1) s.[Supplier Key]
+                                         FROM Dimension.Supplier AS s
+                                         WHERE s.[WWI Supplier ID] = p.[WWI Supplier ID]
+                                         AND p.[Last Modified When] > s.[Valid From]
+                                         AND p.[Last Modified When] <= s.[Valid To]
+                                         ORDER BY s.[Valid From]), 0),
+                p.[Stock Item Key] = COALESCE((SELECT TOP(1) si.[Stock Item Key]
+                                           FROM Dimension.[Stock Item] AS si
+                                           WHERE si.[WWI Stock Item ID] = p.[WWI Stock Item ID]
+                                           AND p.[Last Modified When] > si.[Valid From]
+                                           AND p.[Last Modified When] <= si.[Valid To]
+                                           ORDER BY si.[Valid From]), 0)
+        FROM Integration.Purchase_Staging AS p;
+      target: |
+        MERGE INTO purchasing.integration.purchase_staging AS p
+        USING (
+          SELECT s.wwi_supplier_id, s.supplier_key, s.valid_from,
+                 ROW_NUMBER() OVER (PARTITION BY s.wwi_supplier_id ORDER BY s.valid_from) AS rn
+          FROM purchasing.dimension.supplier AS s
+        ) AS d
+        ON  d.wwi_supplier_id = p.wwi_supplier_id
+        AND p.last_modified_when > d.valid_from
+        AND p.last_modified_when <= COALESCE(d.valid_to, TIMESTAMP('9999-12-31'))
+        AND d.rn = 1
+        WHEN MATCHED THEN UPDATE SET p.supplier_key = d.supplier_key
+        -- rows with no matching dimension version keep their pre-populated default of 0 (Unknown)
+        -- companion Stock Item Key resolution follows the same pattern against purchasing.dimension.stock_item
+      algorithm:
+        - "Detect the correlated scalar subquery: TOP(1) <surrogate_key> FROM <dim> WHERE <business_key> = <staging_business_key> AND <asof_column> > Valid From AND <asof_column> <= Valid To ORDER BY Valid From, wrapped in COALESCE(..., 0)."
+        - "Rewrite as a range-predicate join (or Delta MERGE, since the source statement shape is an UPDATE-FROM): JOIN <dim> d ON d.<business_key> = p.<business_key> AND p.<asof_column> > d.valid_from AND p.<asof_column> <= d.valid_to, selecting COALESCE(d.<key>, 0) AS <key_col>. This replaces per-row correlated execution with a single set-based join."
+        - "Because more than one dimension version could satisfy the range predicate if source data quality degrades, add a deduplicating window function — ROW_NUMBER() OVER (PARTITION BY <business_key> ORDER BY valid_from) = 1 — to preserve the original 'earliest Valid From wins' tie-break expressed by TOP(1) ... ORDER BY [Valid From]."
+        - "Preserve the fallback to the Unknown sentinel key 0, either via COALESCE or by pre-seeding the key column to 0 and only updating matched rows (MERGE WHEN MATCHED)."
+        - "Where Valid To can be NULL for the currently-active dimension version, COALESCE the NULL to a high-sentinel date (e.g. TIMESTAMP('9999-12-31')) in the join predicate so the active version is still matched."
+        - "This rule addresses only the key-resolution predicate logic; convert the surrounding UPDATE statement shape and target catalog/schema qualification per SX-009."
+        - "Apply identically to the companion Stock Item Key resolution against purchasing.dimension.stock_item, which is resolved in the same combined UPDATE statement in the source."
+    validation:
+      success_criteria:
+        - "No correlated TOP(1) ... ORDER BY [Valid From] subquery remains for dimension key resolution"
+        - "A range-predicate join (or Delta MERGE) with a deduplicating window function replaces the correlated subquery"
+        - "Fallback to key 0 (Unknown) is preserved for unmatched or out-of-range business keys"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - consistency
+      test_cases:
+        - input: "COALESCE((SELECT TOP(1) s.[Supplier Key] FROM Dimension.Supplier AS s WHERE s.[WWI Supplier ID] = p.[WWI Supplier ID] AND p.[Last Modified When] > s.[Valid From] AND p.[Last Modified When] <= s.[Valid To] ORDER BY s.[Valid From]), 0)"
+          expected: "LEFT JOIN purchasing.dimension.supplier d ON d.wwi_supplier_id = p.wwi_supplier_id AND p.last_modified_when > d.valid_from AND p.last_modified_when <= COALESCE(d.valid_to, TIMESTAMP('9999-12-31')) QUALIFY ROW_NUMBER() OVER (PARTITION BY p.wwi_supplier_id ORDER BY d.valid_from) = 1 -- SELECT COALESCE(d.supplier_key, 0)"
+          notes: "Net-new dimension for this product per modernization-plan.md §5/§6.1."
+        - input: "COALESCE((SELECT TOP(1) si.[Stock Item Key] FROM Dimension.[Stock Item] AS si WHERE si.[WWI Stock Item ID] = p.[WWI Stock Item ID] AND p.[Last Modified When] > si.[Valid From] AND p.[Last Modified When] <= si.[Valid To] ORDER BY si.[Valid From]), 0)"
+          expected: "LEFT JOIN purchasing.dimension.stock_item d ON d.wwi_stock_item_id = p.wwi_stock_item_id AND p.last_modified_when > d.valid_from AND p.last_modified_when <= COALESCE(d.valid_to, TIMESTAMP('9999-12-31')) QUALIFY ROW_NUMBER() OVER (PARTITION BY p.wwi_stock_item_id ORDER BY d.valid_from) = 1 -- SELECT COALESCE(d.stock_item_key, 0)"
+          notes: "Reused conformed dimension per modernization-plan.md §3.1 risk 1 — cross-project maintenance question is open and does not block this syntax conversion."
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may extend this rule if a third valid-time lookup (beyond Supplier Key / Stock Item Key) is evidenced."
+      deactivate: "May be deactivated only if the product replaces valid-time dimension resolution with a different key-resolution strategy."
+
+  - id: SX-005
+    dimension: Syntax
+    name: DECLARE Variable Scalar-Subquery Assignment Conversion
+    intent: >
+      Convert the T-SQL DECLARE @LineageKey int = (<scalar subquery>)
+      construct — used in Integration.MigrateStagedPurchaseData to capture
+      the current open Lineage Key before the fact load — into a Python
+      variable assignment that executes the equivalent Spark SQL query and
+      extracts the scalar result, distinct from the @@IDENTITY/SCOPE_IDENTITY()
+      case.
+    activation:
+      preconditions:
+        - "Source procedure contains DECLARE @<name> <type> = (SELECT ...); where the subquery returns a single scalar value used later in the procedure body"
+      scope: project
+    transformation:
+      source: |
+        DECLARE @LineageKey int = (SELECT TOP(1) [Lineage Key]
+                                   FROM Integration.Lineage
+                                   WHERE [Table Name] = N'Purchase'
+                                   AND [Data Load Completed] IS NULL
+                                   ORDER BY [Lineage Key] DESC);
+      target: |
+        lineage_key_rows = spark.sql("""
+            SELECT lineage_key
+            FROM purchasing.integration.lineage
+            WHERE table_name = 'Purchase'
+              AND data_load_completed IS NULL
+            ORDER BY lineage_key DESC
+            LIMIT 1
+        """).collect()
+        if not lineage_key_rows:
+            raise RuntimeError("No open Lineage batch found for table 'Purchase'")
+        lineage_key = lineage_key_rows[0][0]
+      algorithm:
+        - "Identify DECLARE @<var> <type> = (<subquery>); statements."
+        - "Convert the subquery's TOP(1) to LIMIT 1, and apply NM/TY renaming to referenced tables/columns and catalog qualification per SX-009."
+        - "Emit a Python variable assignment that calls spark.sql(<converted_subquery>).collect() and extracts the first row's first column."
+        - "Because the subquery could return zero rows (e.g., no open batch), wrap the extraction in a zero-row guard that raises a descriptive RuntimeError rather than an unguarded index access."
+        - "Replace all later references to @<var> in the procedure body with the Python variable name."
+        - "If the variable is subsequently used inside another Spark SQL statement (e.g., stamped onto inserted rows), pass it as a bound parameter rather than via string concatenation."
+    validation:
+      success_criteria:
+        - "No DECLARE @variable = (subquery) constructs remain in generated code"
+        - "Scalar capture uses .collect() with an explicit zero-row guard, not an unguarded [0][0] index"
+        - "All later @variable references in the procedure body are replaced with the Python variable"
+      quality_dimensions:
+        - accuracy
+        - completeness
+        - validity
+      test_cases:
+        - input: "DECLARE @LineageKey int = (SELECT TOP(1) [Lineage Key] FROM Integration.Lineage WHERE [Table Name] = N'Purchase' AND [Data Load Completed] IS NULL ORDER BY [Lineage Key] DESC);"
+          expected: "lineage_key_rows = spark.sql(\"SELECT lineage_key FROM purchasing.integration.lineage WHERE table_name = 'Purchase' AND data_load_completed IS NULL ORDER BY lineage_key DESC LIMIT 1\").collect()\nif not lineage_key_rows:\n    raise RuntimeError(\"No open Lineage batch found for table 'Purchase'\")\nlineage_key = lineage_key_rows[0][0]"
+          notes: "Evidenced verbatim in Integration.MigrateStagedPurchaseData (as-is §5.4)."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: "May be deactivated only if this project's lineage-bookkeeping design abandons the DECLARE-and-scalar-subquery capture pattern entirely."
+
+  - id: SX-006
+    dimension: Syntax
+    name: Alias-Prefixed DELETE (Join-Delete) Conversion
+    intent: >
+      Convert the T-SQL join-delete shorthand DELETE <alias> FROM <table>
+      AS <alias> WHERE ... — used in the delete phase of
+      Integration.MigrateStagedPurchaseData ahead of the replace insert —
+      to ANSI/Spark SQL DELETE FROM <table> [AS <alias>] WHERE ... syntax,
+      which does not support an alias token immediately after the DELETE
+      keyword.
+    activation:
+      preconditions:
+        - "Source contains DELETE <alias> FROM <table> [AS] <alias> WHERE ... (optionally referencing other tables in the delete predicate)"
+      scope: project
+    transformation:
+      source: |
+        DELETE p FROM Fact.Purchase p
+        WHERE p.[WWI Purchase Order ID] IN (SELECT [WWI Purchase Order ID] FROM Integration.Purchase_Staging);
+      target: |
+        DELETE FROM purchasing.fact.purchase
+        WHERE wwi_purchase_order_id IN (
+          SELECT wwi_purchase_order_id FROM purchasing.integration.purchase_staging
+        );
+        -- NOTE: this delete-then-insert replace pattern is a known migration risk
+        -- (modernization-plan.md §3.1 risk 4) — a Delta MERGE INTO or an equivalent
+        -- atomic transaction is recommended over separate DELETE + INSERT statements
+        -- to avoid a partial-write window; see SX-007 for the transaction wrapper.
+      algorithm:
+        - "Detect the pattern DELETE <alias> FROM <table> [AS] <alias> WHERE ...."
+        - "Remove the leading <alias> token that appears immediately after the DELETE keyword — Spark SQL DELETE FROM has no equivalent position for it."
+        - "Retain (or introduce) AS <alias> on the FROM clause only if the alias is referenced elsewhere in the WHERE clause; a single-table alias on the FROM side is valid in Spark SQL DELETE FROM."
+        - "Apply schema-qualification and identifier renaming to the target table and referenced columns per SX-008/SX-009."
+        - "Flag the surrounding delete-then-insert replace pattern with a comment recommending an atomic Delta MERGE INTO or equivalent transactional wrapper, per the known migration risk documented for this load path."
+    validation:
+      success_criteria:
+        - "No alias token appears between DELETE and FROM in generated SQL"
+        - "Delete predicate semantics (which rows are removed) are unchanged from the source"
+        - "A comment flags the delete-then-insert replace pattern for the atomicity risk documented in the modernization plan"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "DELETE p FROM Fact.Purchase p WHERE p.[WWI Purchase Order ID] IN (SELECT [WWI Purchase Order ID] FROM Integration.Purchase_Staging);"
+          expected: "DELETE FROM purchasing.fact.purchase WHERE wwi_purchase_order_id IN (SELECT wwi_purchase_order_id FROM purchasing.integration.purchase_staging);"
+          notes: "Evidenced verbatim in Integration.MigrateStagedPurchaseData's delete phase (as-is §4.4 step 4); confirms modernization-plan.md §3.1 risk 4."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: "May be deactivated only if the load procedure is redesigned to a Delta MERGE INTO that eliminates the standalone DELETE statement."
+
+  - id: SX-007
+    dimension: Syntax
+    name: Explicit Transaction Control Conversion (Delete+Insert Replace Wrapper)
+    intent: >
+      Convert the T-SQL BEGIN TRAN / COMMIT wrapper around the delete-then-insert
+      replace phase of Integration.MigrateStagedPurchaseData into a Delta Lake
+      transactional pattern, preserving the atomicity guarantee that the
+      original explicit transaction provided.
+    activation:
+      preconditions:
+        - "Source code wraps the DELETE (join-delete replace phase) and subsequent INSERT into the same target table inside BEGIN TRAN[SACTION] / COMMIT [TRAN[SACTION]]"
+      scope: project
+    transformation:
+      source: |
+        BEGIN TRAN;
+        DELETE p FROM Fact.Purchase p
+        WHERE p.[WWI Purchase Order ID] IN (SELECT [WWI Purchase Order ID] FROM Integration.Purchase_Staging);
+        INSERT Fact.Purchase (...)
+        SELECT ... FROM Integration.Purchase_Staging;
+        COMMIT;
+      target: |
+        # Delta Lake: prefer a single atomic MERGE INTO over separate DELETE + INSERT
+        # (see SX-006 note on modernization-plan.md §3.1 risk 4). If DELETE + INSERT
+        # must be retained, wrap both statements in a Python try/except so a failure
+        # after DELETE cannot leave Fact.Purchase in a partially-replaced state.
+        try:
+            spark.sql("DELETE FROM purchasing.fact.purchase WHERE wwi_purchase_order_id IN (SELECT wwi_purchase_order_id FROM purchasing.integration.purchase_staging)")
+            spark.sql("INSERT INTO purchasing.fact.purchase (...) SELECT ... FROM purchasing.integration.purchase_staging")
+        except Exception as e:
+            raise RuntimeError(f"Purchase replace-load failed: {e}") from e
+      algorithm:
+        - "Detect BEGIN TRAN[SACTION] / COMMIT [TRAN[SACTION]] blocks wrapping a DELETE immediately followed by an INSERT into the same target table."
+        - "Prefer rewriting the DELETE+INSERT pair as a single Delta MERGE INTO statement (per SX-004's MERGE shape) — this is inherently atomic and removes the need for an explicit transaction wrapper."
+        - "If the delete-then-insert shape is retained as-is, wrap both statements in a Python try/except block so neither runs to completion without the other, since Spark SQL has no BEGIN TRAN/COMMIT equivalent."
+        - "Remove the BEGIN TRAN / COMMIT keywords themselves; do not remove the business logic between them."
+        - "Preserve business-logic comments adjacent to the original transaction block."
+    validation:
+      success_criteria:
+        - "No BEGIN TRAN[SACTION] or COMMIT [TRAN[SACTION]] remains in generated code"
+        - "The delete+insert replace is either a single MERGE INTO or is wrapped in a Python try/except that fails atomically"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - consistency
+      test_cases:
+        - input: "BEGIN TRAN;\nDELETE p FROM Fact.Purchase p WHERE ...;\nINSERT Fact.Purchase (...) SELECT ... FROM Integration.Purchase_Staging;\nCOMMIT;"
+          expected: "try:\n    spark.sql('DELETE FROM purchasing.fact.purchase WHERE ...')\n    spark.sql('INSERT INTO purchasing.fact.purchase (...) SELECT ... FROM purchasing.integration.purchase_staging')\nexcept Exception as e:\n    raise RuntimeError(f'Purchase replace-load failed: {e}') from e"
+          notes: "Transaction wrapper described narratively in as-is §3.2 (Processing row) and §4.4 step 5; confirms modernization-plan.md §3.1 risk 4."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: "May be deactivated once the load procedure is redesigned as a single Delta MERGE INTO, per SX-006's recommendation."
+
+  - id: SX-008
+    dimension: Syntax
+    name: Bracket-Quoted Identifier Removal (Space-Containing Identifiers)
+    intent: >
+      Remove T-SQL [bracket] identifier quoting from the space-containing
+      column and table names used pervasively throughout the Purchases
+      domain's SQL (e.g. [Supplier Key], [WWI Purchase Order ID],
+      [Valid From], [Valid To], [Last Modified When], [Lineage Key],
+      [ETL Cutoff]), converting each to a snake_case identifier valid in
+      Spark SQL without quoting.
+    activation:
+      preconditions:
+        - "Source SQL contains [bracket]-quoted identifiers, especially those containing embedded spaces"
+      scope: project
+    transformation:
+      source: |
+        SELECT p.[Supplier Key], p.[Stock Item Key], p.[WWI Purchase Order ID],
+               p.[Ordered Outers], p.[Ordered Quantity], p.[Received Outers],
+               p.[Is Order Finalized], p.[Lineage Key]
+        FROM Integration.[Purchase_Staging] AS p
+      target: |
+        SELECT p.supplier_key, p.stock_item_key, p.wwi_purchase_order_id,
+               p.ordered_outers, p.ordered_quantity, p.received_outers,
+               p.is_order_finalized, p.lineage_key
+        FROM purchasing.integration.purchase_staging AS p
+      algorithm:
+        - "Strip [bracket] quoting from all identifiers."
+        - "Convert each identifier to snake_case per the project's NM dimension rules (embedded spaces become underscores; no backtick quoting is needed once converted)."
+        - "If the resulting identifier collides with a Spark SQL reserved word (e.g. a hypothetical [Date] column), apply the project's reserved-word renaming or backtick-quoting fallback per the NM dimension rules rather than inventing a new convention here."
+        - "Log identifiers whose bracket-quoted source name differs materially from its snake_case target (beyond simple space-to-underscore conversion) for reviewer visibility."
+    validation:
+      success_criteria:
+        - "No [bracket]-quoted identifiers remain in generated SQL"
+        - "All space-containing identifiers are converted to snake_case"
+      quality_dimensions:
+        - conformity
+        - consistency
+      test_cases:
+        - input: "p.[Supplier Key], p.[WWI Purchase Order ID], p.[Last Modified When]"
+          expected: "p.supplier_key, p.wwi_purchase_order_id, p.last_modified_when"
+          notes: "Bracket-quoted space-containing identifiers evidenced pervasively across as-is §3.1, §4.4, and §5.1-5.4 SQL Code blocks."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: SX-009
+    dimension: Syntax
+    name: Schema-Qualified Object Reference Conversion to Unity Catalog (purchasing)
+    intent: >
+      Convert the T-SQL two-part schema.object references used throughout
+      the Purchases domain (dimension.*, fact.*, integration.*, sequences.*)
+      to Databricks Unity Catalog three-part naming under the new,
+      independent `purchasing` catalog established for this project —
+      distinct from GlobalSales_Project's `globalsales` catalog even though
+      both share the same source database and two of the three referenced
+      dimensions were originally migrated under `globalsales`.
+    activation:
+      preconditions:
+        - "Source SQL contains schema-qualified references such as dimension.*, fact.*, integration.*, sequences.*"
+      scope: project
+    transformation:
+      source: |
+        FROM Fact.Purchase p
+        JOIN Dimension.Supplier s ON ...
+        JOIN Dimension.[Stock Item] si ON ...
+        FROM Integration.Purchase_Staging
+        FROM Integration.Lineage
+        FROM Integration.[ETL Cutoff]
+      target: |
+        FROM purchasing.fact.purchase p
+        JOIN purchasing.dimension.supplier s ON ...
+        JOIN purchasing.dimension.stock_item si ON ...
+        FROM purchasing.integration.purchase_staging
+        FROM purchasing.integration.lineage
+        FROM purchasing.integration.etl_cutoff
+      algorithm:
+        - "Prefix every dimension.*, fact.*, integration.*, and sequences.* reference with the `purchasing` catalog: purchasing.<schema>.<table>."
+        - "Apply snake_case renaming to the table/view name and strip bracket quoting per SX-008 (e.g. Dimension.[Stock Item] -> purchasing.dimension.stock_item)."
+        - "For the two reused conformed dimensions (Supplier's own dimension is net-new; Stock Item and Date are reused from GlobalSales_Project), qualify with the `purchasing` catalog per this project's independent-catalog decision; do NOT reference `globalsales.dimension.*` directly from Purchasing_Project code — cross-catalog access, if adopted, must go through the explicit Unity Catalog grant/replication mechanism the project resolves per modernization-plan.md §3.1 risk 1, not an inline cross-catalog literal reference baked into ETL SQL."
+        - "sequences.* references (e.g. sequences.lineagekey) are resolved per the sequence/IDENTITY conversion rules (SX-010) rather than a plain schema requalification, since the object itself changes shape on the target platform."
+        - "If the target catalog name is not yet finalised for a given deployment, use a placeholder {{TARGET_CATALOG}} defaulting to `purchasing` and emit a configuration TODO."
+    validation:
+      success_criteria:
+        - "All in-scope schema.table references use purchasing.<schema>.<table> three-part naming"
+        - "No reference to the globalsales catalog appears inline in generated Purchasing_Project code"
+        - "Cross-project dimension reuse is flagged for the architectural decision rather than silently hardcoded"
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "FROM Fact.Purchase p JOIN Dimension.Supplier s ON s.[Supplier Key] = p.[Supplier Key]"
+          expected: "FROM purchasing.fact.purchase p JOIN purchasing.dimension.supplier s ON s.supplier_key = p.supplier_key"
+        - input: "FROM Integration.[ETL Cutoff] WHERE [Table Name] = N'Purchase'"
+          expected: "FROM purchasing.integration.etl_cutoff WHERE table_name = 'Purchase'"
+        - input: "JOIN Dimension.[Stock Item] si ON si.[WWI Stock Item ID] = p.[WWI Stock Item ID]"
+          expected: "JOIN purchasing.dimension.stock_item si ON si.wwi_stock_item_id = p.wwi_stock_item_id"
+          notes: "Reused conformed dimension per modernization-plan.md §3.1 risk 1 — qualified under `purchasing`, not `globalsales`, pending the cross-project dimension-sharing decision."
+    inheritance:
+      level: project
+      override: "The target catalog name may be overridden only if a future project-level decision changes `purchasing` to a different catalog name."
+      extend: true
+      deactivate: false
+
+  - id: SX-010
+    dimension: Syntax
+    name: IDENTITY Surrogate Key Column Conversion (Purchase Key)
+    intent: >
+      Convert the T-SQL IDENTITY column definition backing Fact.Purchase's
+      Purchase Key surrogate key (the non-FK half of its composite PK with
+      Date Key) to a Databricks-compatible identity/auto-increment column
+      definition.
+    activation:
+      preconditions:
+        - "Source DDL contains an IDENTITY(seed, increment) column definition on a fact or dimension table in this product's scope"
+      scope: project
+    transformation:
+      source: |
+        CREATE TABLE Fact.Purchase (
+            [Purchase Key] int NOT NULL IDENTITY(1, 1),
+            [Date Key] date NOT NULL,
+            [Supplier Key] int NOT NULL,
+            [Stock Item Key] int NOT NULL,
+            ...
+            CONSTRAINT PK_Fact_Purchase PRIMARY KEY ([Purchase Key], [Date Key])
+        );
+      target: |
+        CREATE TABLE purchasing.fact.purchase (
+            purchase_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1),
+            date_key DATE NOT NULL,
+            supplier_key BIGINT NOT NULL,
+            stock_item_key BIGINT NOT NULL,
+            ...
+        )
+        -- composite PK (purchase_key, date_key) is documented, not enforced —
+        -- Delta Lake does not support declarative composite PRIMARY KEY constraints
+        -- the same way SQL Server does; enforce via NOT NULL + uniqueness checks
+        -- in the ETL / DQ layer instead.
+      algorithm:
+        - "IDENTITY(seed, increment) in CREATE TABLE -> BIGINT GENERATED ALWAYS AS IDENTITY (START WITH <seed> INCREMENT BY <increment>); widen INT to BIGINT to support distributed generation scale."
+        - "Composite PRIMARY KEY constraints referencing the IDENTITY column plus a business/FK column: convert to a comment documenting the intended uniqueness grain, since Delta Lake PRIMARY KEY constraints are informational, not enforced, in most Databricks Runtime versions — add a TODO to enforce via a DQ check or MERGE-time uniqueness guard if enforcement is required."
+        - "Apply snake_case renaming and catalog/schema qualification per SX-008/SX-009."
+        - "Remove @@IDENTITY / SCOPE_IDENTITY() references associated with this column per the project's system-variable handling, if any are evidenced."
+    validation:
+      success_criteria:
+        - "No IDENTITY(seed, increment) column definition remains without a GENERATED ALWAYS AS IDENTITY equivalent"
+        - "The identity column's target type is BIGINT, not INT"
+        - "Composite PK intent is documented even though not declaratively enforced"
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - uniqueness
+      test_cases:
+        - input: "[Purchase Key] int NOT NULL IDENTITY(1, 1)"
+          expected: "purchase_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1)"
+          notes: "Evidenced in as-is §3.2 (Fact Tables row): 'IDENTITY Purchase Key + Date Key composite PK'."
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may extend this rule with a specific uniqueness-enforcement mechanism once the DQ approach for composite keys is decided."
+      deactivate: false
+
+  - id: SX-011
+    dimension: Syntax
+    name: Native STRING_AGG Correlated Derived-Table (TOP N, No ORDER BY) Conversion
+    intent: >
+      Convert the T-SQL native STRING_AGG() call wrapping a correlated
+      derived table using TOP N without an ORDER BY — evidenced in the
+      cross-project Analytics.v_OrderToYearAnalytics view's package-matched
+      purchase breadcrumb column (ORDER_ID_PURCH), which reads Fact.Purchase
+      directly — to a Spark SQL STRING_AGG / ARRAY_JOIN(COLLECT_LIST(...))
+      equivalent, and explicitly flag the non-deterministic TOP-N-without-
+      ORDER-BY, non-unique-join-column pattern for a data-quality fix. This
+      rule is informational for Purchasing_Project: the view itself remains
+      owned/deployed by GlobalSales_Project (modernization-plan.md §3.1
+      risk 2/3) and is not built by this project, but the pattern reads
+      Fact.Purchase directly and must be understood by whichever project
+      ultimately re-points or rebuilds it.
+    activation:
+      preconditions:
+        - "A downstream artifact reading Fact.Purchase contains STRING_AGG(<expr>, <separator>) FROM (SELECT TOP N <col> FROM Fact.Purchase WHERE <correlated_condition>) with no ORDER BY inside the derived table"
+      scope: project
+    transformation:
+      source: |
+        (SELECT STRING_AGG(Order_Purch, '\') FROM (
+            SELECT TOP 5 p.[Stock Item Key] Order_Purch
+            FROM Fact.Purchase p
+            WHERE fo.Package = p.Package
+          ) p
+          WHERE p.Order_Purch < fo.[Stock Item Key]
+        ) AS ORDER_ID_PURCH
+      target: |
+        (SELECT STRING_AGG(order_purch, '\\')
+         FROM (
+           SELECT stock_item_key AS order_purch
+           FROM purchasing.fact.purchase p
+           WHERE fo.package = p.package
+             AND p.stock_item_key < fo.stock_item_key
+           ORDER BY stock_item_key   -- added: source TOP 5 had no ORDER BY (non-deterministic); see migration note
+           LIMIT 5
+         )
+        ) AS order_id_purch
+        -- Fallback if STRING_AGG unavailable on the consuming project's runtime:
+        -- ARRAY_JOIN(COLLECT_LIST(order_purch), '\\')
+        -- NOTE: fo.* still refers to a GlobalSales_Project-owned Fact.Order row;
+        -- this rule documents only the Fact.Purchase-side syntax conversion, not
+        -- the cross-project resolution of risk 2/3 in modernization-plan.md.
+      algorithm:
+        - "Native STRING_AGG(expr, sep) is supported in Databricks Runtime / Spark SQL 3.4+ with near-identical syntax; pass the function name and separator through unchanged, applying only column renaming per NM rules."
+        - "Convert the correlated derived table's TOP N to LIMIT N, moving the correlated filter (fo.Package = p.Package, p.Order_Purch < fo.[Stock Item Key]) into the derived table's WHERE clause so it can be evaluated set-based rather than as an outer WHERE on the derived table alias."
+        - "Because the source TOP N has no ORDER BY, results are non-deterministic between runs. Inject an explicit ORDER BY on the comparison column (here Stock Item Key) into the LIMIT-bound derived table, and add a migration-notes comment documenting the added ordering as a determinism/data-quality fix over the source."
+        - "If the target Spark runtime does not support STRING_AGG, fall back to ARRAY_JOIN(COLLECT_LIST(<expr>), '<separator>')."
+        - "Flag the underlying join column (here Package) with a data-quality TODO, since it is documented as a non-unique/fuzzy join key for this relationship — the conversion must preserve the source's fuzzy-match business intent, not silently make it appear authoritative."
+        - "Qualify Fact.Purchase as purchasing.fact.purchase per SX-009 regardless of which project ultimately hosts this view, since Purchase Key resolution now lives in Purchasing_Project."
+    validation:
+      success_criteria:
+        - "STRING_AGG or ARRAY_JOIN(COLLECT_LIST(...)) produces the same delimiter-joined output as the source"
+        - "TOP N derived table without ORDER BY is flagged and given an explicit ORDER BY for determinism"
+        - "Non-unique join column usage is flagged with a data-quality note in the migration output"
+        - "Fact.Purchase is qualified as purchasing.fact.purchase, not globalsales.fact.purchase, in the converted output"
+      quality_dimensions:
+        - accuracy
+        - consistency
+        - validity
+      test_cases:
+        - input: "(SELECT STRING_AGG(Order_Purch, '\\') FROM (SELECT TOP 5 p.[Stock Item Key] Order_Purch FROM Fact.Purchase p WHERE fo.Package = p.Package) p WHERE p.Order_Purch < fo.[Stock Item Key]) AS ORDER_ID_PURCH"
+          expected: "(SELECT STRING_AGG(order_purch, '\\\\') FROM (SELECT stock_item_key AS order_purch FROM purchasing.fact.purchase p WHERE fo.package = p.package AND p.stock_item_key < fo.stock_item_key ORDER BY stock_item_key LIMIT 5)) AS order_id_purch"
+          notes: "ORDER BY added for determinism; Package non-uniqueness flagged as a pre-existing data-quality caveat, not silently resolved. View itself is owned by GlobalSales_Project/Sales_Orders per modernization-plan.md §3.1 risk 2 — this rule documents only the Fact.Purchase-facing syntax."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: "May be deactivated for Purchasing_Project if the cross-project dependency in risk 2/3 is resolved by fully replicating Fact.Purchase into globalsales, removing the need to reason about this pattern from the Purchasing_Project side."

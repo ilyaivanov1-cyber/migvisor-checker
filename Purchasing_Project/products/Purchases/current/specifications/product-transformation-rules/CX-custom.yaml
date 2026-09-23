@@ -1,0 +1,112 @@
+dimension: Custom (Product-Specific)
+prefix: CX
+project: "Purchasing_Project"
+product: "Purchases"
+source_platform: "Microsoft SQL Server 2014 (wideworldimportersdw)"
+target_platform: "Databricks (Delta Lake lakehouse)"
+generated: "2026-09-21"
+note: >
+  CX has no project-level rule set — it is a product-only "Custom" dimension
+  introduced solely because of a Purchases-specific gap (CX-P01) that no
+  active project dimension (PL, NM, TY, OB, SX, PE, LN) covers. This
+  consolidated file is therefore built from scratch from the single
+  new-rule entry found in
+  products/Purchases/current/specifications/product-transformation-rules/new-rules.yaml.
+  There is nothing to inherit, override, extend, or deactivate.
+inheritance:
+  project_rules_version: "20260921-151140"
+  applied_overrides: []
+  applied_extensions: []
+  applied_deactivations: []
+  new_rules: ["CX-P01"]
+
+rules:
+  - id: CX-P01
+    dimension: Custom (Product-Specific)
+    name: Preserve Ordered Quantity as an Explicitly Stored, Once-Computed Derived Measure
+    intent: >
+      fact.purchase's Ordered Quantity measure is a derived value
+      (Ordered Outers x Quantity Per Outer) that arrives at the fact
+      insert already resolved — Integration.MigrateStagedPurchaseData
+      inserts it as a plain pass-through column from
+      Integration.Purchase_Staging; it is never recomputed by the fact
+      load itself. No general project rule (TY-030 covers SQL Server
+      DDL-level computed columns only, i.e. `col AS <expression>`
+      definitions, not business-logic values computed upstream in an
+      ETL step) captures the requirement that this value must continue
+      to be computed exactly once, upstream of the fact load, and
+      stored as a physical column — not re-derived at query time or
+      via a Delta `GENERATED ALWAYS AS` computed column. This rule
+      closes that gap so the target implementation does not silently
+      regress to a live-recomputed value that could drift from the
+      source system's point-in-time semantics if Quantity Per Outer
+      (a stock-item packaging attribute) changes after the order was
+      placed. Not an override or extension of any existing rule, because
+      no project-level rule addresses ETL-computed business measures (as
+      distinct from SQL Server DDL computed columns, which is TY-030's
+      narrower scope). Scoped to Purchases because Ordered Quantity is a
+      fact.purchase-owned measure; no equivalent derived-measure pattern
+      was evidenced for any other product's as-is analysis at the time
+      this rule was written.
+    activation:
+      preconditions:
+        - The staging/enrichment step that populates the fact.purchase
+          load batch has access to both Ordered Outers and Quantity Per
+          Outer (or the equivalent stock-item packaging attribute) prior
+          to the MERGE/replace operation defined by PE-007 / OB-005.
+      scope: product
+    transformation:
+      source: |
+        -- Integration.MigrateStagedPurchaseData: Ordered Quantity arrives
+        -- pre-resolved from staging; the fact INSERT is a pure pass-through.
+        INSERT INTO Fact.Purchase (
+            [Date Key], [Supplier Key], [Stock Item Key],
+            [WWI Purchase Order ID], [Ordered Outers], [Ordered Quantity],
+            [Received Outers], [Package], [Is Order Finalized], [Lineage Key]
+        )
+        SELECT
+            [Date Key], [Supplier Key], [Stock Item Key],
+            [WWI Purchase Order ID], [Ordered Outers], [Ordered Quantity],
+            [Received Outers], [Package], [Is Order Finalized], @LineageKey
+        FROM Integration.Purchase_Staging;
+      target: |
+        # Compute once, upstream of the MERGE, in the staging/enrichment step:
+        enriched_df = staging_df.withColumn(
+            "ordered_quantity",
+            col("ordered_outers") * col("quantity_per_outer")
+        )
+        # ordered_quantity is then carried as a physical column into the
+        # MERGE INTO purchasing.fact.purchase target-side replace
+        # operation defined by PE-007 / OB-005. It must NOT be implemented
+        # as a Delta Lake `GENERATED ALWAYS AS (ordered_outers *
+        # quantity_per_outer)` computed column on fact.purchase, because a
+        # generated column recomputes against the CURRENT value of
+        # quantity_per_outer rather than the value in effect at order time,
+        # diverging from the source system's frozen, point-in-time semantics.
+      algorithm:
+        - "Step 1: During to-be design, confirm whether Quantity Per Outer is sourced from dimension.stock_item or carried directly on the staging extract for the batch being loaded."
+        - "Step 2: Compute ordered_quantity = ordered_outers * quantity_per_outer in the staging/enrichment notebook step, before the MERGE INTO / targeted-replace operation runs (per PE-007 / OB-005)."
+        - "Step 3: Persist ordered_quantity as an explicit BIGINT (or INT, matching TY-003/TY-004 precision mapping) column on purchasing.fact.purchase."
+        - "Step 4: Do not define ordered_quantity as a Delta Lake GENERATED ALWAYS AS computed column — this would re-derive the value against present-day reference data rather than freezing it at load time, breaking parity with the source system's behavior."
+        - "Step 5: Add a regression test asserting ordered_quantity equals ordered_outers * quantity_per_outer for every row in a loaded batch, with zero tolerance."
+    validation:
+      success_criteria:
+        - "ordered_quantity is a stored, non-computed column on purchasing.fact.purchase."
+        - "No GENERATED ALWAYS AS clause is used for this column in the target DDL."
+        - "A regression test confirms ordered_quantity = ordered_outers * quantity_per_outer for 100% of rows in every loaded batch, with zero tolerance."
+      quality_dimensions:
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "Staging row with ordered_outers = 10 and quantity_per_outer = 12, prior to the MERGE INTO fact.purchase."
+          expected: "fact.purchase.ordered_quantity = 120, persisted as a physical stored column value, verified via direct SELECT against the physical Delta table (not a view, and not a GENERATED ALWAYS AS computed column)."
+          notes: >
+            Confirms ordered_quantity is computed exactly once, upstream of
+            the fact load, and frozen at that point-in-time value rather
+            than being re-derived at query time if quantity_per_outer later
+            changes for the stock item.
+    inheritance:
+      level: product
+      override: "N/A — no project-level CX rule exists to override; this rule originates at product level."
+      extend: "N/A — no project-level CX rule exists to extend; this rule originates at product level."
+      deactivate: "May be deactivated for Purchases only if a future to-be redesign moves Ordered Quantity computation into a certified upstream data product where point-in-time freezing is guaranteed by another enforced control."

@@ -1,0 +1,144 @@
+# Purchases — ODPS 4.1 Product Definition
+# Generated: 2026-09-22 | Stage: define
+
+schema: https://opendataproducts.org/v4.1/schema/odps.yaml
+version: "4.1"
+
+product:
+
+  # ---------------------------------------------------------------------------
+  # Details
+  # ---------------------------------------------------------------------------
+  details:
+    en:
+      name: Purchases
+      productID: Purchases
+      description: >
+        The supplier purchase order transaction fact (purchasing.fact.purchase),
+        capturing ordered versus received quantities by date, supplier, and stock
+        item. Sourced via a Databricks-native Bronze-to-Silver notebook and
+        Workflow pipeline (staging extraction -> dimension key resolution ->
+        scoped Delta MERGE) running under the standalone Unity Catalog
+        `purchasing`. Grain: one row per purchase order line as of the current
+        load window, replaced via a scoped Delta MERGE keyed on
+        wwi_purchase_order_id.
+      valueProposition: >
+        Supports monitoring of procurement/purchasing volume and fulfillment
+        progress by comparing ordered quantities against received quantities per
+        supplier and stock item, using dimension keys resolved through a
+        valid-time (SCD2-aware) range-join lookup so historical reporting stays
+        consistent with dimension versions at the time of the transaction. Also
+        underpins three existing GlobalSales_Project-owned analytical artifacts
+        that reference this fact table across a Unity Catalog boundary now that
+        Purchases has moved to its own standalone project and catalog.
+      type: dataset
+      status: draft
+      visibility: organisation
+
+  # ---------------------------------------------------------------------------
+  # Input Ports (extension — not native ODPS)
+  # ---------------------------------------------------------------------------
+  x-inputPorts:
+    - name: purchase_staging
+      type: delta_table
+      location: purchasing.stg.purchase_staging
+      format: delta
+      frequency: incremental (per-batch, watermark-bounded against purchasing.meta.etl_cutoff)
+
+    - name: supplier_dimension
+      type: delta_table
+      location: purchasing.dim.supplier
+      format: delta
+      frequency: on-demand (valid-time range-join lookup at load time)
+
+    - name: stock_item_dimension
+      type: delta_table
+      location: purchasing.dim.stock_item
+      format: delta
+      frequency: "[USER INPUT REQUIRED] (PL-008/OB-002 — cross-catalog sharing strategy not yet decided; affects read frequency/mechanism)"
+
+    - name: date_dimension
+      type: delta_table
+      location: purchasing.dim.date
+      format: delta
+      frequency: "n/a — declarative FK target only, no active load-time lookup performed"
+
+  # ---------------------------------------------------------------------------
+  # Output Ports (dataAccess)
+  # ---------------------------------------------------------------------------
+  dataAccess:
+    default:
+      outputPortType: "[USER INPUT REQUIRED]"
+      outputPortURL: "[USER INPUT REQUIRED] (PL-009/OB-008 — cross-catalog exposure mechanism not yet decided: Unity Catalog cross-catalog GRANT SELECT vs. federated/replicated read-only copy)"
+      description: >
+        No purchase-exclusive analytical report is owned by this product. Three
+        artifacts owned by GlobalSales_Project/Sales_Orders read
+        purchasing.fact.purchase directly across the catalog boundary:
+        globalsales.mart.v_order_to_year_analytics, the "wwidw purchase and sale
+        per stockitem dynamic" report, and the "wwidw-ordered-by-supplier"
+        report. All three require a resolved cross-catalog exposure mechanism
+        before they can be re-pointed at this product's output.
+      knownConsumers: 3
+
+  # ---------------------------------------------------------------------------
+  # Data Quality
+  # ---------------------------------------------------------------------------
+  dataQuality:
+    default:
+      - dimension: consistency
+        measuredValue: >
+          QA-001: row-count reconciliation between the staged batch and
+          post-load purchasing.fact.purchase for the affected
+          wwi_purchase_order_id set — zero-tolerance, blocking on mismatch.
+      - dimension: accuracy
+        measuredValue: >
+          QA-002: Unknown-key (0) fallback-rate monitoring for
+          supplier_key/stock_item_key resolution against a rolling historical
+          baseline — non-blocking; business-confirmed threshold not yet set.
+      - dimension: conformity
+        measuredValue: >
+          QA-003: referential-integrity LEFT ANTI JOIN assertions for
+          supplier_key, stock_item_key, and date_key against
+          purchasing.dim.supplier / purchasing.dim.stock_item /
+          purchasing.dim.date respectively — non-blocking, orphans written to
+          purchasing.stg.dq_rejections.
+
+  # ---------------------------------------------------------------------------
+  # SLA
+  # ---------------------------------------------------------------------------
+  SLA:
+    default:
+      - dimension: updateFrequency
+        measuredValue: incremental (watermark-bounded extraction against purchasing.meta.etl_cutoff)
+      - dimension: latency
+        measuredValue: "[USER INPUT REQUIRED]"
+      - dimension: uptime
+        measuredValue: "[USER INPUT REQUIRED]"
+
+  # No `contract` key — no data contract exists yet for this product.
+
+# ---------------------------------------------------------------------------
+# Pending decisions carried forward unresolved from to-be.md / catalog.yaml
+# ---------------------------------------------------------------------------
+pendingDecisions:
+  - id: PL-008/OB-002
+    description: >
+      Cross-catalog sharing strategy for the reused purchasing.dim.stock_item
+      and purchasing.dim.date dimensions: independently duplicate/maintain under
+      purchasing, or a cross-catalog grant/reference back to globalsales.
+
+  - id: PL-009/OB-008
+    description: >
+      Cross-catalog exposure mechanism for the three GlobalSales_Project-owned
+      consumers reading purchasing.fact.purchase directly — Unity Catalog
+      cross-catalog GRANT SELECT vs. federated/replicated read-only copy.
+
+  - id: QA-002
+    description: >
+      Business-confirmed baseline threshold for the supplier_key/stock_item_key
+      Unknown-key (0) fallback rate is not yet set.
+
+  - id: CX-P02
+    description: >
+      Process Type, Data Access and Restrictions, and Business DQ Rules
+      (to-be.md fields 3, 8, 12) remain [USER INPUT REQUIRED].

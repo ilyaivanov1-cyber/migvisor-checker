@@ -1,0 +1,395 @@
+dimension: Objects
+prefix: OB
+project: "Purchasing_Project"
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-21"
+
+rules:
+
+  - id: OB-001
+    dimension: Objects
+    name: "Net-New Supplier Dimension to Delta Managed SCD2 Table"
+    intent: "Migrate the net-new dimension.supplier table — first migrated by this project, not previously present in any target lakehouse — from Microsoft SQL Server 2014 to a Delta Lake managed table in the new purchasing catalog, preserving its SCD Type-2 (valid-time) structure exactly."
+    activation:
+      preconditions:
+        - "Source object is the dimension.supplier table on wideworldimportersdw (Microsoft SQL Server 2014)"
+        - "Table carries a business key (WWI Supplier ID) and a SCD2 valid-time window (Valid From / Valid To)"
+        - "Unity Catalog catalog purchasing and schema purchasing.dim exist"
+      scope: project
+    transformation:
+      source: "dimension.supplier — SQL Server table, SCD Type-2, business key WWI Supplier ID, surrogate key Supplier Key, Valid From/Valid To validity window"
+      target: "purchasing.dim.supplier — Delta Lake managed table registered in Unity Catalog, same SCD2 structure"
+      algorithm:
+        - "Map dimension.supplier to purchasing.dim.supplier (snake_case, strip schema prefix)."
+        - "Translate all column data types per the TY (Types) dimension rules."
+        - "Preserve WWI Supplier ID as the business key and Valid From/Valid To as the SCD2 validity window columns unchanged in semantics."
+        - "Replace the SQL Server IDENTITY-generated Supplier Key with a BIGINT GENERATED ALWAYS AS IDENTITY column, or a Python-managed surrogate key if cross-batch coordination with other net-new dimensions is required."
+        - "Set delta.enableChangeDataFeed = true to support downstream SCD2 change tracking."
+        - "Register purchasing.dim.supplier in Unity Catalog with COMMENT metadata propagated from source extended properties where available."
+    validation:
+      success_criteria:
+        - "purchasing.dim.supplier exists with the same row count as source dimension.supplier post-load"
+        - "Valid From/Valid To columns present and populated for every supplier version"
+        - "No overlapping valid-time windows exist for the same WWI Supplier ID"
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - uniqueness
+      test_cases:
+        - input: "dimension.supplier source table with N supplier records across multiple SCD2 versions"
+          expected: "purchasing.dim.supplier contains N rows, WWI Supplier ID + Valid From/Valid To preserved, no overlapping validity windows per supplier"
+          notes: "First migration of this dimension — no prior target-side copy exists to reconcile against."
+    inheritance:
+      level: project
+      override: "A product may narrow the SCD2 grain or add product-specific attributes via an extension."
+      extend: "A product may add supplier attributes not currently modeled without violating this rule."
+      deactivate: "Not applicable while dimension.supplier remains in scope — this is the sole net-new dimension owned by the Purchases product."
+
+  - id: OB-002
+    dimension: Objects
+    name: "Reused Conformed Dimensions (Stock Item, Date) — Cross-Project Sharing Decision"
+    intent: "Resolve how dimension.stock item and dimension.date — both already migrated by GlobalSales_Project/Sales_Orders into the globalsales catalog — are made available to Purchasing_Project's fact.purchase without violating the new project/catalog boundary, and without this project silently re-implementing dimension load logic it does not own."
+    activation:
+      preconditions:
+        - "Source objects are dimension.stock item and dimension.date on wideworldimportersdw, both already present as Delta tables in GlobalSales_Project's globalsales catalog"
+        - "fact.purchase (OB-003) requires both dimensions as FK targets"
+        - "The cross-project dimension-sharing strategy is not yet resolved (modernization-plan.md §3.1 risk 1)"
+      scope: project
+    transformation:
+      source: "dimension.stock item (SCD2, valid-time) and dimension.date (static calendar table) — SQL Server tables already migrated once, as Delta tables in globalsales.dim.stock_item and globalsales.dim.date"
+      target: "purchasing.dim.stock_item and purchasing.dim.date — resolved as either (a) thin cross-catalog pass-through views over the existing globalsales.dim tables, or (b) independently duplicated/maintained Delta copies under purchasing.dim, pending a single project-level decision"
+      algorithm:
+        - "Default recommendation, pending final sign-off: expose the existing globalsales.dim.stock_item and globalsales.dim.date tables to purchasing via Unity Catalog cross-catalog GRANT SELECT, and create thin pass-through views purchasing.dim.stock_item / purchasing.dim.date over them — avoids duplicate maintenance of dimensions this project does not own."
+        - "Document the fallback option — independently duplicating/maintaining copies under purchasing.dim — for use only if cross-catalog grants are disallowed by governance policy or if the future Inventory_Stock candidate product (also a stock item/supplier consumer) requires an independent copy."
+        - "Do not implement SCD2 load or key-generation logic for either dimension inside Purchasing_Project — both are reused, not owned/loaded by this project."
+        - "Preserve Valid From/Valid To on dimension.stock item in whichever representation is chosen, since OB-005's valid-time key resolution depends on it."
+        - "Record the chosen option and its rationale in the migration registry; mark [USER INPUT REQUIRED] until the cross-project decision is finalized between Purchasing_Project and GlobalSales_Project owners."
+      note: "[USER INPUT REQUIRED] — this is an open architectural decision per modernization-plan.md §3.1 risk 1, affecting both this project and GlobalSales_Project's future Inventory_Stock scoping. Rule captures the default recommendation, not a final resolution."
+    validation:
+      success_criteria:
+        - "purchasing.dim.stock_item and purchasing.dim.date are queryable from within the purchasing catalog by the time fact.purchase's ETL task (OB-005) runs"
+        - "Valid From/Valid To on the resolved stock_item representation match the source-of-truth globalsales.dim.stock_item values exactly (no drift if a view; no staleness beyond an agreed sync window if a duplicated copy)"
+        - "The chosen sharing strategy (view vs. duplicate) is recorded in the migration registry with a named decision owner"
+      quality_dimensions:
+        - consistency
+        - completeness
+      test_cases:
+        - input: "globalsales.dim.stock_item containing valid-time versions for a stock item referenced by a Purchasing order line"
+          expected: "purchasing.dim.stock_item resolves the identical Supplier/Stock Item Key and Valid From/Valid To values as globalsales.dim.stock_item for that record"
+          notes: "Applies regardless of whether the final resolution is a cross-catalog view or a duplicated copy."
+    inheritance:
+      level: project
+      override: "A future formal cross-project dimension-sharing agreement between Purchasing_Project and GlobalSales_Project may replace the default view-based recommendation with a different mechanism (e.g. Delta Sharing)."
+      extend: "Not applicable — this rule is scoped to resolving exactly two reused dimensions."
+      deactivate: "Deactivate only once dimension.stock item and dimension.date are no longer FK targets of any Purchasing_Project fact table."
+
+  - id: OB-003
+    dimension: Objects
+    name: "fact.purchase Fact Table to Delta Managed Table"
+    intent: "Migrate the fact.purchase table — the sole fact table in Purchasing_Project's scope — from Microsoft SQL Server 2014 to a Delta Lake managed table under the new purchasing catalog, preserving its purchase-order-line grain and FK relationships as documentation/DQ expectations."
+    activation:
+      preconditions:
+        - "Source object is the fact.purchase table on wideworldimportersdw (Microsoft SQL Server 2014)"
+        - "Unity Catalog catalog purchasing and schema purchasing.fact exist"
+        - "Target counterparts for Date Key, Supplier Key, and Stock Item Key FK targets (OB-001/OB-002) are resolved"
+      scope: project
+    transformation:
+      source: "fact.purchase — 11 columns, composite PK (Purchase Key + Date Key), FK constraints to dimension.date, dimension.stock item, dimension.supplier; grain is one row per purchase order line as of the current load window (rows deleted and re-inserted per WWI Purchase Order ID, not append-only)"
+      target: "purchasing.fact.purchase — Delta Lake managed table registered in Unity Catalog"
+      algorithm:
+        - "Map fact.purchase to purchasing.fact.purchase (snake_case)."
+        - "Translate all column data types per the TY (Types) dimension rules."
+        - "Convert FK constraints (Date Key, Supplier Key, Stock Item Key) to documentation comments and data quality expectations; Delta Lake does not enforce referential integrity."
+        - "Partition by Date Key and cluster by Supplier Key / Stock Item Key to support the query patterns used by the known consumers (year-over-year rollups, per-stock-item and per-supplier reporting)."
+        - "Preserve the delete-then-insert-by-natural-key load semantics (not append-only) as the documented write pattern for this table — see OB-005."
+        - "Set delta.autoOptimize.optimizeWrite = true and delta.autoOptimize.autoCompact = true given the batch-replace write pattern."
+    validation:
+      success_criteria:
+        - "purchasing.fact.purchase exists with column count and types matching source fact.purchase"
+        - "Row counts match source post initial full load"
+        - "Foreign key integrity verified via post-load referential DQ checks against purchasing.dim.supplier, purchasing.dim.stock_item, purchasing.dim.date"
+      quality_dimensions:
+        - completeness
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "fact.purchase source table with existing purchase order line rows"
+          expected: "purchasing.fact.purchase created with identical row count, all 11 source columns present, no orphaned Supplier Key/Stock Item Key/Date Key values"
+          notes: "Applies to the initial full load; incremental behavior is governed by OB-005."
+    inheritance:
+      level: project
+      override: "A product may add partition/clustering strategy specifics without changing the core migration mapping."
+      extend: "A product may add derived columns for reporting convenience."
+      deactivate: "Not applicable — fact.purchase is the sole fact table in this project's scope."
+
+  - id: OB-004
+    dimension: Objects
+    name: "integration.purchase_staging to Delta Staging Table"
+    intent: "Migrate the integration.purchase_staging landing table to a Delta Lake staging table, preserving its truncate-and-reload-per-cycle semantics and its role of holding unresolved business keys pending dimension key resolution."
+    activation:
+      preconditions:
+        - "Source object is the integration.purchase_staging table on wideworldimportersdw"
+        - "Unity Catalog schema purchasing.stg exists"
+      scope: project
+    transformation:
+      source: "integration.purchase_staging — SQL Server table, truncated and reloaded each ETL cycle by the SSIS extraction step; holds WWI Supplier ID, WWI Stock Item ID, and Last Modified When pending dimension key resolution"
+      target: "purchasing.stg.purchase_staging — Delta Lake managed staging table"
+      algorithm:
+        - "Map integration.purchase_staging to purchasing.stg.purchase_staging."
+        - "Translate column data types per TY dimension rules."
+        - "Preserve WWI Purchase Order ID, WWI Supplier ID, and WWI Stock Item ID as natural/business keys, unchanged, for downstream lookup by the migrate task (OB-005)."
+        - "Retain Last Modified When exactly as extracted — it is the as-of point for the valid-time dimension key lookups performed downstream."
+        - "Add load_timestamp TIMESTAMP and batch_id STRING audit columns."
+        - "Implement truncate-and-reload semantics via REPLACE TABLE AS SELECT or Delta overwrite mode at each ETL cycle; do not retain history in this table."
+    validation:
+      success_criteria:
+        - "purchasing.stg.purchase_staging exists with audit columns present"
+        - "Each ETL cycle fully replaces the table contents with no residual rows from the prior cycle"
+        - "WWI Supplier ID, WWI Stock Item ID, and Last Modified When are present and non-null for every staged row"
+      quality_dimensions:
+        - completeness
+        - conformity
+        - validity
+      test_cases:
+        - input: "A staging batch of purchase order line changes extracted for the current cutoff window"
+          expected: "purchasing.stg.purchase_staging contains exactly the batch's rows after load, with load_timestamp and batch_id populated"
+          notes: "Second consecutive run must show full replacement, not accumulation."
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may add extraction-window audit metadata beyond load_timestamp/batch_id."
+      deactivate: "Not applicable while integration.purchase_staging feeds fact.purchase."
+
+  - id: OB-005
+    dimension: Objects
+    name: "integration.migratestagedpurchasedata to Databricks ETL Task (Valid-Time Lookup + Targeted-Replace)"
+    intent: "Translate the integration.migratestagedpurchasedata stored procedure — which resolves Supplier Key/Stock Item Key via valid-time lookups and then replaces fact.purchase rows via a DELETE-then-INSERT keyed on WWI Purchase Order ID — into an idiomatic Databricks ETL task that reproduces both the valid-time lookup semantics and an atomic targeted-replace write, since a naive full-table overwrite would violate the documented grain and load pattern."
+    activation:
+      preconditions:
+        - "Source object is the integration.migratestagedpurchasedata stored procedure"
+        - "Procedure body resolves Supplier Key and Stock Item Key via correlated TOP(1) subqueries matching a business key against a dimension's Valid From/Valid To window, falling back to key 0 (Unknown) when unresolved"
+        - "Procedure body contains a DELETE FROM fact.purchase WHERE WWI Purchase Order ID IN (SELECT ... FROM staging) immediately followed by an INSERT INTO fact.purchase SELECT ... FROM staging, both inside one transaction"
+      scope: project
+    transformation:
+      source: "integration.migratestagedpurchasedata — T-SQL stored procedure; valid-time (SCD2-aware) dimension key resolution against dimension.supplier and dimension.stock item, then a DELETE-then-INSERT replace pattern keyed on WWI Purchase Order ID, not a true incremental MERGE (modernization-plan.md §3.1 risk 4)"
+      target: "A Python ETL task (e.g. migrate_purchase.py) in a Databricks Workflow, using DeltaTable merge or an equivalent atomic delete+insert transaction against purchasing.fact.purchase"
+      algorithm:
+        - "Implement the valid-time dimension key resolution as a join predicate: staging.Last Modified When > dim.Valid From AND staging.Last Modified When <= dim.Valid To, matched on the business key (WWI Supplier ID / WWI Stock Item ID), selecting the earliest Valid From when multiple versions qualify; preserve the COALESCE-to-0 (Unknown) fallback exactly when no match is found."
+        - "Resolve Supplier Key against purchasing.dim.supplier (OB-001) and Stock Item Key against whichever representation of purchasing.dim.stock_item was finalized under OB-002."
+        - "Do not perform an active lookup against dimension.date at load time — Date Key arrives pre-resolved from staging (CAST to date performed upstream of this project's staging boundary), matching confirmed source behavior; dimension.date remains a declarative FK-target-only relationship, not a load-time join."
+        - "Redesign the DELETE-then-INSERT-by-WWI-Purchase-Order-ID replace pattern as a single Delta MERGE INTO purchasing.fact.purchase USING staging ON <natural key> WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (or an explicit two-statement DELETE-then-INSERT wrapped in one Python transaction boundary) to avoid partial-write windows on the target lakehouse (modernization-plan.md §3.1 risk 4)."
+        - "Confirm the correct join grain for the MERGE against fact.purchase's actual grain (one row per purchase order line) before finalizing the natural key used in the MERGE ON clause — do not join on WWI Purchase Order ID alone if multiple lines share a header key and would otherwise collide."
+        - "Stamp every inserted row's Lineage Key using the batch lineage key issued per OB-006, matching the source's administrative Lineage Key assignment."
+    validation:
+      success_criteria:
+        - "Generated ETL task uses a MERGE/targeted-replace pattern against purchasing.fact.purchase, not a naive full-table overwrite"
+        - "Supplier Key/Stock Item Key resolution reproduces the same valid-time match (and Unknown-key fallback) as the source procedure for a representative test set"
+        - "Re-running the same batch twice produces no duplicate or missing rows (idempotent)"
+        - "Rows for WWI Purchase Order IDs not present in the current batch are unaffected by the run"
+      quality_dimensions:
+        - accuracy
+        - consistency
+        - uniqueness
+      test_cases:
+        - input: "A staging batch containing one purchase order line whose Last Modified When falls within a supplier's valid-time window, and one line whose supplier ID has no matching dimension version"
+          expected: "First line resolves to the correct Supplier Key for that version; second line resolves to Supplier Key = 0 (Unknown)"
+          notes: "Directly reproduces the source COALESCE(...,0) fallback behavior."
+        - input: "The same staging batch executed twice in succession against purchasing.fact.purchase"
+          expected: "Row count for the batch's WWI Purchase Order IDs is identical after both runs, with no duplicate rows"
+          notes: "Validates idempotency of the targeted-replace MERGE."
+    inheritance:
+      level: project
+      override: "A product may adjust the MERGE batching strategy (e.g. partition-aware MERGE) without changing the resolution or replace semantics."
+      extend: "A product may add additional dimension key resolutions if the fact grain is extended."
+      deactivate: "Not applicable while this procedure is the sole load path for fact.purchase."
+
+  - id: OB-006
+    dimension: Objects
+    name: "Lineage/Batch Infrastructure (sequences.lineagekey, integration.getlineagekey, integration.lineage) to Purchasing-Owned Metadata Objects"
+    intent: "Migrate the shared lineage/batch-bookkeeping infrastructure that Purchasing_Project's load path depends on — sequences.lineagekey, integration.getlineagekey, and integration.lineage — into Purchasing_Project's own purchasing.meta schema, fully decoupled from GlobalSales_Project's equivalent infrastructure, since the two projects are now independent."
+    activation:
+      preconditions:
+        - "Source objects are sequences.lineagekey (SEQUENCE), integration.getlineagekey (PROCEDURE), and integration.lineage (TABLE), all currently shared cross-cutting ETL infrastructure"
+        - "These objects are consumed by integration.migratestagedpurchasedata (OB-005) for batch identification and completion bookkeeping"
+      scope: project
+    transformation:
+      source: "sequences.lineagekey (SEQUENCE, generates lineage/batch tracking keys), integration.getlineagekey (PROCEDURE, issues the next lineage key), integration.lineage (TABLE, records Lineage Key, Table Name, Data Load Completed, Was Successful, Source System Cutoff Time)"
+      target: "purchasing.meta.sequence_state (Delta table backing a Python get_next_lineage_key() utility) and purchasing.meta.lineage (Delta table)"
+      algorithm:
+        - "Replace the sequences.lineagekey SEQUENCE with a Python-managed sequence-state pattern: purchasing.meta.sequence_state (sequence_name STRING, current_value BIGINT, updated_at TIMESTAMP), incremented atomically via Delta MERGE or optimistic locking inside a get_next_lineage_key() utility function."
+        - "Translate the integration.getlineagekey procedure call into that same Python utility, invoked at the start of migrate_purchase.py (OB-005) before dimension key resolution."
+        - "Translate integration.lineage into purchasing.meta.lineage with the same columns (Lineage Key, Table Name, Data Load Completed, Was Successful, Source System Cutoff Time) plus standard audit columns."
+        - "On successful load, update purchasing.meta.lineage marking Data Load Completed = current_timestamp() and Was Successful = true, replicating the source's SYSDATETIME()/1 assignment."
+        - "Scope this infrastructure exclusively to Purchasing_Project's purchasing.meta schema — do not share the sequence-state table or lineage table with GlobalSales_Project's globalsales.meta equivalents; the two projects are fully decoupled per modernization-plan.md §2."
+    validation:
+      success_criteria:
+        - "purchasing.meta.sequence_state contains exactly one row for lineagekey after first use"
+        - "get_next_lineage_key() returns strictly monotonically increasing values across successive calls"
+        - "purchasing.meta.lineage records one entry per ETL batch with correct completion/success bookkeeping"
+      quality_dimensions:
+        - uniqueness
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "Two successive calls to get_next_lineage_key()"
+          expected: "Second returned value is strictly greater than the first"
+          notes: "Reproduces SEQUENCE monotonicity without a native SQL Server SEQUENCE object."
+        - input: "A successful migrate_purchase.py run for a given batch"
+          expected: "purchasing.meta.lineage row for that batch shows Data Load Completed populated and Was Successful = true"
+          notes: "Mirrors the source procedure's bookkeeping UPDATE statement."
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may add additional lineage metadata columns (e.g. row counts) without breaking this contract."
+      deactivate: "Not applicable while any Purchasing_Project ETL task requires batch lineage tracking."
+
+  - id: OB-007
+    dimension: Objects
+    name: "integration.etl cutoff and integration.etl_cutoff_view2024 to Watermark Table and View"
+    intent: "Migrate the incremental-extraction watermark table (integration.etl cutoff) and its reporting view (integration.etl_cutoff_view2024) that the Purchases load path depends on, into Purchasing_Project's own metadata schema, preserving per-table cutoff advancement semantics for the Purchase entry."
+    activation:
+      preconditions:
+        - "Source objects are integration.etl cutoff (TABLE) and integration.etl_cutoff_view2024 (VIEW) on wideworldimportersdw"
+        - "The Purchase entry (Table Name = 'Purchase') in integration.etl cutoff is advanced after each successful integration.migratestagedpurchasedata run"
+      scope: project
+    transformation:
+      source: "integration.etl cutoff — per-table Cutoff Time watermark, advanced after a successful load; integration.etl_cutoff_view2024 — T-SQL reporting view over the cutoff table"
+      target: "purchasing.meta.etl_cutoff (Delta table) and purchasing.meta.etl_cutoff_view (Databricks SQL view)"
+      algorithm:
+        - "Map integration.etl cutoff to purchasing.meta.etl_cutoff (Table Name, Cutoff Time columns), scoped to at minimum the Purchase entry relevant to this project."
+        - "After each successful migrate_purchase.py run (OB-005), update the Cutoff Time for Table Name = 'Purchase' to the Source System Cutoff Time recorded in purchasing.meta.lineage (OB-006) for that batch, replicating the source's UPDATE ... FROM Integration.Lineage pattern."
+        - "Translate integration.etl_cutoff_view2024 T-SQL view syntax (e.g. NOLOCK hints, GETDATE()) to Databricks SQL per the SX (Syntax) dimension rules, registering the result as purchasing.meta.etl_cutoff_view."
+        - "Use the resulting Cutoff Time value as the incremental-extraction watermark consumed by whatever upstream process computes the delta window feeding integration.purchase_staging (OB-004)."
+    validation:
+      success_criteria:
+        - "purchasing.meta.etl_cutoff contains an up-to-date Cutoff Time for the Purchase entry after each successful run"
+        - "purchasing.meta.etl_cutoff_view returns results consistent with purchasing.meta.etl_cutoff with no T-SQL-specific syntax remaining"
+      quality_dimensions:
+        - accuracy
+        - timeliness
+        - conformity
+      test_cases:
+        - input: "A successful migrate_purchase.py run completing at a known Source System Cutoff Time"
+          expected: "purchasing.meta.etl_cutoff's Cutoff Time for Table Name = 'Purchase' is updated to that value"
+          notes: "Cutoff must only advance on success, matching source behavior."
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may add additional watermark granularity (e.g. per-source-table cutoffs) if extraction is split further."
+      deactivate: "Not applicable while incremental extraction is used for the Purchase entity."
+
+  - id: OB-008
+    dimension: Objects
+    name: "Cross-Project Read Exposure of purchasing.fact.purchase to GlobalSales_Project Consumers"
+    intent: "Resolve, at the object level, how three existing GlobalSales_Project/Sales_Orders-owned analytical artifacts that read fact.purchase directly (analytics.v_ordertoyearanalytics, 'wwidw purchase and sale per stockitem dynamic', 'wwidw-ordered-by-supplier') continue to function once fact.purchase is migrated into Purchasing_Project's own purchasing catalog rather than globalsales — without this project taking ownership of, or migrating, those consumer artifacts."
+    activation:
+      preconditions:
+        - "purchasing.fact.purchase (OB-003) is the migration target for fact.purchase"
+        - "At least one of the three known cross-project consumer artifacts (owned by GlobalSales_Project/Sales_Orders) reads fact.purchase directly, per modernization-plan.md §3.1 risks 2 and 3"
+      scope: project
+    transformation:
+      source: "N/A — this is a target-side exposure/grant rule, not a source-object migration mapping"
+      target: "Unity Catalog cross-catalog GRANT SELECT ON purchasing.fact.purchase (and, if OB-002 resolves to duplication, purchasing.dim.supplier) TO the Unity Catalog principals/groups used by GlobalSales_Project's Sales_Orders BI/reporting service accounts"
+      algorithm:
+        - "Do not migrate, redefine, or take ownership of analytics.v_ordertoyearanalytics, 'wwidw purchase and sale per stockitem dynamic', or 'wwidw-ordered-by-supplier' — all three remain owned by GlobalSales_Project (out of scope per modernization-plan.md §7)."
+        - "Default recommendation: grant cross-catalog SELECT on purchasing.fact.purchase to the relevant GlobalSales_Project/Sales_Orders principals, rather than replicating or federating the table back into the globalsales catalog."
+        - "Treat this as one coordinated decision covering all three consumer artifacts, not three separate ones, per modernization-plan.md §3.1 risk 3."
+        - "Communicate the finalized grant (or replication) approach to the GlobalSales_Project/Sales_Orders owning team before any of the three artifacts is repointed at the target lakehouse."
+        - "Mark the final choice [USER INPUT REQUIRED] until both project owners jointly confirm it; do not block purchasing.fact.purchase's own migration on this decision."
+    validation:
+      success_criteria:
+        - "A documented, single cross-project exposure decision exists covering all three known consumer artifacts"
+        - "GlobalSales_Project/Sales_Orders owning team has been notified of the decision before any consumer artifact is repointed"
+        - "purchasing.fact.purchase's own migration (OB-003) is not blocked pending this decision"
+      quality_dimensions:
+        - completeness
+        - consistency
+      test_cases:
+        - input: "GlobalSales_Project's analytics.v_ordertoyearanalytics attempting to read purchase data after purchasing.fact.purchase is live"
+          expected: "Query succeeds via a Unity Catalog cross-catalog GRANT once the exposure decision is implemented, without requiring a duplicated copy of fact.purchase inside globalsales"
+          notes: "Represents the default recommendation; final implementation pending joint sign-off."
+    inheritance:
+      level: project
+      override: "A joint GlobalSales_Project/Purchasing_Project decision may replace the cross-catalog grant approach with table replication or Delta Sharing."
+      extend: false
+      deactivate: "Deactivate only if all three consumer artifacts are decommissioned or migrated into Purchasing_Project itself."
+
+  - id: OB-009
+    dimension: Objects
+    name: "Out-of-Scope Domain and External-System Object Exclusion"
+    intent: "Explicitly exclude all objects belonging to domains and systems that remain outside Purchasing_Project's boundary — the Sales/Orders, Inventory/Stock, and Finance Analytics domains owned by GlobalSales_Project, the separate Emptoris procurement system, and dbo schema test/diagram artifacts — from all migration activities, so this project's build never accidentally re-migrates or overlaps with GlobalSales_Project's scope."
+    activation:
+      preconditions:
+        - "Source object belongs to one of: the Sales/Orders, Inventory/Stock, or Finance Analytics domains (e.g. fact.sale, fact.order, fact.movement, fact.stock holding, fact.transaction, dimension.customer, dimension.city, dimension.employee, dimension.payment method, dimension.transaction type, the analytics.* reporting schema, application.* config procedures not consumed by Purchases); OR the Emptoris external procurement system (ccentralprp8.*, cdssdo00.*, emptoris_purchase_order.*); OR the dbo schema"
+        - "Object has not been explicitly re-included by a product-level override rule"
+      scope: project
+    transformation:
+      source: "Any object in scope per the exclusion patterns above, on wideworldimportersdw (domain objects) or the separate Emptoris system"
+      target: "EXCLUDED (no target object created by Purchasing_Project)"
+      algorithm:
+        - "Maintain an exclusion list (config/exclusions.yaml) listing the domain and schema patterns above, distinguishing 'remains project of record with GlobalSales_Project' (Sales/Orders/Inventory/Finance domain objects) from 'different source system, not in this phase' (Emptoris) from 'SSMS diagram/test artifacts, excluded per inherited project scope' (dbo)."
+        - "All code generation tooling (DDL generators, ETL task generators, documentation generators) must filter source objects against this exclusion list before processing."
+        - "If an excluded object is referenced as a dependency of an in-scope Purchasing_Project object (e.g. the known cross-project reads of fact.purchase — see OB-008), do not treat this as a scope violation; it is the coordinated exposure case already governed by OB-008."
+        - "Record each excluded domain/system in the migration registry with disposition = 'EXCLUDED' and the applicable rationale (different project of record, different source system, or test/diagram artifact)."
+      exclusion_list:
+        - domain: "Sales/Orders, Inventory/Stock, Finance Analytics"
+          rationale: "Remain owned by GlobalSales_Project, the project of record for those domains; this project split moved only the Purchases domain out."
+        - system: "Emptoris (ccentralprp8.*, cdssdo00.*, emptoris_purchase_order.*)"
+          rationale: "Separate external procurement system integration — different source, not in this phase."
+        - schema: "dbo"
+          rationale: "SSMS diagram objects and sample/test artifacts — excluded per inherited project scope."
+    validation:
+      success_criteria:
+        - "config/exclusions.yaml exists and lists all three exclusion categories"
+        - "No generated DDL or ETL artifact in Purchasing_Project's codebase references an object from an excluded domain or system, other than the documented OB-008 cross-project read exposure"
+        - "Migration registry contains no unexplained excluded-object references"
+      quality_dimensions:
+        - completeness
+        - conformity
+        - coverage
+      test_cases:
+        - input: "A code generation pass over Purchasing_Project's development plan"
+          expected: "Zero generated artifacts reference fact.sale, fact.order, fact.movement, fact.stock holding, fact.transaction, dimension.customer, dimension.city, dimension.employee, dimension.payment method, dimension.transaction type, the analytics.* schema, Emptoris objects, or dbo objects"
+          notes: "The single documented exception is GlobalSales_Project reading purchasing.fact.purchase per OB-008, which is an inbound read, not an outbound Purchasing_Project artifact."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+
+  - id: OB-010
+    dimension: Objects
+    name: "Upstream OLTP Source Objects — Informational Lineage Only, Not Migrated"
+    intent: "Document the upstream wideworldimporters OLTP objects that feed integration.getpurchaseupdates and, transitively, integration.purchase_staging, as informational lineage sources only — never as migration targets in their own right — while excluding entirely the broader set of upstream OLTP/API objects not needed even informationally."
+    activation:
+      preconditions:
+        - "Source object is one of the five informational upstream objects listed in modernization-plan.md §6.5: wideworldimporters.purchasing.purchaseorders, wideworldimporters.purchasing.purchaseorderlines, wideworldimporters.warehouse.stockitems, wideworldimporters.warehouse.packagetypes, wideworldimporters.integration.getpurchaseupdates"
+        - "Object is outside wideworldimportersdw (the actual migration source database) and is referenced only for lineage completeness"
+      scope: project
+    transformation:
+      source: "The five informational upstream wideworldimporters OLTP objects listed above, plus the broader excluded set: wideworldimporters.purchasing.* beyond the two tables listed, .webapi.purchaseorder*, .dataloadsimulation.receivepurchaseorders, .sequences.purchaseorderid"
+      target: "NONE — no Unity Catalog object, DDL, or ETL task is generated for any of these objects"
+      algorithm:
+        - "Do not generate DDL, ETL tasks, or Unity Catalog objects for any of the five informational upstream OLTP objects."
+        - "Represent these five objects only as source nodes in lineage diagrams and documentation feeding integration.getpurchaseupdates → integration.purchase_staging (OB-004) — i.e. as inputs to the extraction step, not as migration targets themselves."
+        - "Record each of the five in the migration registry with disposition = 'INFORMATIONAL_SOURCE_ONLY'."
+        - "Any change to columns pulled from these upstream OLTP tables (e.g. QuantityPerOuter, PackageTypeName) must be reflected in the staging/extraction documentation (OB-004), not modeled as a separately migrated object."
+        - "Exclude entirely — not even informationally — the broader upstream OLTP/API objects per modernization-plan.md §7: wideworldimporters.purchasing.* beyond the two tables above, .webapi.purchaseorder*, .dataloadsimulation.receivepurchaseorders, .sequences.purchaseorderid."
+    validation:
+      success_criteria:
+        - "No Unity Catalog object exists for any of the five informational upstream objects or the broader excluded set"
+        - "Lineage documentation for integration.getpurchaseupdates references all five informational objects as source nodes"
+        - "Migration registry contains an INFORMATIONAL_SOURCE_ONLY entry for each of the five objects"
+      quality_dimensions:
+        - completeness
+        - conformity
+      test_cases:
+        - input: "Generated lineage documentation for the Purchases ETL flow"
+          expected: "wideworldimporters.purchasing.purchaseorders, purchaseorderlines, warehouse.stockitems, warehouse.packagetypes, and integration.getpurchaseupdates each appear as source-side lineage nodes, with no corresponding Unity Catalog target object generated for any of them"
+          notes: "Confirms the informational-only disposition without a migration target."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false

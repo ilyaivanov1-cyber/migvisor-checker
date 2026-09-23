@@ -1,0 +1,168 @@
+productName: Purchases
+projectName: Purchasing_Project
+created: "2026-09-21T00:00:00Z"
+pipeline:
+  stage: to-be
+  completedSteps:
+    - scope
+    - as-is
+    - rules
+    - to-be
+ruleInheritance:
+  projectRulesVersion: "20260921-161200"
+  overrides:
+    - ruleId: "CX-P01"
+      action: new
+      reason: "Preserve ordered_quantity = ordered_outers x quantity_per_outer as an explicit stored column on purchasing.fact.purchase, not a Delta GENERATED ALWAYS AS computed column — no project-level CX dimension exists to override. Cross-references corrected to PE-007/OB-005 after the Purchasing_Project split."
+    - ruleId: "QA-001"
+      action: new
+      reason: "Row-count reconciliation between staged batch and post-load purchasing.fact.purchase; closes product-scope.md risk 1 (DELETE-then-INSERT load pattern). No project-level QA dimension exists."
+    - ruleId: "QA-002"
+      action: new
+      reason: "Monitor Unknown-key-0 fallback rate for supplier_key/stock_item_key resolution; closes product-scope.md risk 2 (valid-time dimension key resolution)."
+    - ruleId: "QA-003"
+      action: new
+      reason: "Referential-integrity LEFT ANTI JOIN assertions for purchasing.fact.purchase foreign keys against purchasing.dim.supplier, purchasing.dim.stock_item, purchasing.dim.date."
+  relocatedFrom:
+    projectName: GlobalSales_Project
+    priorProjectRulesVersion: "20260921-151140"
+    date: "2026-09-21"
+sb:
+  product: Purchases
+  sddVersion: "4.1"
+  domain: Procurement / Supplier Purchase Order
+  publisher: "[REQUIRES MANUAL COMPLETION: field not present in project/current/catalog.yaml]"
+  completedSteps:
+    - init
+    - plan
+    - generate-db
+    - generate-etl
+    - validation
+  generated:
+    - products/Purchases/current/codebase/build-plan.md
+    - products/Purchases/current/codebase/src/db/ddl/stg_purchase_staging.sql
+    - products/Purchases/current/codebase/src/db/ddl/dim_supplier.sql
+    - products/Purchases/current/codebase/src/db/ddl/dim_stock_item_access.sql
+    - products/Purchases/current/codebase/src/db/ddl/dim_date_access.sql
+    - products/Purchases/current/codebase/src/db/ddl/meta_lineage.sql
+    - products/Purchases/current/codebase/src/db/ddl/meta_sequence_state.sql
+    - products/Purchases/current/codebase/src/db/ddl/meta_etl_cutoff.sql
+    - products/Purchases/current/codebase/src/db/ddl/meta_v_etl_cutoff.sql
+    - products/Purchases/current/codebase/src/db/ddl/fact_purchase.sql
+    - products/Purchases/current/codebase/src/db/ddl/stg_dq_rejections.sql
+    - products/Purchases/current/codebase/src/etl/extract_purchase_staging.py
+    - products/Purchases/current/codebase/src/etl/resolve_supplier_key.py
+    - products/Purchases/current/codebase/src/etl/resolve_stock_item_key.py
+    - products/Purchases/current/codebase/src/etl/compute_ordered_quantity.py
+    - products/Purchases/current/codebase/src/etl/assign_lineage_key.py
+    - products/Purchases/current/codebase/src/etl/merge_fact_purchase.py
+    - products/Purchases/current/codebase/src/etl/advance_etl_cutoff.py
+    - products/Purchases/current/codebase/tests/test_qv001_row_count_reconciliation.py
+    - products/Purchases/current/codebase/tests/test_qv002_unknown_key_fallback_rate.py
+    - products/Purchases/current/codebase/tests/test_qv003_referential_conformity.py
+    - products/Purchases/current/codebase/config/purchase_pipeline_workflow.yml
+    - products/Purchases/current/codebase/docs/data_dictionary.md
+    - products/Purchases/current/codebase/docs/consumer_guide.md
+    - products/Purchases/current/codebase/validation-report.md
+  initializedTimestamp: "2026-09-23T00:00:00Z"
+  tasks:
+    - id: TASK-001
+      type: db
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-002
+      type: db
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-003
+      type: db
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-004
+      type: db
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-005
+      type: db
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-006
+      type: db
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-007
+      type: db
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-008
+      type: db
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-009
+      type: etl
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-010
+      type: etl
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-011
+      type: etl
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-012
+      type: etl
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-013
+      type: etl
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-014
+      type: etl
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-015
+      type: etl
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-017
+      type: test
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-018
+      type: test
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-019
+      type: test
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-020
+      type: config
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null
+    - id: TASK-023
+      type: docs
+      status: completed
+      timestamp: "2026-09-23T00:00:00Z"
+      version: null

@@ -1,0 +1,1249 @@
+# Stability guard: N/A (product mode -- consolidation, not stability-guarded regeneration).
+# Product-mode consolidation for Purchases against Purchasing_Project's NEW
+# (freshly authored, project-mode) TY-types.yaml -- this file supersedes the
+# prior product-transformation-rules/TY-types.yaml, which was written while
+# Purchases still lived inside GlobalSales_Project and used GlobalSales_Project
+# rule IDs/content. That prior file recorded full, unmodified inheritance of
+# the (then) GlobalSales_Project TY rule set (TY-001..TY-030), with the sole
+# product-only addition being CX-P01 (a Custom-dimension rule, not TY --
+# handled by the CX dimension agent, not this file).
+#
+# Verification performed against the NEW rule set (not assumed from precedent):
+#   1. Checked for product action files at
+#      products/Purchases/current/specifications/product-transformation-rules/
+#      {override,extensions,deactivations}.yaml -- none exist for this product.
+#   2. Checked new-rules.yaml at that same path -- it contains exactly one
+#      product-only rule, CX-P01 (dimension: Custom), and zero TY-prefixed
+#      entries. CX-P01 documents that no project-level rule (TY or otherwise)
+#      addresses ETL-computed business measures as distinct from SQL Server
+#      DDL-level computed columns -- i.e. it is deliberately scoped as a new
+#      CX rule precisely because it does NOT fit as a TY override/extension.
+#   3. Cross-checked the NEW project-level TY-types.yaml against the Purchases
+#      as-is.md and product-scope.md: the new project file was itself authored
+#      using the Purchases as-is analysis as its primary enrichment source, so
+#      every SQL Server type evidenced in Purchases (INT, BIGINT, DECIMAL,
+#      NVARCHAR, DATE, DATETIME2, VARBINARY, BIT, IDENTITY, SEQUENCE) already
+#      has a directly-evidenced rule (TY-003, TY-004, TY-005, TY-011, TY-012,
+#      TY-015, TY-018, TY-020, TY-023, TY-024), and every non-evidenced
+#      baseline type (TINYINT, SMALLINT, MONEY, SMALLMONEY, FLOAT, REAL,
+#      CHAR/NCHAR, TIME, plain DATETIME, SMALLDATETIME, DATETIMEOFFSET, IMAGE,
+#      UNIQUEIDENTIFIER, XML, SQL_VARIANT, non-default COLLATE) is retained as
+#      a correct platform-level baseline that Purchases neither contradicts
+#      nor needs to narrow.
+#   4. TY-029 (computed columns) explicitly documents, in its own intent and
+#      test case, that Purchases' `Ordered Quantity` is NOT a DDL computed
+#      column and is out of this rule's GENERATED-column path -- consistent
+#      with, and not superseded by, CX-P01's ETL-pass-through requirement.
+#   5. The project's TY-028 (application.* unknown-DDL-type classification,
+#      present in the old GlobalSales_Project rule set as TY-028) is
+#      deliberately absent from the new project file for a genuine,
+#      documented scope reason (no application.* object is in scope for
+#      Purchasing_Project) -- Purchases inherits that omission correctly, as
+#      it never depended on that rule either.
+#
+# Conclusion: no override, extension, deactivation, or new TY-prefixed rule is
+# warranted for Purchases against the new Purchasing_Project TY-types.yaml.
+# Confirms, rather than assumes, the near-certain full-inheritance outcome
+# implied by historical precedent. This file is therefore a verbatim
+# consolidation of the new project rule set (TY-001..TY-029), unchanged.
+dimension: Types
+prefix: TY
+project: "Purchasing_Project"
+product: "Purchases"
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-21"
+inheritance:
+  project_rules_version: "20260921-160000"
+  applied_overrides: []       # rule IDs overridden from project
+  applied_extensions: []      # rule IDs extended from project
+  applied_deactivations: []   # rule IDs removed from project set
+  new_rules: []               # product-only rule IDs added
+note: >
+  No TY-dimension customizations were required for Purchases under
+  Purchasing_Project's new rule set. All 29 project-level Types rules
+  (TY-001..TY-029) apply directly and are inherited unchanged. No
+  override.yaml, extensions.yaml, or deactivations.yaml exist for this
+  product, and new-rules.yaml contains only CX-P01 (Custom dimension,
+  not Types). This matches the historical precedent from when Purchases
+  lived under GlobalSales_Project, re-verified fresh against the new
+  rule IDs and content rather than assumed.
+
+rules:
+
+  # ──────────────────────────────────────────────
+  # INTEGER TYPES
+  # ──────────────────────────────────────────────
+
+  - id: TY-001
+    dimension: Types
+    name: Map TINYINT to BYTE
+    intent: >
+      Convert SQL Server TINYINT (0–255, 1 byte) to Spark SQL BYTE (TINYINT synonym),
+      preserving the smallest integer footprint and avoiding unnecessary upcasting.
+      No TINYINT column is evidenced in the Purchases as-is analysis; retained as a
+      baseline platform-level mapping in case future Purchasing_Project objects on
+      the same `wideworldimportersdw` source introduce one.
+    activation:
+      preconditions:
+        - Column or variable declared as TINYINT in source DDL.
+      scope: project
+    transformation:
+      source: "TINYINT"
+      target: "BYTE"
+      algorithm:
+        - "Replace every occurrence of TINYINT in CREATE TABLE, ALTER TABLE, variable declarations, and CAST/CONVERT expressions with BYTE (Spark SQL alias for TINYINT)."
+        - "Validate that all stored values fall within 0–127 (signed Spark BYTE range); if any value exceeds 127, upcast to SMALLINT and log a warning."
+    validation:
+      success_criteria:
+        - All TINYINT columns render as BYTE in the generated Delta table DDL.
+        - Row counts match between source and target after load.
+        - No overflow errors during data transfer.
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "TINYINT value = 0"
+          expected: "BYTE value = 0"
+          notes: "No current evidence in Purchases as-is; baseline boundary case."
+        - input: "TINYINT value = 255"
+          expected: "SMALLINT value = 255 with migration warning logged"
+          notes: "Upcast path if a future Purchasing object exceeds signed BYTE range."
+        - input: "CAST(status AS TINYINT)"
+          expected: "CAST(status AS BYTE)"
+    inheritance:
+      level: project
+      override: "A product may override the upcast threshold if a Purchasing_Project object profiles TINYINT values outside 0–127."
+      extend: "A product may extend with column-specific overflow handling."
+      deactivate: "May be deactivated if no TINYINT column is ever introduced into Purchasing_Project scope."
+
+  - id: TY-002
+    dimension: Types
+    name: Map SMALLINT to SMALLINT
+    intent: >
+      Preserve SMALLINT (–32768 to 32767, 2 bytes) as the identical Spark SQL type.
+      No semantic change required. No SMALLINT column is evidenced in the Purchases
+      as-is analysis; retained as a baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column or variable declared as SMALLINT in source DDL.
+      scope: project
+    transformation:
+      source: "SMALLINT"
+      target: "SMALLINT"
+      algorithm:
+        - "Retain SMALLINT keyword verbatim in all generated Spark SQL / Delta DDL."
+        - "Confirm spelling is normalised to 'SMALLINT' for consistency."
+    validation:
+      success_criteria:
+        - All SMALLINT columns appear as SMALLINT in Delta table DDL.
+        - Data loads without type mismatch errors.
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "reorder_level SMALLINT NOT NULL"
+          expected: "reorder_level SMALLINT NOT NULL"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: "No override expected; direct type equivalence."
+      extend: "None anticipated."
+      deactivate: "May be deactivated if SMALLINT never appears in Purchasing_Project scope."
+
+  - id: TY-003
+    dimension: Types
+    name: Map INT to INT
+    intent: >
+      Preserve SQL Server INT (–2^31 to 2^31–1, 4 bytes) as Spark SQL INT. This is
+      the dominant integer type across Purchases: business-key columns
+      (`WWI Purchase Order ID`, `WWI Supplier ID`, `WWI Stock Item ID`,
+      `PackageTypeID`, `DeliveryMethodID`, `ContactPersonID`), the fact/dimension
+      surrogate keys `Supplier Key`, `Stock Item Key`, `Lineage Key`, `Date Key`
+      (on `Dimension.Date`), and calendar attributes `Calendar Year`, `Fiscal Year`,
+      `ISO Week Number` are all declared INT per the Purchases as-is ER diagram.
+    activation:
+      preconditions:
+        - Column or variable declared as INT or INTEGER in source DDL.
+      scope: project
+    transformation:
+      source: "INT / INTEGER"
+      target: "INT"
+      algorithm:
+        - "Normalise both INT and INTEGER keywords to INT in generated Spark SQL DDL."
+        - "Retain NOT NULL / NULL constraints (see TY-021)."
+        - "IDENTITY columns using INT are handed off to TY-023; SEQUENCE-generated INT surrogate keys are handed off to TY-024."
+    validation:
+      success_criteria:
+        - All INT/INTEGER columns appear as INT in generated Delta DDL.
+        - No implicit type widening introduced.
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "wwi_purchase_order_id INT NOT NULL"
+          expected: "wwi_purchase_order_id INT NOT NULL"
+          notes: "Evidenced: Fact.Purchase / Purchase_Staging WWI Purchase Order ID."
+        - input: "supplier_key INT NOT NULL"
+          expected: "supplier_key INT NOT NULL"
+          notes: "Evidenced: Dimension.Supplier surrogate key, per as-is 3.1/3.2."
+        - input: "calendar_year INT"
+          expected: "calendar_year INT"
+          notes: "Evidenced: Dimension.Date.CalendarYear."
+    inheritance:
+      level: project
+      override: false
+      extend: "A product may extend with column-specific range validation."
+      deactivate: false
+
+  - id: TY-004
+    dimension: Types
+    name: Map BIGINT to BIGINT
+    intent: >
+      Preserve SQL Server BIGINT (–2^63 to 2^63–1, 8 bytes) as Spark SQL BIGINT.
+      Evidenced on the two fact/staging surrogate keys of Purchases:
+      `Fact.Purchase.Purchase Key` (IDENTITY, composite with `Date Key`) and
+      `Integration.Purchase_Staging.Purchase Staging Key`.
+    activation:
+      preconditions:
+        - Column or variable declared as BIGINT in source DDL.
+      scope: project
+    transformation:
+      source: "BIGINT"
+      target: "BIGINT"
+      algorithm:
+        - "Retain BIGINT keyword verbatim in all generated Spark SQL / Delta DDL."
+        - "Confirm that IDENTITY BIGINT columns are handed off to TY-023."
+    validation:
+      success_criteria:
+        - All BIGINT columns appear as BIGINT in generated Delta DDL.
+        - Row counts and key values match source after full load.
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "purchase_key BIGINT NOT NULL"
+          expected: "purchase_key BIGINT NOT NULL"
+          notes: "Evidenced: Fact.Purchase Purchase Key, IDENTITY per as-is 3.2."
+        - input: "purchase_staging_key BIGINT NOT NULL"
+          expected: "purchase_staging_key BIGINT NOT NULL"
+          notes: "Evidenced: Integration.Purchase_Staging PK."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+
+  # ──────────────────────────────────────────────
+  # EXACT NUMERIC TYPES
+  # ──────────────────────────────────────────────
+
+  - id: TY-005
+    dimension: Types
+    name: Map DECIMAL/NUMERIC to DECIMAL
+    intent: >
+      Convert SQL Server DECIMAL(p,s) / NUMERIC(p,s) to Spark SQL DECIMAL(p,s),
+      preserving precision and scale exactly. Evidenced on
+      `Warehouse.StockItems.UnitPrice` / `Dimension.Stock Item.UnitPrice` and
+      `Purchasing.PurchaseOrderLines.ExpectedUnitPricePerOuter`.
+    activation:
+      preconditions:
+        - Column or expression declared as DECIMAL(p,s) or NUMERIC(p,s) in source DDL.
+      scope: project
+    transformation:
+      source: "DECIMAL(p,s) / NUMERIC(p,s)"
+      target: "DECIMAL(p,s)"
+      algorithm:
+        - "Normalise NUMERIC to DECIMAL in generated DDL; retain precision (p) and scale (s) unchanged."
+        - "Where p > 38, cap at DECIMAL(38,s) and log a warning — Spark SQL maximum precision is 38."
+        - "Unqualified DECIMAL defaults to DECIMAL(10,0) in SQL Server; carry that default forward explicitly."
+    validation:
+      success_criteria:
+        - Precision and scale are preserved in all generated DECIMAL columns.
+        - No silent rounding occurs during data load.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "unit_price DECIMAL(18,2)"
+          expected: "unit_price DECIMAL(18,2)"
+          notes: "Evidenced: Dimension.Stock Item / Warehouse.StockItems UnitPrice."
+        - input: "expected_unit_price_per_outer DECIMAL(18,2)"
+          expected: "expected_unit_price_per_outer DECIMAL(18,2)"
+          notes: "Evidenced: Purchasing.PurchaseOrderLines.ExpectedUnitPricePerOuter."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: TY-006
+    dimension: Types
+    name: Map MONEY to DECIMAL(19,4)
+    intent: >
+      Convert SQL Server MONEY to DECIMAL(19,4) in Spark SQL to preserve monetary
+      precision without relying on a proprietary type. No MONEY column is evidenced
+      in the Purchases as-is analysis (monetary values there use plain DECIMAL —
+      see TY-005); retained as a baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as MONEY in source DDL.
+      scope: project
+    transformation:
+      source: "MONEY"
+      target: "DECIMAL(19,4)"
+      algorithm:
+        - "Replace MONEY with DECIMAL(19,4) in all generated DDL and CAST expressions."
+        - "Ensure ETL pipelines do not introduce floating-point intermediaries that would corrupt the 4-decimal precision."
+    validation:
+      success_criteria:
+        - All MONEY columns replaced by DECIMAL(19,4) in generated DDL.
+        - No floating-point rounding artifacts present in target data.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "total_amount MONEY"
+          expected: "total_amount DECIMAL(19,4)"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if MONEY never appears in Purchasing_Project scope."
+
+  - id: TY-007
+    dimension: Types
+    name: Map SMALLMONEY to DECIMAL(10,4)
+    intent: >
+      Convert SQL Server SMALLMONEY to DECIMAL(10,4) in Spark SQL. No SMALLMONEY
+      column is evidenced in the Purchases as-is analysis; retained as a baseline
+      platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as SMALLMONEY in source DDL.
+      scope: project
+    transformation:
+      source: "SMALLMONEY"
+      target: "DECIMAL(10,4)"
+      algorithm:
+        - "Replace SMALLMONEY with DECIMAL(10,4) in all generated DDL and CAST expressions."
+        - "Verify source data stays within ±214,748.3648; if overflow is detected in profiling, upcast to DECIMAL(19,4) and log a warning."
+    validation:
+      success_criteria:
+        - All SMALLMONEY columns replaced by DECIMAL(10,4) in generated DDL.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "discount_amount SMALLMONEY"
+          expected: "discount_amount DECIMAL(10,4)"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if SMALLMONEY never appears in Purchasing_Project scope."
+
+  # ──────────────────────────────────────────────
+  # FLOATING POINT TYPES
+  # ──────────────────────────────────────────────
+
+  - id: TY-008
+    dimension: Types
+    name: Map FLOAT to DOUBLE
+    intent: >
+      Convert SQL Server FLOAT / FLOAT(n>24) to Spark SQL DOUBLE. No FLOAT column
+      is evidenced in the Purchases as-is analysis; retained as a baseline
+      platform-level mapping.
+    activation:
+      preconditions:
+        - Column or variable declared as FLOAT or FLOAT(n) where n > 24 in source DDL.
+      scope: project
+    transformation:
+      source: "FLOAT / FLOAT(n) where n in [25..53]"
+      target: "DOUBLE"
+      algorithm:
+        - "Replace FLOAT and FLOAT(53) with DOUBLE in all generated DDL."
+        - "FLOAT(n) where n ≤ 24 maps to FLOAT (single precision) — see TY-009."
+        - "CAST(x AS FLOAT) rewrites to CAST(x AS DOUBLE)."
+    validation:
+      success_criteria:
+        - FLOAT columns appear as DOUBLE in generated Delta DDL.
+      quality_dimensions:
+        - accuracy
+        - conformity
+      test_cases:
+        - input: "measurement FLOAT"
+          expected: "measurement DOUBLE"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: "May be deactivated if FLOAT never appears in Purchasing_Project scope."
+
+  - id: TY-009
+    dimension: Types
+    name: Map REAL / FLOAT(n<=24) to FLOAT
+    intent: >
+      Convert SQL Server REAL / FLOAT(n≤24) to Spark SQL FLOAT. No REAL column is
+      evidenced in the Purchases as-is analysis; retained as a baseline
+      platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as REAL or FLOAT(n) where n ≤ 24 in source DDL.
+      scope: project
+    transformation:
+      source: "REAL / FLOAT(n) where n in [1..24]"
+      target: "FLOAT"
+      algorithm:
+        - "Replace REAL and FLOAT(n≤24) with FLOAT in generated DDL."
+        - "CAST(x AS REAL) rewrites to CAST(x AS FLOAT)."
+    validation:
+      success_criteria:
+        - REAL columns appear as FLOAT in generated Delta DDL.
+      quality_dimensions:
+        - accuracy
+        - conformity
+      test_cases:
+        - input: "weight REAL"
+          expected: "weight FLOAT"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: "May be deactivated if REAL never appears in Purchasing_Project scope."
+
+  # ──────────────────────────────────────────────
+  # STRING TYPES
+  # ──────────────────────────────────────────────
+
+  - id: TY-010
+    dimension: Types
+    name: Map CHAR/NCHAR to STRING
+    intent: >
+      Convert fixed-length character types CHAR(n)/NCHAR(n) to Spark SQL STRING.
+      No CHAR/NCHAR column is evidenced in the Purchases as-is analysis (all
+      character columns evidenced there are NVARCHAR — see TY-011); retained as a
+      baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as CHAR(n) or NCHAR(n) in source DDL.
+      scope: project
+    transformation:
+      source: "CHAR(n) / NCHAR(n)"
+      target: "STRING"
+      algorithm:
+        - "Replace CHAR(n) and NCHAR(n) with STRING in generated DDL."
+        - "In ETL pipelines, apply RTRIM() to source values to remove SQL Server fixed-length padding before writing to Delta."
+        - "Document original length constraint in column metadata/comments for reference."
+    validation:
+      success_criteria:
+        - All CHAR/NCHAR columns appear as STRING in generated Delta DDL.
+        - Trailing spaces stripped from all migrated string values.
+      quality_dimensions:
+        - conformity
+        - validity
+        - accuracy
+      test_cases:
+        - input: "country_code CHAR(10)"
+          expected: "country_code STRING"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if CHAR/NCHAR never appears in Purchasing_Project scope."
+
+  - id: TY-011
+    dimension: Types
+    name: Map VARCHAR/NVARCHAR to STRING
+    intent: >
+      Convert variable-length character types VARCHAR(n)/NVARCHAR(n)/NVARCHAR(MAX)
+      to Spark SQL STRING. Extensively evidenced across Purchases: `Supplier
+      Reference` (NVARCHAR(40)), `Description` (NVARCHAR(200)), `Stock Item Name` /
+      `Stock Item` (NVARCHAR(200)), `Package Type Name` / `Package`
+      (NVARCHAR(100)), `Supplier` (NVARCHAR(200)), `Category` (NVARCHAR(100)),
+      `Primary Contact` (NVARCHAR(100)), `Postal Code` (NVARCHAR(20)), `Color`
+      (NVARCHAR(40)), `Selling Package` (NVARCHAR(100)), `Brand` (NVARCHAR(100)),
+      `Day` (NVARCHAR(20)).
+    activation:
+      preconditions:
+        - Column declared as VARCHAR(n), VARCHAR(MAX), NVARCHAR(n), or NVARCHAR(MAX)
+          in source DDL.
+      scope: project
+    transformation:
+      source: "VARCHAR(n) / VARCHAR(MAX) / NVARCHAR(n) / NVARCHAR(MAX)"
+      target: "STRING"
+      algorithm:
+        - "Replace all VARCHAR and NVARCHAR variants with STRING in generated DDL."
+        - "Record original length constraints in column-level metadata for downstream governance."
+        - "CAST(x AS VARCHAR(n)) rewrites to CAST(x AS STRING)."
+    validation:
+      success_criteria:
+        - All VARCHAR/NVARCHAR columns appear as STRING in generated Delta DDL.
+        - No data is truncated during migration.
+      quality_dimensions:
+        - conformity
+        - completeness
+        - validity
+      test_cases:
+        - input: "package NVARCHAR(100)"
+          expected: "package STRING"
+          notes: "Evidenced: Fact.Purchase / Purchase_Staging Package."
+        - input: "supplier NVARCHAR(200)"
+          expected: "supplier STRING"
+          notes: "Evidenced: Dimension.Supplier.Supplier."
+        - input: "supplier_reference NVARCHAR(40)"
+          expected: "supplier_reference STRING"
+          notes: "Evidenced: Purchasing.PurchaseOrders / Dimension.Supplier SupplierReference."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  # ──────────────────────────────────────────────
+  # DATE / TIME TYPES
+  # ──────────────────────────────────────────────
+
+  - id: TY-012
+    dimension: Types
+    name: Map DATE to DATE
+    intent: >
+      Preserve SQL Server DATE as Spark SQL DATE. Evidenced on `Order Date`,
+      `Expected Delivery Date`, `Last Receipt Date`, `Date Key` (staging and fact),
+      and `Dimension.Date.Date`.
+    activation:
+      preconditions:
+        - Column declared as DATE in source DDL.
+      scope: project
+    transformation:
+      source: "DATE"
+      target: "DATE"
+      algorithm:
+        - "Retain DATE keyword verbatim in generated DDL."
+        - "Verify ETL pipelines read the source as DateType — not TIMESTAMP — to avoid accidental time-zone shifts."
+    validation:
+      success_criteria:
+        - All DATE columns appear as DATE in generated Delta DDL.
+        - No time component introduced in target data.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "date_key DATE NOT NULL"
+          expected: "date_key DATE NOT NULL"
+          notes: "Evidenced: Fact.Purchase / Purchase_Staging Date Key, per as-is 3.1 and §9 risk 3/5 (pre-resolved, no load-time lookup against Dimension.Date)."
+        - input: "order_date DATE"
+          expected: "order_date DATE"
+          notes: "Evidenced: Purchasing.PurchaseOrders.OrderDate."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+
+  - id: TY-013
+    dimension: Types
+    name: Map TIME to STRING with documented precision
+    intent: >
+      Convert SQL Server TIME(n) to STRING, since Spark has no native
+      time-of-day type. No TIME column is evidenced in the Purchases as-is
+      analysis; retained as a baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as TIME or TIME(n) in source DDL.
+      scope: project
+    transformation:
+      source: "TIME(n)"
+      target: "STRING"
+      algorithm:
+        - "Replace TIME(n) with STRING in generated DDL."
+        - "In ETL pipelines, format source TIME values as ISO 8601 strings ('HH:mm:ss.nnnnnnn') using the source n precision."
+    validation:
+      success_criteria:
+        - All TIME columns appear as STRING in generated Delta DDL.
+        - Stored strings conform to 'HH:mm:ss.n' ISO 8601 format.
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - validity
+      test_cases:
+        - input: "shift_start TIME(7)"
+          expected: "shift_start STRING  -- original: TIME(7)"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if TIME never appears in Purchasing_Project scope."
+
+  - id: TY-014
+    dimension: Types
+    name: Map DATETIME to TIMESTAMP
+    intent: >
+      Convert SQL Server plain DATETIME (~3.33 ms precision, no time-zone
+      awareness) to Spark SQL TIMESTAMP. No plain-DATETIME column is evidenced in
+      the Purchases as-is analysis (all evidenced timestamp columns are
+      DATETIME2 — see TY-015); retained as a baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as DATETIME in source DDL.
+      scope: project
+    transformation:
+      source: "DATETIME"
+      target: "TIMESTAMP"
+      algorithm:
+        - "Replace DATETIME with TIMESTAMP in generated DDL."
+        - "In ETL pipelines, interpret source DATETIME values as local server time and convert to UTC using the source server's documented time-zone offset."
+    validation:
+      success_criteria:
+        - All DATETIME columns appear as TIMESTAMP in generated Delta DDL.
+        - UTC conversion applied consistently across all rows.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - consistency
+      test_cases:
+        - input: "created_at DATETIME"
+          expected: "created_at TIMESTAMP"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if plain DATETIME never appears in Purchasing_Project scope."
+
+  - id: TY-015
+    dimension: Types
+    name: Map DATETIME2 to TIMESTAMP_NTZ
+    intent: >
+      Convert SQL Server DATETIME2(n) to Spark SQL TIMESTAMP_NTZ, preserving
+      wall-clock semantics without imposing UTC conversion. Evidenced on
+      `Last Edited When` (source orders/lines), `Valid From` / `Valid To`
+      (the SCD2 validity windows on `Dimension.Supplier` and
+      `Dimension.Stock Item`), and `Last Modified When` (staging).
+    activation:
+      preconditions:
+        - Column declared as DATETIME2 or DATETIME2(n) in source DDL.
+      scope: project
+    transformation:
+      source: "DATETIME2(n)"
+      target: "TIMESTAMP_NTZ"
+      algorithm:
+        - "Replace DATETIME2(n) with TIMESTAMP_NTZ in generated DDL (Databricks Runtime 10.4+)."
+        - "Where TIMESTAMP_NTZ is unavailable, fall back to TIMESTAMP with a documented UTC-assumed convention and note the downgrade."
+        - "Fractional seconds precision up to microseconds (6 digits) is preserved; 100 ns precision of DATETIME2(7) truncates to microseconds — log the truncation."
+    validation:
+      success_criteria:
+        - All DATETIME2 columns appear as TIMESTAMP_NTZ in generated Delta DDL.
+        - No implicit time-zone conversion applied.
+        - Precision truncation (100 ns → 1 µs) is logged when it occurs.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "valid_from DATETIME2(7)"
+          expected: "valid_from TIMESTAMP_NTZ"
+          notes: "Evidenced: Dimension.Supplier / Dimension.Stock Item Valid From, used by the SCD2 valid-time lookups in Integration.MigrateStagedPurchaseData."
+        - input: "last_modified_when DATETIME2(7)"
+          expected: "last_modified_when TIMESTAMP_NTZ"
+          notes: "Evidenced: Integration.Purchase_Staging Last Modified When."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: TY-016
+    dimension: Types
+    name: Map SMALLDATETIME to TIMESTAMP
+    intent: >
+      Convert SQL Server SMALLDATETIME (1-minute precision) to Spark SQL
+      TIMESTAMP. No SMALLDATETIME column is evidenced in the Purchases as-is
+      analysis; retained as a baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as SMALLDATETIME in source DDL.
+      scope: project
+    transformation:
+      source: "SMALLDATETIME"
+      target: "TIMESTAMP"
+      algorithm:
+        - "Replace SMALLDATETIME with TIMESTAMP in generated DDL."
+        - "Seconds will always be 00 after migration — document this in column metadata."
+        - "Apply the same UTC-conversion convention as DATETIME (TY-014)."
+    validation:
+      success_criteria:
+        - All SMALLDATETIME columns appear as TIMESTAMP in generated Delta DDL.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "scheduled_time SMALLDATETIME"
+          expected: "scheduled_time TIMESTAMP"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if SMALLDATETIME never appears in Purchasing_Project scope."
+
+  - id: TY-017
+    dimension: Types
+    name: Map DATETIMEOFFSET to TIMESTAMP
+    intent: >
+      Convert SQL Server DATETIMEOFFSET(n) to Spark SQL TIMESTAMP (UTC-normalised).
+      No DATETIMEOFFSET column is evidenced in the Purchases as-is analysis;
+      retained as a baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as DATETIMEOFFSET or DATETIMEOFFSET(n) in source DDL.
+      scope: project
+    transformation:
+      source: "DATETIMEOFFSET(n)"
+      target: "TIMESTAMP  [+ companion STRING offset column if offset is business-relevant]"
+      algorithm:
+        - "Replace DATETIMEOFFSET(n) with TIMESTAMP in generated DDL."
+        - "In ETL pipelines, use SWITCHOFFSET / AT TIME ZONE 'UTC' on source to produce a UTC instant, then store as TIMESTAMP in Delta."
+        - "If the source offset is business-meaningful, add a companion column <col>_tz_offset STRING to preserve the original offset."
+    validation:
+      success_criteria:
+        - All DATETIMEOFFSET columns appear as TIMESTAMP in generated Delta DDL.
+        - UTC conversion is applied; no offset ambiguity in target data.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - consistency
+      test_cases:
+        - input: "audit_ts DATETIMEOFFSET(7)"
+          expected: "audit_ts TIMESTAMP  -- UTC-normalised"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if DATETIMEOFFSET never appears in Purchasing_Project scope."
+
+  # ──────────────────────────────────────────────
+  # BINARY TYPES
+  # ──────────────────────────────────────────────
+
+  - id: TY-018
+    dimension: Types
+    name: Map BINARY/VARBINARY to BINARY
+    intent: >
+      Convert SQL Server BINARY(n) / VARBINARY(n) / VARBINARY(MAX) to Spark SQL
+      BINARY. Evidenced on `Dimension.Stock Item.Photo` (VARBINARY).
+    activation:
+      preconditions:
+        - Column declared as BINARY(n), VARBINARY(n), or VARBINARY(MAX) in source DDL.
+      scope: project
+    transformation:
+      source: "BINARY(n) / VARBINARY(n) / VARBINARY(MAX)"
+      target: "BINARY"
+      algorithm:
+        - "Replace BINARY(n) and VARBINARY variants with BINARY in generated DDL."
+        - "For BINARY(n), note Spark BINARY is variable-length; apply RPAD logic in ETL only if fixed-length padding is required by downstream consumers."
+    validation:
+      success_criteria:
+        - All BINARY/VARBINARY columns appear as BINARY in generated Delta DDL.
+        - Byte contents are identical between source and target.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - completeness
+      test_cases:
+        - input: "photo VARBINARY(MAX)"
+          expected: "photo BINARY"
+          notes: "Evidenced: Dimension.Stock Item.Photo (reused dimension from Sales_Orders)."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+
+  - id: TY-019
+    dimension: Types
+    name: Map IMAGE to BINARY
+    intent: >
+      Convert the deprecated SQL Server IMAGE type to Spark SQL BINARY. No IMAGE
+      column is evidenced in the Purchases as-is analysis (the binary column
+      present there, `Photo`, is VARBINARY — see TY-018); retained as a baseline
+      platform-level mapping since IMAGE is a legacy type still possible elsewhere
+      in `wideworldimportersdw`.
+    activation:
+      preconditions:
+        - Column declared as IMAGE in source DDL.
+      scope: project
+    transformation:
+      source: "IMAGE"
+      target: "BINARY"
+      algorithm:
+        - "Replace IMAGE with BINARY in generated DDL."
+        - "Verify large objects can be handled by Spark driver/executor memory configuration; externalise very large binary objects when size > 10 MB per row."
+    validation:
+      success_criteria:
+        - All IMAGE columns appear as BINARY in generated Delta DDL.
+      quality_dimensions:
+        - conformity
+        - completeness
+      test_cases:
+        - input: "legacy_photo IMAGE"
+          expected: "legacy_photo BINARY"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if IMAGE never appears in Purchasing_Project scope."
+
+  # ──────────────────────────────────────────────
+  # BIT / BOOLEAN
+  # ──────────────────────────────────────────────
+
+  - id: TY-020
+    dimension: Types
+    name: Map BIT to BOOLEAN
+    intent: >
+      Convert SQL Server BIT (0/1/NULL) to Spark SQL BOOLEAN. Evidenced on
+      `Is Order Finalized` / `Is Order Line Finalized` (order header/line and
+      carried through staging/fact) and `Is Chiller Stock`
+      (`Dimension.Stock Item`).
+    activation:
+      preconditions:
+        - Column declared as BIT in source DDL.
+      scope: project
+    transformation:
+      source: "BIT"
+      target: "BOOLEAN"
+      algorithm:
+        - "Replace BIT with BOOLEAN in generated DDL."
+        - "In ETL pipelines, map BIT values: 0 → false, 1 → true, NULL → null."
+        - "Rewrite comparison expressions: 'col = 1' → 'col = true' or simply 'col'; 'col = 0' → 'col = false' or 'NOT col'."
+    validation:
+      success_criteria:
+        - All BIT columns appear as BOOLEAN in generated Delta DDL.
+        - 0 maps to false, 1 maps to true, NULLs preserved.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "is_order_finalized BIT NOT NULL"
+          expected: "is_order_finalized BOOLEAN NOT NULL"
+          notes: "Evidenced: Fact.Purchase / Purchase_Staging Is Order Finalized (sourced from PurchaseOrderLines.IsOrderLineFinalized)."
+        - input: "is_chiller_stock BIT"
+          expected: "is_chiller_stock BOOLEAN"
+          notes: "Evidenced: Dimension.Stock Item.IsChillerStock (reused dimension from Sales_Orders)."
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+
+  # ──────────────────────────────────────────────
+  # NULL / NOT NULL HANDLING
+  # ──────────────────────────────────────────────
+
+  - id: TY-021
+    dimension: Types
+    name: Preserve NULL / NOT NULL constraints in Delta DDL
+    intent: >
+      Faithfully replicate SQL Server NOT NULL / NULL column constraints in Delta
+      Lake table DDL, maintaining data integrity contracts even where Delta does
+      not enforce NOT NULL at the storage layer for all engines. General baseline
+      applicable to every column across Purchases' fact, dimension, and
+      integration-layer objects.
+    activation:
+      preconditions:
+        - Any column with an explicit or implicit NULL / NOT NULL constraint in
+          source DDL.
+      scope: project
+    transformation:
+      source: "NULL / NOT NULL column constraint"
+      target: "NULL / NOT NULL in Delta DDL (documented; enforcement via ETL checks)"
+      algorithm:
+        - "Preserve NOT NULL and NULL keywords in generated Delta CREATE TABLE DDL."
+        - "Add a data quality check in the ETL pipeline (e.g. Delta CONSTRAINT or a DQ framework assertion) to enforce NOT NULL for columns that were NOT NULL in source."
+        - "Do not silently drop NOT NULL constraints."
+    validation:
+      success_criteria:
+        - NOT NULL columns in source appear with NOT NULL in Delta DDL.
+        - ETL data quality checks reject NULL values in NOT NULL columns.
+      quality_dimensions:
+        - validity
+        - completeness
+        - conformity
+      test_cases:
+        - input: "wwi_purchase_order_id INT NOT NULL"
+          expected: "wwi_purchase_order_id INT NOT NULL"
+        - input: "INSERT with NULL in NOT NULL column"
+          expected: "ETL data quality check raises error; row rejected or quarantined"
+    inheritance:
+      level: project
+      override: false
+      extend: false
+      deactivate: false
+
+  # ──────────────────────────────────────────────
+  # SPECIAL / SYSTEM TYPES
+  # ──────────────────────────────────────────────
+
+  - id: TY-022
+    dimension: Types
+    name: Map UNIQUEIDENTIFIER to STRING
+    intent: >
+      Convert SQL Server UNIQUEIDENTIFIER (GUID) to Spark SQL STRING. No
+      UNIQUEIDENTIFIER column is evidenced in the Purchases as-is analysis
+      (surrogate keys there are INT/BIGINT via IDENTITY or SEQUENCE — see TY-023,
+      TY-024); retained as a baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as UNIQUEIDENTIFIER in source DDL.
+      scope: project
+    transformation:
+      source: "UNIQUEIDENTIFIER"
+      target: "STRING"
+      algorithm:
+        - "Replace UNIQUEIDENTIFIER with STRING in generated DDL."
+        - "In ETL pipelines, convert GUID bytes to the canonical lowercase hyphenated string format."
+        - "Document in column metadata that the source was a UNIQUEIDENTIFIER."
+    validation:
+      success_criteria:
+        - All UNIQUEIDENTIFIER columns appear as STRING in generated Delta DDL.
+        - GUID values formatted as lowercase hyphenated 36-character strings.
+      quality_dimensions:
+        - conformity
+        - uniqueness
+        - validity
+      test_cases:
+        - input: "row_guid UNIQUEIDENTIFIER"
+          expected: "row_guid STRING"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if UNIQUEIDENTIFIER never appears in Purchasing_Project scope."
+
+  - id: TY-023
+    dimension: Types
+    name: Map IDENTITY columns to Delta Lake GENERATED ALWAYS AS IDENTITY
+    intent: >
+      Replace SQL Server IDENTITY(seed, increment) auto-increment column property
+      with Delta Lake's native GENERATED ALWAYS AS IDENTITY clause. Evidenced on
+      `Fact.Purchase.Purchase Key`, which the Purchases as-is model (§3.2)
+      explicitly documents as an IDENTITY column (composite PK with `Date Key`).
+    activation:
+      preconditions:
+        - Column has the IDENTITY(seed, increment) property in source DDL.
+        - Column type is INT or BIGINT.
+      scope: project
+    transformation:
+      source: "col INT|BIGINT IDENTITY(seed, increment)"
+      target: "col BIGINT GENERATED ALWAYS AS IDENTITY (START WITH seed INCREMENT BY increment)"
+      algorithm:
+        - "Detect IDENTITY(seed, increment) property on INT or BIGINT columns."
+        - "In the Delta CREATE TABLE DDL, replace with GENERATED ALWAYS AS IDENTITY (START WITH <seed> INCREMENT BY <increment>)."
+        - "Upcast INT IDENTITY to BIGINT to accommodate future growth (recommended best practice on Databricks)."
+        - "During full-load migration, temporarily use GENERATED BY DEFAULT AS IDENTITY to bulk-insert historical key values, then switch to GENERATED ALWAYS AS IDENTITY for ongoing inserts."
+        - "Document the original IDENTITY seed/increment and any re-keying decisions."
+    validation:
+      success_criteria:
+        - IDENTITY columns appear with GENERATED ALWAYS AS IDENTITY in Delta DDL.
+        - Historical key values are either preserved or re-keyed with full RI update.
+        - No duplicate key values generated after migration.
+      quality_dimensions:
+        - uniqueness
+        - conformity
+        - validity
+        - consistency
+      test_cases:
+        - input: "purchase_key BIGINT IDENTITY(1,1) NOT NULL"
+          expected: "purchase_key BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1) NOT NULL"
+          notes: "Evidenced: Fact.Purchase Purchase Key, per Purchases as-is §3.2."
+        - input: "INSERT without explicit key value"
+          expected: "Row inserted with next IDENTITY value in sequence"
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: TY-024
+    dimension: Types
+    name: Replace SQL Server SEQUENCE objects with Delta Lake IDENTITY or Python counter
+    intent: >
+      Replace SQL Server SEQUENCE objects with an appropriate Databricks-native
+      counter mechanism. Directly evidenced by `sequences.lineagekey`, explicitly
+      catalogued as an in-scope object in modernization-plan.md §6.4 and consumed
+      by `Integration.MigrateStagedPurchaseData`'s `Lineage Key` bookkeeping
+      (per Purchases as-is §5.4). The Purchases as-is model (§3.2) also documents
+      that `Dimension.Supplier` and `Dimension.Stock Item` surrogate keys are
+      SEQUENCE-generated (`Sequences.SupplierKey`, `Sequences.StockItemKey`)
+      even though those two sequence objects are not individually listed in
+      modernization-plan.md §6.4 — flagged here for addition to that inventory,
+      consistent with how the as-is analysis flagged the `wwidw-ordered-by-supplier`
+      report as a scope-inventory gap.
+    activation:
+      preconditions:
+        - "A SQL Server SEQUENCE object exists in scope (identified in modernization-plan.md §6.4: sequences.lineagekey)."
+        - "The Purchases as-is analysis (§3.2) additionally evidences SEQUENCE-generated surrogate keys for Dimension.Supplier and Dimension.Stock Item, not yet individually catalogued at project level."
+        - The sequence is referenced via NEXT VALUE FOR in T-SQL stored procedures
+          or DML statements.
+      scope: project
+    transformation:
+      source: "CREATE SEQUENCE <schema>.<name> AS <type> START WITH <n> INCREMENT BY <m>"
+      target: >
+        Option A (single-table use): BIGINT GENERATED ALWAYS AS IDENTITY on the
+        consuming table column.
+        Option B (multi-table / cross-pipeline use, applies to sequences.lineagekey
+        which is shared cross-cutting ETL infrastructure per modernization-plan.md
+        §6.3): Python counter using delta.tables.DeltaTable with a dedicated
+        sequence-tracking table (schema: seq_name STRING PK, next_val BIGINT) with
+        optimistic locking.
+      algorithm:
+        - "For sequences.lineagekey: determine all NEXT VALUE FOR sequences.lineagekey call sites; since it is shared cross-cutting ETL infrastructure (not single-table), create a migvisor_sequences Delta table (seq_name STRING, next_val BIGINT) with a get_next_val(seq_name) Python helper using Delta optimistic concurrency."
+        - "For Dimension.Supplier / Dimension.Stock Item surrogate-key sequences: confirm with the project/product owner whether each feeds exactly one table; if so, convert to GENERATED ALWAYS AS IDENTITY on that dimension's surrogate key column, otherwise apply the shared-counter pattern as for sequences.lineagekey."
+        - "Remove all NEXT VALUE FOR references in migrated T-SQL/procedure code and replace with the chosen pattern."
+        - "Initialise the replacement counter at the current max value from the source to avoid collisions with existing data."
+    validation:
+      success_criteria:
+        - No CREATE SEQUENCE DDL in generated migration output.
+        - All NEXT VALUE FOR call sites replaced with the chosen Databricks pattern.
+        - Generated key values are unique and monotonically increasing after migration.
+        - No collision between historical keys loaded during migration and new keys
+          generated post-migration.
+      quality_dimensions:
+        - uniqueness
+        - validity
+        - consistency
+        - conformity
+      test_cases:
+        - input: "CREATE SEQUENCE sequences.lineagekey AS INT START WITH 1 INCREMENT BY 1"
+          expected: "No SEQUENCE DDL; migvisor_sequences Delta table + get_next_val('lineagekey') Python helper, consumed by the migrated Fact.Purchase load pipeline"
+          notes: "Evidenced: modernization-plan.md §6.4 in-scope sequence; consumed per Purchases as-is §5.4."
+        - input: "SELECT TOP(1) [Lineage Key] FROM Integration.Lineage WHERE [Table Name] = N'Purchase' AND [Data Load Completed] IS NULL ORDER BY [Lineage Key] DESC"
+          expected: "get_next_val('lineagekey') or equivalent Delta-native batch-key retrieval"
+          notes: "Evidenced verbatim pattern from Integration.MigrateStagedPurchaseData, per Purchases as-is §5.4."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false
+
+  - id: TY-025
+    dimension: Types
+    name: Map XML to STRING
+    intent: >
+      Convert SQL Server XML to Spark SQL STRING. No XML column is evidenced in
+      the Purchases as-is analysis; retained as a baseline platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as XML or XML(SCHEMA COLLECTION <name>) in source DDL.
+      scope: project
+    transformation:
+      source: "XML / XML(SCHEMA COLLECTION <name>)"
+      target: "STRING"
+      algorithm:
+        - "Replace XML and XML(SCHEMA COLLECTION ...) with STRING in generated DDL."
+        - "In ETL pipelines, serialise XML values to string; document the original schema name in column metadata."
+    validation:
+      success_criteria:
+        - All XML columns appear as STRING in generated Delta DDL.
+        - XML content preserved verbatim (no serialisation loss).
+      quality_dimensions:
+        - conformity
+        - completeness
+        - accuracy
+      test_cases:
+        - input: "config_data XML"
+          expected: "config_data STRING"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if XML never appears in Purchasing_Project scope."
+
+  - id: TY-026
+    dimension: Types
+    name: Map SQL_VARIANT to STRING
+    intent: >
+      Convert SQL Server SQL_VARIANT to Spark SQL STRING. No SQL_VARIANT column
+      is evidenced in the Purchases as-is analysis; retained as a baseline
+      platform-level mapping.
+    activation:
+      preconditions:
+        - Column declared as SQL_VARIANT in source DDL.
+      scope: project
+    transformation:
+      source: "SQL_VARIANT"
+      target: "STRING"
+      algorithm:
+        - "Replace SQL_VARIANT with STRING in generated DDL."
+        - "In ETL pipelines, use SQL_VARIANT_PROPERTY() in the source T-SQL extraction query to identify the base type of each value, then serialise as '<base_type>:<value>'."
+        - "Document the serialisation convention in column metadata."
+    validation:
+      success_criteria:
+        - All SQL_VARIANT columns appear as STRING in generated Delta DDL.
+        - Serialised strings include the base type prefix.
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - completeness
+      test_cases:
+        - input: "param_value SQL_VARIANT"
+          expected: "param_value STRING  -- serialised as '<base_type>:<value>'"
+          notes: "No current evidence in Purchases as-is; baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if SQL_VARIANT never appears in Purchasing_Project scope."
+
+  # ──────────────────────────────────────────────
+  # COLLATION HANDLING
+  # ──────────────────────────────────────────────
+
+  - id: TY-027
+    dimension: Types
+    name: Resolve SQL Server collation to Spark UTF-8 default
+    intent: >
+      Remove SQL Server column-level/database-level collation specifications when
+      generating Spark SQL DDL, since Spark uses a single session-level UTF-8
+      collation. No explicit non-default COLLATE clause is evidenced on any
+      NVARCHAR column in the Purchases as-is analysis; retained as a baseline
+      platform-level mapping applicable to the many NVARCHAR columns evidenced
+      under TY-011, in case any carries a non-default collation not surfaced by
+      the as-is analysis.
+    activation:
+      preconditions:
+        - Column has an explicit COLLATE clause in source DDL, or source database
+          uses a non-default collation that affects sort/comparison semantics.
+      scope: project
+    transformation:
+      source: "col NVARCHAR(n) COLLATE <CollationName>"
+      target: "col STRING  -- collation resolved to Spark UTF-8 session default"
+      algorithm:
+        - "Strip COLLATE clauses from all generated Spark DDL."
+        - "Identify case-insensitive collations (_CI_) in source and rewrite case-insensitive comparisons using LOWER()/UPPER() where exact semantic parity is required; log affected query locations."
+        - "Identify binary collations (_BIN, _BIN2) and flag for explicit CAST or hex-comparison rewrites."
+        - "Verify sort orders for ORDER BY on string columns match expectations."
+    validation:
+      success_criteria:
+        - No COLLATE clauses appear in generated Delta DDL.
+        - Case-insensitive comparison logic identified and rewritten where required.
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - consistency
+        - validity
+      test_cases:
+        - input: "supplier NVARCHAR(200) COLLATE SQL_Latin1_General_CP1_CI_AS"
+          expected: "supplier STRING  -- COLLATE removed; UTF-8 default applied"
+          notes: "No current evidence of an explicit COLLATE clause in Purchases as-is; baseline mapping applied preventively to evidenced NVARCHAR columns such as Supplier."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if no non-default collation is ever confirmed in Purchasing_Project scope."
+
+  # ──────────────────────────────────────────────
+  # DEFAULT VALUES AND COMPUTED COLUMNS
+  # ──────────────────────────────────────────────
+
+  - id: TY-028
+    dimension: Types
+    name: Translate SQL Server DEFAULT constraint values to Spark SQL DDL defaults
+    intent: >
+      Convert SQL Server DEFAULT constraint expressions to their Spark SQL
+      equivalents in Delta table DDL. No explicit DEFAULT constraint is evidenced
+      in the Purchases as-is analysis (the ETL bookkeeping calls to SYSDATETIME()
+      documented in §5.4 are procedural UPDATE statements inside
+      `Integration.MigrateStagedPurchaseData`, not DDL DEFAULT clauses); retained
+      as a baseline platform-level mapping. Note the NEXT VALUE FOR case is
+      already handled by TY-024.
+    activation:
+      preconditions:
+        - Column has a DEFAULT constraint in source DDL.
+      scope: project
+    transformation:
+      source: "col <type> DEFAULT <expression>"
+      target: "col <mapped_type> DEFAULT <spark_expression>"
+      algorithm:
+        - "Map common SQL Server DEFAULT expressions to Spark SQL equivalents: DEFAULT 0/1 → DEFAULT 0/1; DEFAULT ''/N'' → DEFAULT ''; DEFAULT GETDATE()/GETUTCDATE()/SYSDATETIME() → DEFAULT current_timestamp(); DEFAULT NEWID() → DEFAULT uuid()."
+        - "DEFAULT (NEXT VALUE FOR <seq>) is handled by TY-024, not this rule."
+        - "For complex expressions not directly mappable, generate a comment in the DDL and implement the logic in the ETL pipeline's INSERT statement instead."
+    validation:
+      success_criteria:
+        - Simple DEFAULT values (literals, GETDATE, NEWID) mapped correctly.
+        - Complex expressions flagged and implemented in ETL with DDL comment.
+      quality_dimensions:
+        - conformity
+        - accuracy
+        - validity
+      test_cases:
+        - input: "created_at DATETIME2 DEFAULT SYSDATETIME()"
+          expected: "created_at TIMESTAMP_NTZ DEFAULT current_timestamp()"
+          notes: "No current evidence of a DDL DEFAULT clause in Purchases as-is (SYSDATETIME() there is a procedural bookkeeping call, per §5.4); baseline mapping."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: "May be deactivated if no DDL DEFAULT constraint is ever confirmed in Purchasing_Project scope."
+
+  - id: TY-029
+    dimension: Types
+    name: Convert SQL Server computed columns to Delta Lake GENERATED columns
+    intent: >
+      Replace SQL Server computed column definitions (col AS <expression>) with
+      Delta Lake GENERATED ALWAYS AS (<expression>) columns. No persisted DDL
+      computed column is evidenced in the Purchases as-is analysis — `Ordered
+      Quantity` (= `Ordered Outers` × `Quantity Per Outer`) is computed
+      procedurally in `Integration.GetPurchaseUpdates`'s extraction SELECT, not
+      as a table-level computed column (per as-is §4.1/§5.1); retained as a
+      baseline platform-level mapping and to explicitly document that this
+      rule does not apply to `Ordered Quantity`.
+    activation:
+      preconditions:
+        - Table contains one or more computed columns defined with AS <expression>
+          in source DDL.
+        - The expression is deterministic (no RAND(), NEWID(), or non-deterministic
+          functions).
+      scope: project
+    transformation:
+      source: "col <type> AS <sql_server_expression> [PERSISTED]"
+      target: "col <mapped_type> GENERATED ALWAYS AS (<spark_expression>)"
+      algorithm:
+        - "Extract the computation expression from the source DDL."
+        - "Translate T-SQL expression functions to Spark SQL equivalents (e.g. ISNULL → COALESCE)."
+        - "Generate Delta DDL: GENERATED ALWAYS AS (<translated_expression>)."
+        - "If the expression is non-deterministic or too complex to translate, remove from DDL and implement as a derived column in the ETL pipeline with a migration note — this is the applicable path for Ordered Quantity, which stays an ETL-computed pass-through column rather than a Delta GENERATED column."
+    validation:
+      success_criteria:
+        - All deterministic computed columns appear as GENERATED ALWAYS AS in Delta DDL.
+        - Non-translatable/non-DDL-sourced expressions (e.g. Ordered Quantity) are flagged and implemented in ETL instead.
+      quality_dimensions:
+        - accuracy
+        - conformity
+        - validity
+      test_cases:
+        - input: "ordered_quantity AS (OrderedOuters * QuantityPerOuter) -- NOT a DDL computed column in source; computed in Integration.GetPurchaseUpdates SELECT"
+          expected: "ordered_quantity INT -- ETL-computed pass-through column, populated by the migrated extraction pipeline; no Delta GENERATED ALWAYS AS clause, since the source never declared it as a table-level computed column"
+          notes: "Evidenced: Purchases as-is §4.1/§5.1 Ordered Quantity calculation; documents why this rule's GENERATED-column path does not apply here."
+    inheritance:
+      level: project
+      override: false
+      extend: true
+      deactivate: false

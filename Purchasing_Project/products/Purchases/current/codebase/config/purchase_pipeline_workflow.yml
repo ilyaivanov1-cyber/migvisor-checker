@@ -1,0 +1,82 @@
+# TASK-020: Orchestrate the end-to-end Workflow job chain
+# Design ref: design.md §5.3 Monitoring and Alerting. Requirements: FR-001, FR-008.
+# Depends on: TASK-009, TASK-010, TASK-011, TASK-012, TASK-013, TASK-014, TASK-015, TASK-017, TASK-018, TASK-019
+
+name: purchases_incremental_pipeline
+schedule:
+  quartz_cron_expression: "0 0 2 * * ?"
+  timezone_id: UTC
+  pause_status: UNPAUSED
+
+tasks:
+  - task_key: extract_purchase_staging
+    notebook_task:
+      notebook_path: /Repos/purchasing/etl/extract_purchase_staging
+    # Issues this batch's lineage_key at batch start (TASK-013 begin_batch) as part of extraction.
+
+  - task_key: resolve_supplier_key
+    depends_on:
+      - task_key: extract_purchase_staging
+    notebook_task:
+      notebook_path: /Repos/purchasing/etl/resolve_supplier_key
+
+  - task_key: resolve_stock_item_key
+    depends_on:
+      - task_key: resolve_supplier_key
+    notebook_task:
+      notebook_path: /Repos/purchasing/etl/resolve_stock_item_key
+
+  - task_key: compute_ordered_quantity
+    depends_on:
+      - task_key: resolve_stock_item_key
+    notebook_task:
+      notebook_path: /Repos/purchasing/etl/compute_ordered_quantity
+
+  - task_key: merge_fact_purchase
+    depends_on:
+      - task_key: compute_ordered_quantity
+    notebook_task:
+      notebook_path: /Repos/purchasing/etl/merge_fact_purchase
+
+  - task_key: qv001_row_count_reconciliation
+    depends_on:
+      - task_key: merge_fact_purchase
+    notebook_task:
+      notebook_path: /Repos/purchasing/tests/test_qv001_row_count_reconciliation
+    # Blocking (QA-001): a failure here prevents advance_etl_cutoff from running.
+
+  - task_key: qv002_unknown_key_fallback_rate
+    depends_on:
+      - task_key: merge_fact_purchase
+    notebook_task:
+      notebook_path: /Repos/purchasing/tests/test_qv002_unknown_key_fallback_rate
+    # Non-blocking monitoring alert only (QA-002 threshold pending).
+
+  - task_key: qv003_referential_conformity
+    depends_on:
+      - task_key: merge_fact_purchase
+    notebook_task:
+      notebook_path: /Repos/purchasing/tests/test_qv003_referential_conformity
+    # Non-blocking; orphaned rows routed to purchasing.stg.dq_rejections (QA-003).
+
+  - task_key: end_batch_lineage
+    depends_on:
+      - task_key: qv001_row_count_reconciliation
+      - task_key: qv002_unknown_key_fallback_rate
+      - task_key: qv003_referential_conformity
+    notebook_task:
+      notebook_path: /Repos/purchasing/etl/assign_lineage_key
+      base_parameters:
+        mode: end_batch
+
+  - task_key: advance_etl_cutoff
+    depends_on:
+      - task_key: qv001_row_count_reconciliation
+    notebook_task:
+      notebook_path: /Repos/purchasing/etl/advance_etl_cutoff
+    # Runs only if qv001_row_count_reconciliation succeeds — a QV-001 failure prevents this task
+    # (and therefore the watermark advance) from executing (FR-008 / QA-001).
+
+email_notifications:
+  on_failure:
+    - "[OWNER INPUT REQUIRED: alert distribution list]"

@@ -1,0 +1,285 @@
+dimension: Lineage
+prefix: LN
+project: "Purchasing_Project"
+product: "Purchases"
+source_platform: "Microsoft SQL Server 2014 (T-SQL) — wideworldimportersdw"
+target_platform: "Databricks Delta Lake (new independent Unity Catalog: purchasing)"
+generated: "2026-09-21"
+inheritance:
+  project_rules_version: "2026-09-21"
+  applied_overrides: []       # rule IDs overridden from project
+  applied_extensions: []      # rule IDs extended from project
+  applied_deactivations: []   # rule IDs removed from project set
+  new_rules: []               # product-only rule IDs added
+
+note: >
+  No LN customizations apply for Purchases. Purchasing_Project's product-transformation-rules
+  directory for Purchases contains no override.yaml, extensions.yaml, or deactivations.yaml, and
+  the only action file present (new-rules.yaml, carried over pre-split) contains a single
+  Custom-dimension entry (CX-P01) — not LN-prefixed — so filtering for this dimension yields zero
+  matches. This mirrors the historical precedent under the old GlobalSales_Project product rule
+  set, where the same thin-index conclusion held ("No LN customizations exist for Purchases").
+
+  Verification against the NEW project-level LN-001..LN-007 rule set (rather than assuming the
+  historical outcome still holds) confirms the same conclusion on its own merits: every
+  Purchases-specific lineage concern surfaced in as-is.md and product-scope.md is already named
+  explicitly, by evidence, inside the new project rules themselves —
+
+    - LN-001 (cross-project dependency registry) and LN-002 (union of scope-listed and
+      lineage-graph-discovered cross-project consumers) already enumerate all three of
+      Purchases' cross-project consumers by name: analytics.v_ordertoyearanalytics
+      (globalsales.mart.v_order_to_year_analytics), "wwidw purchase and sale per stockitem
+      dynamic," and "wwidw-ordered-by-supplier" (the graph-discovered one from as-is.md §2/§4.5),
+      all owned by GlobalSales_Project/Sales_Orders.
+    - LN-003 (lineage-key batch traceability) and LN-004 (cutoff/watermark lineage) already cite
+      fact.purchase's Lineage Key / integration.lineage / integration.etl cutoff mechanisms
+      verbatim from as-is.md §4/§5.4.
+    - LN-005 (fact-to-dimension edges missing from the automatic lineage graph) already cites
+      fact.purchase's Supplier Key / Stock Item Key valid-time resolution and the absence of FK
+      edges in the lineage graph, per as-is.md §3.2/§4.3.
+    - LN-006 (batch-level lineage continuity across delete-then-insert reloads) already cites
+      integration.migratestagedpurchasedata's delete-then-insert-by-WWI-Purchase-Order-ID pattern
+      verbatim from as-is.md §3.2/§4.4 and modernization-plan.md §3.1 risk #4.
+    - LN-007 (conformed dimension provenance for cross-project/catalog reuse) already cites
+      dimension.supplier and dimension.stock item exactly as described in as-is.md §3.2/§6.1 and
+      product-scope.md §3.2, including the stock-item dimension's GlobalSales_Project/Sales_Orders
+      origin.
+
+  Since Purchases is currently the sole data product in Purchasing_Project and the project rules
+  were authored with Purchases' own as-is/scope evidence already baked into their preconditions,
+  transformations, and test cases, there is no residual product-specific gap left to cover via
+  override, extension, deactivation, or new rule. Consequently this consolidated file is the
+  project-level LN rule set (LN-001..LN-007) carried forward unchanged.
+
+rules:
+
+  - id: LN-001
+    dimension: Lineage
+    name: "Cross-project dependency registry for consumers outside the purchasing catalog"
+    intent: "Formally register and track every downstream object that lives outside Purchasing_Project's own Unity Catalog (purchasing) but reads a Purchasing_Project object, because such dependencies span two independently governed catalogs/projects and are not guaranteed to be captured end-to-end by standard automatic lineage tooling."
+    activation:
+      preconditions:
+        - "A Purchasing_Project source object (e.g. fact.purchase, dimension.supplier, dimension.stock item) has at least one known or discovered consumer whose owning object/artifact is deployed under a Unity Catalog other than `purchasing` (e.g. `globalsales`)."
+        - "The consuming object belongs to a different migVisor project than Purchasing_Project (e.g. GlobalSales_Project)."
+      scope: project
+    transformation:
+      source: "In the SQL Server source, `fact.purchase` and its dependent artifacts (`analytics.v_ordertoyearanalytics`, `wwidw purchase and sale per stockitem dynamic`, `wwidw-ordered-by-supplier`) all lived in the same database (`wideworldimportersdw`) and were traversable by a single lineage graph query; there was no catalog boundary to cross."
+      target: "A project-level cross-project dependency registry (e.g. `.tmp/{{PROJECT_NAME}}/lineage/cross-project-dependencies.yaml` or an equivalent tracked artifact) that explicitly lists: producing object (catalog.schema.table in `purchasing`), consuming object (catalog.schema.object in the foreign catalog/project), owning project, owning team, access mechanism (cross-catalog grant, federation, replication, etc.), and resolution status."
+      algorithm:
+        - "For every object migrated into the `purchasing` catalog, check the as-is analysis's 'Known Downstream Dependencies' / 'Consumers' sections for any consumer not owned by this project."
+        - "For each such consumer, create or update a registry entry recording: producing object FQN under `purchasing`, consuming object FQN under its own catalog (e.g. `globalsales`), the owning project name, and the owning team/product (e.g. GlobalSales_Project / Sales_Orders)."
+        - "Record the chosen or proposed access mechanism for the target platform (Unity Catalog cross-catalog grant on `purchasing.fact.purchase`, a federated/materialized replica in `globalsales`, or another agreed pattern) and its resolution status (open, agreed, implemented)."
+        - "Do not rely solely on Unity Catalog's automatic lineage graph to surface this dependency — automatic lineage may not span two independently administered catalogs/metastores cleanly, especially for BI-report-level consumers with no queryable definition. The registry is the authoritative record; automatic lineage is a supplementary signal, never a substitute."
+        - "Flag the registry entry as blocking for cutover planning until resolution status is 'implemented' for all consumers of a given producing object."
+    validation:
+      success_criteria:
+        - "Every consumer object identified in the as-is analysis as belonging to a different project than the one owning the producing object has a corresponding entry in the cross-project dependency registry."
+        - "No cross-project consumer is tracked only implicitly via Unity Catalog's automatic lineage graph without an explicit registry entry."
+        - "Each registry entry names an access mechanism and a resolution status."
+      quality_dimensions:
+        - completeness
+        - coverage
+      test_cases:
+        - input: "`fact.purchase` (to be migrated to `purchasing.fact.purchase`) is read by `analytics.v_ordertoyearanalytics`, deployed as `globalsales.mart.v_order_to_year_analytics`, owned by GlobalSales_Project's Sales_Orders product."
+          expected: "A registry entry exists: producer=`purchasing.fact.purchase`, consumer=`globalsales.mart.v_order_to_year_analytics`, owning_project=GlobalSales_Project, owning_product=Sales_Orders, mechanism=[cross-catalog grant | federation | replication] (TBD), status=open, flagged as cutover-blocking."
+          notes: "This is the project's flagship cross-project risk (modernization-plan.md §3.1 risk #2) — it is materially different from a same-catalog cross-product gap and must not be resolved by project-level lineage tooling alone."
+    inheritance:
+      level: project
+      override: "A product may narrow the registry to its own subset of producing objects but may not remove the cross-project registry requirement itself."
+      extend: "A product may add additional consuming objects discovered during its own as-is analysis."
+      deactivate: "Not deactivatable while any Purchasing_Project object has a known or suspected consumer outside the `purchasing` catalog."
+
+  - id: LN-002
+    dimension: Lineage
+    name: "Register all known and lineage-graph-discovered cross-project BI/analytics consumers"
+    intent: "Ensure the cross-project dependency registry (LN-001) is populated from every discovery channel, including consumers found only via lineage graph traversal and not listed in upstream scope documents, so no cross-project consumer is silently missed."
+    activation:
+      preconditions:
+        - "As-is lineage traversal for a Purchasing_Project object surfaces a consumer not previously listed in `product-scope.md` or the project's own inventories."
+        - "That consumer is owned by a different project (per LN-001's cross-project criterion)."
+      scope: project
+    transformation:
+      source: "The Purchases as-is analysis found `wwidw-ordered-by-supplier` via lineage-graph traversal only — it was not listed in `product-scope.md` §5/§9 and was flagged for retroactive addition there. `analytics.v_ordertoyearanalytics` and `wwidw purchase and sale per stockitem dynamic` were already known from prior scoping."
+      target: "All three consumers — `analytics.v_ordertoyearanalytics`, `wwidw purchase and sale per stockitem dynamic`, and `wwidw-ordered-by-supplier` — appear as individual entries in the cross-project dependency registry, each with the same field set as LN-001, treated as one coordinated cross-project decision rather than three independent ones (per modernization-plan.md §3.1 risk #3)."
+      algorithm:
+        - "Union the consumer lists from: (a) the current product-scope.md / as-is.md 'Consumers' and 'Known Downstream Dependencies' sections, and (b) any MCP lineage-graph traversal (`explore-neighbors`, `traverse-lineage`, `find-paths`) run against the producing object."
+        - "For each consumer in the union not already present in the registry, add it using the LN-001 entry template."
+        - "Tag entries discovered only via graph traversal (not via prior scope documents) with `discovery_channel: lineage-graph` so the registry preserves provenance of how the dependency was found."
+        - "Where multiple consumers share the same underlying resolution mechanism (e.g. all three read `fact.purchase` and would be resolved by the same cross-catalog grant), link their entries as a single coordinated resolution group rather than tracking them as independent decisions."
+    validation:
+      success_criteria:
+        - "The registry entry count for cross-project consumers of a given producing object matches the union of scope-document-listed and lineage-graph-discovered consumers, with no duplicates and no omissions."
+        - "Entries sharing a resolution mechanism are linked as a coordinated group."
+      quality_dimensions:
+        - completeness
+        - consistency
+      test_cases:
+        - input: "Lineage graph traversal from `fact.purchase` surfaces `wwidw-ordered-by-supplier`, which was absent from `product-scope.md` §5."
+          expected: "Registry gains a new entry for `wwidw-ordered-by-supplier` tagged `discovery_channel: lineage-graph`, grouped with the existing `v_ordertoyearanalytics` and `wwidw purchase and sale per stockitem dynamic` entries under one coordinated resolution decision."
+          notes: "Mirrors modernization-plan.md §3.1 risk #3's instruction to treat all three as one coordinated decision."
+    inheritance:
+      level: project
+      override: "Not overridable — discovery-channel tagging and consumer union logic are mandatory."
+      extend: "A product may add further consumer-discovery channels (e.g. BI catalog export) beyond MCP lineage-graph traversal."
+      deactivate: "Not deactivatable while any as-is analysis for a Purchasing_Project object remains subject to lineage-graph traversal."
+
+  - id: LN-003
+    dimension: Lineage
+    name: "Preserve administrative lineage-key batch traceability as native Delta lineage metadata"
+    intent: "Carry forward the source system's administrative Lineage Key / batch-tracking pattern into the target lakehouse so every row's originating ETL run remains auditable after migration."
+    activation:
+      preconditions:
+        - "A source table populates an administratively assigned Lineage Key (or equivalent batch identifier) sourced from `sequences.lineagekey` / `integration.lineage`, independent of business-key columns."
+      scope: project
+    transformation:
+      source: "`fact.purchase.[Lineage Key]` is assigned in `integration.migratestagedpurchasedata` from the currently open batch's `integration.lineage.[Lineage Key]` (itself backed by `sequences.lineagekey`), tracking which ETL run loaded each row; `integration.lineage` also records `[Data Load Completed]` and `[Was Successful]` per batch."
+      target: "Every migrated fact/dimension table in `purchasing` retains a `lineage_key` column (snake_case) of a stable numeric or UUID type, and a corresponding `purchasing.integration.lineage` (or Delta-native equivalent, e.g. a lineage/audit Delta table plus table properties) records batch id, load-completed timestamp, and success flag."
+      algorithm:
+        - "Map the source `[Lineage Key]` column on every fact/dimension table to a target `lineage_key` column with equivalent semantics (one value per load batch, not per business event)."
+        - "Reproduce `integration.lineage`'s batch bookkeeping (open/completed batches, success flag, source-system cutoff time) as a Delta table under `purchasing.integration` (or the project's chosen control-schema convention), preserving the same batch-identification pattern used across the shared lineage/cutoff infrastructure inherited from GlobalSales_Project."
+        - "Ensure the batch-assignment step runs before the fact/dimension write completes, so `lineage_key` is never null on a successfully loaded row."
+    validation:
+      success_criteria:
+        - "Every row in a migrated fact/dimension table has a non-null `lineage_key` that resolves to an existing batch entry in the target lineage/audit table."
+        - "The target lineage/audit table exposes the same fields as `integration.lineage` (batch id, completion timestamp, success flag, source cutoff time) or a documented equivalent."
+      quality_dimensions:
+        - completeness
+        - consistency
+        - timeliness
+      test_cases:
+        - input: "A batch of staged purchase rows is loaded with `@LineageKey = 4821` from the currently open `integration.lineage` entry."
+          expected: "Every row inserted into `purchasing.fact.purchase` in that load carries `lineage_key = 4821`, and `purchasing.integration.lineage` (or equivalent) has a matching entry for batch 4821 marked completed and successful after the load."
+          notes: "Preserves the source's audit/restartability semantics documented in as-is.md §5.4."
+    inheritance:
+      level: project
+      override: "A product may rename the target lineage/audit table to fit its own control-schema convention as long as the same fields are preserved."
+      extend: "A product may add finer-grained batch metadata (e.g. row counts, duration) beyond the source system's fields."
+      deactivate: "Not deactivatable for any table that carried a source-system Lineage Key."
+
+  - id: LN-004
+    dimension: Lineage
+    name: "Preserve incremental-extraction cutoff/watermark lineage"
+    intent: "Carry forward the per-table ETL cutoff/watermark mechanism so incremental-load lineage (which rows were extracted in which run, from which cutoff to which cutoff) remains intact and auditable after migration."
+    activation:
+      preconditions:
+        - "A source table's extraction is delta-filtered against a per-table watermark stored in `integration.etl cutoff`, and a reporting view (`integration.etl_cutoff_view2024`) exposes it."
+      scope: project
+    transformation:
+      source: "`integration.getpurchaseupdates` filters extraction using `@LastCutoff`/`@NewCutoff` sourced from `integration.etl cutoff` for `[Table Name] = 'Purchase'`; after a successful load, `integration.migratestagedpurchasedata` advances the cutoff from the batch's `integration.lineage.[Source System Cutoff Time]`."
+      target: "An equivalent watermark record (e.g. `purchasing.integration.etl_cutoff` Delta table, or Databricks Structured Streaming/Delta Live Tables checkpoint metadata used as the watermark-of-record) tracks the last successfully processed cutoff per source table, and is advanced only after the corresponding load batch is confirmed successful."
+      algorithm:
+        - "Reproduce the per-table watermark record (table name, cutoff time) as a Delta table or an equivalent native incremental-processing checkpoint mechanism."
+        - "Advance the watermark only atomically with (or strictly after) the successful completion of the corresponding load batch, mirroring the source's ordering (bookkeeping happens after the insert transaction commits)."
+        - "Preserve a human-queryable reporting view equivalent to `integration.etl_cutoff_view2024` for operational visibility into current watermarks."
+    validation:
+      success_criteria:
+        - "The target watermark for the Purchase load path advances only after its corresponding batch is marked successful, never before or independently of it."
+        - "A queryable view or table exposes the current watermark per source table."
+      quality_dimensions:
+        - consistency
+        - timeliness
+      test_cases:
+        - input: "Batch 4821 completes successfully with source-system cutoff time `2026-09-20T23:00:00`."
+          expected: "The `purchasing` watermark record for the Purchase load path is updated to `2026-09-20T23:00:00` only after batch 4821 is marked `Was Successful = 1`; a prior failed batch does not advance the watermark."
+          notes: "Prevents silently skipping unprocessed rows on retry, matching the source system's ordering guarantee."
+    inheritance:
+      level: project
+      override: "A product may implement the watermark using a native Databricks incremental mechanism (e.g. Delta Live Tables checkpoints) instead of a hand-rolled cutoff table, provided the ordering guarantee is preserved."
+      extend: "A product may add watermark granularity below table level (e.g. per-partition) if needed."
+      deactivate: "Not deactivatable for any table loaded incrementally against a cutoff/watermark."
+
+  - id: LN-005
+    dimension: Lineage
+    name: "Document fact-to-dimension lineage edges missing from the automatic lineage graph"
+    intent: "Ensure that valid-time (SCD2) dimension-key resolution logic, which the lineage graph tool did not surface as FK edges, is explicitly documented as column-level lineage so migration engineers do not under-scope dimension dependencies."
+    activation:
+      preconditions:
+        - "A fact table resolves a dimension key via application/procedure logic (e.g. a correlated subquery join) rather than a schema-level FK edge that automatic lineage traversal tools can detect."
+      scope: project
+    transformation:
+      source: "As-is analysis for `fact.purchase` found no FK edges returned by the lineage graph for `Dimension.Supplier` or `Dimension.[Stock Item]`; all dimension joins were inferred by reading `integration.migratestagedpurchasedata`'s source code directly, not from automatic lineage traversal."
+      target: "Every fact-to-dimension relationship relevant to a migrated table is captured in an explicit, human-maintained column-level lineage record (as-is.md §4 pattern) independent of whatever automatic lineage graph coverage exists in the target platform, and is re-verified against the target platform's own lineage tooling (e.g. Unity Catalog lineage) post-migration rather than assumed equivalent."
+      algorithm:
+        - "For every fact table in scope, enumerate dimension-key columns and identify whether the resolving logic is a declarative FK (graph-visible) or procedural/application logic (potentially graph-invisible)."
+        - "For each procedural resolution, produce or confirm an explicit column-level lineage entry recording source table, source column, resolution logic (e.g. valid-time lookup), and fallback behavior."
+        - "After migration, cross-check the target platform's automatic lineage output (e.g. Unity Catalog lineage graph) against this explicit record and flag any relationship the automatic tool fails to surface as a documentation gap requiring manual annotation (e.g. table/column comments, tags) rather than leaving it undocumented."
+    validation:
+      success_criteria:
+        - "Every dimension-key column resolved via procedural logic (not a declarative FK) has an explicit column-level lineage record independent of automatic graph coverage."
+        - "Any gap between the explicit record and the target platform's automatic lineage output is logged, not silently accepted."
+      quality_dimensions:
+        - completeness
+        - accuracy
+      test_cases:
+        - input: "`fact.purchase.[Supplier Key]` is resolved via a correlated valid-time subquery against `dimension.supplier`, with no FK edge visible in the lineage graph."
+          expected: "An explicit column-level lineage record documents `Supplier Key` = valid-time lookup on `dimension.supplier.[WWI Supplier ID]` bounded by `[Valid From]`/`[Valid To]`, falling back to key `0`; this record exists regardless of whether Unity Catalog's automatic lineage graph in the target platform surfaces the same edge."
+          notes: "Directly grounded in as-is.md §3.2 and §4.3, which state no FK edges were returned by the lineage graph for this fact table."
+    inheritance:
+      level: project
+      override: "Not overridable — explicit documentation is required whenever automatic lineage coverage cannot be confirmed."
+      extend: "A product may add additional annotation formats (e.g. Unity Catalog tags, comments) beyond a markdown/YAML lineage record."
+      deactivate: "Deactivatable only for a specific fact-dimension relationship once the target platform's automatic lineage tool is confirmed (by direct verification) to surface that exact edge."
+
+  - id: LN-006
+    dimension: Lineage
+    name: "Preserve batch-level lineage continuity across full delete-then-insert reloads"
+    intent: "Ensure that a full delete-then-insert replace pattern (rather than an incremental MERGE) does not erase the audit trail of which batch produced the current state of a given business key's rows."
+    activation:
+      preconditions:
+        - "A source load procedure deletes all existing rows for a given business key (e.g. `WWI Purchase Order ID`) and re-inserts the current staged rows for that key within a single transaction, rather than performing row-level MERGE/upsert."
+      scope: project
+    transformation:
+      source: "`integration.migratestagedpurchasedata` deletes all `fact.purchase` rows for every `[WWI Purchase Order ID]` present in the current staging batch, then re-inserts from staging, all inside one transaction; each re-inserted row is stamped with the current batch's `[Lineage Key]` (see LN-003), but the prior batch's lineage stamp on the replaced rows is lost at the row level once deleted (modernization-plan.md §3.1 risk #4)."
+      target: "The target implementation (Delta `MERGE INTO` or an equivalent atomic transactional replace) preserves the same replace-by-business-key semantics while ensuring the batch/lineage-key stamp on every surviving or replaced row is always attributable to the batch that most recently wrote it, and — where feasible on the target platform — retains historical batch attribution via Delta's native versioning (time travel / `DESCRIBE HISTORY`) rather than relying solely on the row-level `lineage_key` column."
+      algorithm:
+        - "Redesign the delete-then-insert as a Delta `MERGE INTO` keyed on the business key (`WWI Purchase Order ID`), matching modernization-plan.md §3.1 risk #4's stated redesign requirement."
+        - "On every MERGE, stamp all affected rows (matched-and-updated and inserted) with the current batch's `lineage_key`."
+        - "Do not disable or bypass Delta's transaction log / time-travel retention for this table, so that even though row-level pre-replace lineage stamps are superseded, batch history remains recoverable via `DESCRIBE HISTORY` / time travel for audit purposes."
+    validation:
+      success_criteria:
+        - "The target load path uses an atomic MERGE (or equivalent) rather than an unprotected delete-then-insert, with no partial-write window."
+        - "Every row's `lineage_key` after a load reflects the batch that most recently wrote it, and prior batch history for the same business key remains recoverable via Delta time travel."
+      quality_dimensions:
+        - accuracy
+        - consistency
+      test_cases:
+        - input: "Purchase Order 90210 is re-extracted in batch 4822 after previously being loaded in batch 4790."
+          expected: "After the MERGE, all `purchasing.fact.purchase` rows for Purchase Order 90210 carry `lineage_key = 4822`; `DESCRIBE HISTORY` on the table can still show the version written by batch 4790 for audit purposes."
+          notes: "Directly addresses modernization-plan.md §3.1 risk #4 from a lineage-continuity angle, complementing the atomicity concern already raised there."
+    inheritance:
+      level: project
+      override: "A product may substitute Delta `MERGE INTO` with another atomic upsert mechanism supported by the target platform, provided lineage-key stamping and historical recoverability are preserved."
+      extend: "A product may add row-level change-type tagging (insert/update) beyond the batch-level lineage key."
+      deactivate: "Not deactivatable for any table currently loaded via a delete-then-insert replace pattern."
+
+  - id: LN-007
+    dimension: Lineage
+    name: "Tag conformed dimension provenance for cross-project/catalog reuse"
+    intent: "Prevent lineage ambiguity for conformed dimensions that may be independently maintained or duplicated across Purchasing_Project and other projects/catalogs, by recording each dimension instance's origin and reuse relationships."
+    activation:
+      preconditions:
+        - "A dimension migrated into `purchasing` (or referenced by a `purchasing` fact table) is also used by, or was originally migrated by, another project (e.g. `dimension.stock item`, originally migrated by GlobalSales_Project/Sales_Orders and reused here; `dimension.supplier`, migrated here but potentially needed by a future GlobalSales_Project candidate product such as Inventory_Stock)."
+      scope: project
+    transformation:
+      source: "`dimension.supplier` and `dimension.stock item` are conformed dimensions shared across domains; per modernization-plan.md §3.1 risk #1, splitting Purchases into its own project/catalog leaves open whether these dimensions are independently duplicated under `purchasing.dim` or shared cross-project/cross-catalog with GlobalSales_Project — an unresolved architectural decision at the time these rules are generated."
+      target: "Each conformed dimension table under `purchasing` carries lineage/provenance metadata (e.g. table properties or a project-level dimension-provenance registry, analogous in structure to the LN-001 cross-project dependency registry) recording: which project/team first migrated the dimension, whether the `purchasing` copy is authoritative or a duplicate/replica, and which other projects/catalogs also hold a copy or reference it."
+      algorithm:
+        - "For each conformed dimension migrated into or referenced by `purchasing`, record its originating project (e.g. `dimension.stock item` originates from GlobalSales_Project/Sales_Orders) and its authority status in `purchasing` (authoritative net-new copy, e.g. `dimension.supplier`; or a reused/duplicated copy, e.g. `dimension.stock item`)."
+        - "Whichever resolution is eventually chosen for risk #1 (independent duplication vs. a cross-project/cross-catalog sharing mechanism), record that decision and its rationale in the dimension-provenance registry so future lineage consumers do not assume a single authoritative copy without checking."
+        - "Cross-reference each dimension-provenance entry with the LN-001 cross-project dependency registry where the dimension itself is also read by a cross-project consumer (e.g. `dimension.supplier` read by `wwidw-ordered-by-supplier`, owned by GlobalSales_Project/Sales_Orders)."
+    validation:
+      success_criteria:
+        - "Every conformed dimension shared with, or originating from, another project has a provenance entry stating origin, authority status, and known other-catalog copies/references."
+        - "The dimension-duplication architectural decision (risk #1), once made, is reflected in the registry rather than left implicit."
+      quality_dimensions:
+        - consistency
+        - completeness
+      test_cases:
+        - input: "`dimension.stock item` is reused in `purchasing` but was originally migrated by GlobalSales_Project/Sales_Orders into `globalsales`."
+          expected: "A provenance entry records: dimension=`dimension.stock item`, originating_project=GlobalSales_Project (Sales_Orders), authority_status=[duplicate in purchasing | shared/federated with globalsales] (per the risk #1 decision once made), known_copies=[`globalsales.dim.stock_item`, `purchasing.dim.stock_item`]."
+          notes: "Directly grounded in modernization-plan.md §3.1 risk #1 and §5's dimension reuse table."
+    inheritance:
+      level: project
+      override: "A product may override with a more specific provenance schema as long as origin and authority status are preserved."
+      extend: "A product may add additional conformed dimensions to the registry as new sharing relationships are discovered."
+      deactivate: "Not deactivatable while risk #1 (dimension duplication vs. cross-project sharing) remains unresolved."

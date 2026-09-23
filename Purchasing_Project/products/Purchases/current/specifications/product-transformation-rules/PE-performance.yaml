@@ -1,0 +1,497 @@
+dimension: Performance
+prefix: PE
+project: "Purchasing_Project"
+product: "Purchases"
+source_platform: "Microsoft SQL Server 2014"
+target_platform: "Databricks (Delta Lake)"
+generated: "2026-09-21"
+inheritance:
+  project_rules_version: "20260921-160000"
+  applied_overrides: []       # rule IDs overridden from project
+  applied_extensions: []      # rule IDs extended from project
+  applied_deactivations: []   # rule IDs removed from project set
+  new_rules: []               # product-only rule IDs added
+note: >
+  Verified against Purchasing_Project's newly-authored PE-performance.yaml
+  (not copy-adapted from GlobalSales_Project). No override.yaml,
+  extensions.yaml, or deactivations.yaml entries exist for the PE dimension
+  in this product's action files, and new-rules.yaml contains no PE-prefixed
+  entries. All 8 project-level PE rules already name fact.purchase,
+  dimension.supplier, dimension.stock item, dimension.date, and
+  integration.purchase_staging directly and were cross-checked against
+  as-is.md and product-scope.md — no gap, additional pattern, or divergent
+  access pattern was found that would justify an override, extension, or
+  deactivation. Purchases is Purchasing_Project's founding and only data
+  product, so this matches the historical precedent recorded in the
+  superseded GlobalSales_Project-era product-transformation-rules/PE-performance.yaml
+  (full inheritance, no product-specific overrides). Consolidated rule list
+  below is therefore identical in IDs and content to the project-level file.
+
+rules:
+
+  - id: PE-001
+    dimension: Performance
+    name: Columnstore Index Disposition — No Action Required
+    intent: >
+      SQL Server columnstore indexes (clustered and non-clustered) provide columnar
+      compression and batch-mode execution for analytics workloads. Delta Lake stores
+      all data in Parquet columnar format by default, so any columnstore index
+      definition carried on `fact.purchase` or the `dimension.supplier` /
+      `dimension.stock item` / `dimension.date` reference tables in scope for this
+      project must be dropped, with no equivalent DDL object created on the target.
+    activation:
+      preconditions:
+        - Source table in the Purchasing_Project scope (fact.purchase, dimension.supplier, dimension.stock item, dimension.date, integration.purchase_staging) carries a CLUSTERED COLUMNSTORE INDEX or NONCLUSTERED COLUMNSTORE INDEX definition
+      scope: project
+    transformation:
+      source: >
+        CREATE CLUSTERED COLUMNSTORE INDEX [cci_purchase] ON [fact].[Purchase];
+        -- or --
+        CREATE NONCLUSTERED COLUMNSTORE INDEX [ncci_purchase] ON [fact].[Purchase] (<cols>);
+      target: >
+        No DDL emitted. Delta Lake persists all data as Parquet columnar files
+        natively under the `purchasing` Unity Catalog. Columnar compression and
+        vectorised reads are automatic.
+      algorithm:
+        - Identify all COLUMNSTORE INDEX definitions on fact.purchase and the in-scope dimension/staging tables.
+        - Flag each for suppression — do not emit CREATE INDEX statements in Delta DDL.
+        - Log suppressed index names in the migration artefact manifest for audit.
+        - Validate that the target Delta table (purchasing.fact.purchase, etc.) shows Parquet columnar storage via DESCRIBE DETAIL.
+    validation:
+      success_criteria:
+        - No COLUMNSTORE INDEX DDL statements present in any generated purchasing Delta Lake schema scripts
+        - Generated Delta tables confirmed to use Parquet columnar format (DESCRIBE DETAIL)
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "CREATE CLUSTERED COLUMNSTORE INDEX [cci_purchase] ON [fact].[Purchase];"
+          expected: "No CREATE INDEX DDL emitted for purchasing.fact.purchase; table relies on Delta's native Parquet columnar storage."
+          notes: "Static grep of generated DDL for the COLUMNSTORE INDEX keyword must return zero matches."
+    inheritance:
+      level: project
+      override: "A product may override if it identifies a source columnstore index whose access pattern requires an explicit Databricks equivalent not covered by default Parquet storage (rare)."
+      extend: "A product may extend with additional suppressed-index names discovered in its own as-is analysis."
+      deactivate: "Not deactivatable — Delta Lake's Parquet-columnar storage is a platform constant; no product can opt back into columnstore semantics."
+
+  - id: PE-002
+    dimension: Performance
+    name: fact.purchase → Delta Lake PARTITIONED BY on Date Key
+    intent: >
+      `fact.purchase` is the only fact table in Purchasing_Project's scope and is
+      loaded on a recurring nightly cadence keyed by `WWI Purchase Order ID` (see
+      PE-007). Downstream reporting (`v_OrderToYearAnalytics`, the per-stock-item
+      report, and the per-supplier report — see PE-008 and the cross-project
+      dependency note) filters and aggregates by order date. `PARTITIONED BY` on the
+      date column enables file-level partition pruning for date-range predicates and
+      scopes the partial-refresh delete described in PE-007 to the affected
+      partitions only.
+    activation:
+      preconditions:
+        - Target table is purchasing.fact.purchase
+        - Table carries a Date Key column (Fact.Purchase.[Date Key], sourced pre-resolved from Purchasing.PurchaseOrders.OrderDate)
+      scope: project
+    transformation:
+      source: >
+        CREATE TABLE [fact].[Purchase] (
+          [Purchase Key]  BIGINT NOT NULL,
+          [Date Key]      DATE   NOT NULL,
+          [Supplier Key]  INT    NOT NULL,
+          [Stock Item Key] INT   NOT NULL,
+          ...
+        );
+        -- no explicit SQL Server partition scheme observed on Fact.Purchase in as-is
+      target: >
+        CREATE TABLE IF NOT EXISTS purchasing.fact.purchase (
+          purchase_key      BIGINT NOT NULL,
+          date_key           DATE   NOT NULL,
+          supplier_key        INT    NOT NULL,
+          stock_item_key      INT    NOT NULL,
+          wwi_purchase_order_id INT  NOT NULL,
+          ordered_outers      INT,
+          ordered_quantity    INT,
+          received_outers     INT,
+          package             STRING,
+          is_order_finalized  BOOLEAN,
+          lineage_key         INT
+        )
+        USING DELTA
+        PARTITIONED BY (date_key)
+        LOCATION 'abfss://<container>@<storage>.dfs.core.windows.net/purchasing/fact/purchase';
+      algorithm:
+        - Confirm date_key is present on fact.purchase as a plain DATE column (pre-resolved during extraction — no Dimension.Date load-time lookup exists per the as-is; see product scope §9 risk 3).
+        - Emit PARTITIONED BY (date_key) on the purchasing.fact.purchase CREATE TABLE DDL.
+        - Validate partition pruning effectiveness via EXPLAIN on representative date-range queries against purchasing.fact.purchase.
+    validation:
+      success_criteria:
+        - purchasing.fact.purchase DDL declares PARTITIONED BY (date_key)
+        - EXPLAIN output for date-range queries against purchasing.fact.purchase shows partition pruning (reduced numFiles)
+      quality_dimensions:
+        - conformity
+        - timeliness
+      test_cases:
+        - input: "SELECT * FROM purchasing.fact.purchase WHERE date_key BETWEEN '2024-01-01' AND '2024-03-31';"
+          expected: "EXPLAIN shows numFiles scanned is a fraction of total files (partition pruning confirmed)."
+          notes: "Depends on PARTITIONED BY (date_key) being present in the generated DDL."
+    inheritance:
+      level: project
+      override: "A product may override the partition column choice if evidence shows date-range predicates are not the dominant query pattern for fact.purchase."
+      extend: "A product may extend this rule if additional fact tables enter scope in the future."
+      deactivate: "May be deactivated in favour of PE-003b (liquid clustering) if the product team elects liquid clustering and the runtime prerequisite is met; the two are mutually exclusive for fact.purchase."
+
+  - id: PE-003
+    dimension: Performance
+    name: Z-ORDER Recommendation for fact.purchase (supplier_key, stock_item_key)
+    intent: >
+      Within each date partition (PE-002), `fact.purchase` is commonly filtered or
+      joined by `supplier_key` (per-supplier report) or `stock_item_key` (per-stock-
+      item report), per the two BI reports evidenced in the as-is analysis
+      (`wwidw-ordered-by-supplier`, `wwidw purchase and sale per stockitem dynamic`).
+      Z-ORDER on these two dimension-key columns co-locates related rows within
+      files, reducing files scanned for both consumption patterns.
+    activation:
+      preconditions:
+        - purchasing.fact.purchase has been partitioned by date_key (PE-002 applied)
+        - Table row count within a single date partition is large enough to benefit from Z-ORDER (multiple files per partition)
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: no explicit composite clustered index observed on Fact.Purchase in the as-is analysis
+      target: >
+        OPTIMIZE purchasing.fact.purchase
+          ZORDER BY (supplier_key, stock_item_key);
+      algorithm:
+        - Identify supplier_key and stock_item_key as the two dimension foreign keys most frequently referenced in the evidenced downstream consumers (wwidw-ordered-by-supplier, wwidw purchase and sale per stockitem dynamic).
+        - Emit an OPTIMIZE purchasing.fact.purchase ZORDER BY (supplier_key, stock_item_key) statement as a post-load ETL step.
+        - Re-run OPTIMIZE ZORDER after major bulk loads; rely on PE-005 auto-compaction between manual OPTIMIZE runs.
+    validation:
+      success_criteria:
+        - OPTIMIZE ... ZORDER BY (supplier_key, stock_item_key) statement present in the purchasing.fact.purchase ETL post-load script
+        - EXPLAIN on a representative supplier- or stock-item-filtered query shows reduced numFiles after OPTIMIZE vs. before
+      quality_dimensions:
+        - conformity
+        - timeliness
+      test_cases:
+        - input: "OPTIMIZE purchasing.fact.purchase ZORDER BY (supplier_key, stock_item_key);"
+          expected: "Post-OPTIMIZE EXPLAIN on a supplier_key-filtered query shows numFiles scanned reduced by at least 30% versus pre-OPTIMIZE baseline."
+          notes: "Column choice is grounded in the two purchase-reading BI reports evidenced in the as-is analysis."
+    inheritance:
+      level: project
+      override: "A product may override the Z-ORDER column choice if its own query-workload evidence points to a different dominant filter pattern for fact.purchase."
+      extend: "A product may extend the Z-ORDER column list if additional query patterns are evidenced later."
+      deactivate: "May be deactivated for fact.purchase when liquid clustering is elected instead (PE-002's override path)."
+
+  - id: PE-004
+    dimension: Performance
+    name: integration.purchase_staging Lifecycle — Transient, No Persistent Optimization
+    intent: >
+      `integration.purchase_staging` is a write-once-read-once landing table,
+      truncated and reloaded each ETL cycle by the SSIS pipeline
+      (`pipeline_item_truncate purchase_staging` → `pipeline_item_extract updated
+      purchase data to staging`) and then updated in place by
+      `integration.migratestagedpurchasedata` to inject the resolved
+      `Supplier Key`/`Stock Item Key` before the delete+insert into
+      `fact.purchase`. No OPTIMIZE, partitioning, Z-ORDER, or liquid clustering
+      should be applied to its Delta equivalent, since no sustained query pattern
+      benefits from the overhead.
+    activation:
+      preconditions:
+        - Source object is integration.purchase_staging
+        - Object is used exclusively as an intermediate buffer in the nightly Purchases ETL load sequence, with no BI or analytics query reading it directly
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server staging table, truncated + reloaded each cycle, no indexes
+        Integration.Purchase_Staging (
+          [Date Key], [Supplier Key], [Stock Item Key], [WWI Purchase Order ID],
+          [Ordered Outers], [Ordered Quantity], [Received Outers], Package,
+          [Is Order Finalized], [WWI Supplier ID], [WWI Stock Item ID], [Last Modified When]
+        );
+      target: >
+        -- Ephemeral Delta table (dropped after ETL run) or Spark temp view
+        CREATE OR REPLACE TABLE purchasing.integration.stg_purchase_staging (
+          date_key STRING, supplier_key INT, stock_item_key INT,
+          wwi_purchase_order_id INT, ordered_outers INT, ordered_quantity INT,
+          received_outers INT, package STRING, is_order_finalized BOOLEAN,
+          wwi_supplier_id INT, wwi_stock_item_id INT, last_modified_when TIMESTAMP
+        ) USING DELTA;
+        -- cleanup: DROP TABLE IF EXISTS purchasing.integration.stg_purchase_staging;
+        -- no PARTITIONED BY, no CLUSTER BY, no OPTIMIZE step
+      algorithm:
+        - Implement integration.purchase_staging as an ephemeral Delta table or a Spark temporary view, session-scoped to the Purchases ETL job.
+        - Emit no PARTITIONED BY, CLUSTER BY, or OPTIMIZE step for this object in generated DDL/ETL scripts.
+        - Add a cleanup/DROP step at the end of the Purchases ETL job if a persistent ephemeral table is used.
+        - Explicitly exclude this object from the OPTIMIZE schedule defined in PE-005.
+    validation:
+      success_criteria:
+        - stg_purchase_staging DDL contains no PARTITIONED BY, CLUSTER BY, or ZORDER BY clauses
+        - No OPTIMIZE step appears in the Purchases ETL script for this object
+      quality_dimensions:
+        - conformity
+        - validity
+      test_cases:
+        - input: "Generated Purchases ETL DDL for stg_purchase_staging"
+          expected: "Zero matches for PARTITIONED BY, CLUSTER BY, ZORDER, or OPTIMIZE when grepped against the generated staging DDL/ETL scripts."
+          notes: "Applies specifically to integration.purchase_staging, the only staging object in this project's scope."
+    inheritance:
+      level: project
+      override: "A product may override the ephemeral-vs-view classification for Purchase_Staging based on cross-job sharing needs."
+      extend: "Not expected to be extended — this rule is scoped to the single staging object in Purchasing_Project."
+      deactivate: "Not deactivatable — no staging table in this project should carry persistent optimization directives."
+
+  - id: PE-005
+    dimension: Performance
+    name: Auto-Optimization Settings for fact.purchase and Reused/New Dimensions
+    intent: >
+      `fact.purchase` is loaded on a recurring nightly batch cadence (see PE-007),
+      and `dimension.supplier` (net new) is an SCD2 dimension receiving periodic
+      version inserts. Enabling Databricks' Optimized Writes and Auto Compaction
+      table properties on these non-staging Delta tables reduces small-file
+      accumulation without requiring a manually scheduled OPTIMIZE after every
+      incremental write.
+    activation:
+      preconditions:
+        - Target object is a non-staging Delta table in the Purchasing_Project scope (purchasing.fact.purchase, purchasing.dimension.supplier)
+        - Table receives incremental writes on a recurring ETL batch cadence
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: no equivalent; index maintenance handled by scheduled SQL Server Agent jobs
+      target: >
+        CREATE TABLE IF NOT EXISTS purchasing.fact.purchase (
+          ...
+        )
+        USING DELTA
+        PARTITIONED BY (date_key)
+        TBLPROPERTIES (
+          'delta.autoOptimize.optimizeWrite' = 'true',
+          'delta.autoOptimize.autoCompact'   = 'true'
+        );
+      algorithm:
+        - For purchasing.fact.purchase and purchasing.dimension.supplier, emit TBLPROPERTIES with both autoOptimize settings set to 'true' in CREATE TABLE DDL.
+        - Explicitly exclude integration.purchase_staging (PE-004) from these properties.
+        - Combine with PE-007's MERGE/partition-bounded-delete rewrite so small files produced by each load are compacted automatically.
+    validation:
+      success_criteria:
+        - purchasing.fact.purchase and purchasing.dimension.supplier DDL includes TBLPROPERTIES for both autoOptimize settings
+        - purchasing.integration.stg_purchase_staging DDL does not include autoOptimize TBLPROPERTIES
+      quality_dimensions:
+        - conformity
+        - timeliness
+      test_cases:
+        - input: "CREATE TABLE purchasing.fact.purchase (...) TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true', 'delta.autoOptimize.autoCompact' = 'true');"
+          expected: "Both TBLPROPERTIES entries are present in the generated DDL for purchasing.fact.purchase and purchasing.dimension.supplier."
+          notes: "purchasing.integration.stg_purchase_staging must not carry these properties (see PE-004)."
+    inheritance:
+      level: project
+      override: "Not typically overridden; a product may opt out for a specific table only with documented justification."
+      extend: "A product may extend the non-staging table list if additional Purchasing_Project tables enter scope."
+      deactivate: "Deactivatable only for a specific table when the product demonstrates auto-compaction provides no measurable benefit for that table's write pattern."
+
+  - id: PE-006
+    dimension: Performance
+    name: Small Dimension Table → Broadcast Join for Supplier, Stock Item, Date
+    intent: >
+      `dimension.supplier`, `dimension.stock item`, and `dimension.date` are small
+      relative to `fact.purchase` and are joined to it (directly, by FK, or via
+      reporting joins in the evidenced BI reports). Spark's default sort-merge join
+      is inefficient when one side is small enough to broadcast; enabling broadcast
+      join for these three dimensions eliminates the shuffle phase for
+      fact-to-dimension joins involving `fact.purchase`.
+    activation:
+      preconditions:
+        - Table is one of purchasing.dimension.supplier, purchasing.dimension.stock_item, purchasing.dimension.date
+        - Estimated table size in Delta Lake is below the broadcast threshold
+        - Table is joined to purchasing.fact.purchase in analytics queries or in the evidenced downstream reports
+      scope: project
+    transformation:
+      source: >
+        -- SQL Server: hash or nested-loop joins guided by statistics; no explicit hint needed
+      target: >
+        -- Preferred: auto-broadcast via session/cluster config
+        spark.conf.set("spark.sql.autoBroadcastJoinThreshold", 536870912)  -- 512 MB
+
+        -- Or explicit hint:
+        SELECT f.wwi_purchase_order_id, s.supplier
+        FROM   purchasing.fact.purchase f
+        JOIN   /*+ BROADCAST(s) */ purchasing.dimension.supplier s ON f.supplier_key = s.supplier_key
+      algorithm:
+        - Estimate row count and projected Delta size for dimension.supplier, dimension.stock item, and dimension.date.
+        - For each table expected under 512 MB, mark for auto-broadcast via the cluster/session autoBroadcastJoinThreshold setting.
+        - For any table expected to grow past the auto threshold, add explicit BROADCAST hints in generated ETL/reporting queries joining to fact.purchase.
+    validation:
+      success_criteria:
+        - Cluster/session config sets spark.sql.autoBroadcastJoinThreshold >= 512 MB
+        - EXPLAIN on a representative fact.purchase-to-dimension join shows BroadcastHashJoin, not SortMergeJoin
+      quality_dimensions:
+        - timeliness
+        - conformity
+      test_cases:
+        - input: "EXPLAIN SELECT * FROM purchasing.fact.purchase f JOIN purchasing.dimension.supplier s ON f.supplier_key = s.supplier_key;"
+          expected: "Physical plan shows BroadcastHashJoin for the dimension.supplier side, not SortMergeJoin."
+          notes: "Same expectation applies to dimension.stock item and dimension.date joins against fact.purchase."
+    inheritance:
+      level: project
+      override: "A product may override the broadcast threshold for a dimension it knows will grow beyond the default limit."
+      extend: "A product may extend the dimension list with additional product-owned dimensions."
+      deactivate: "Not deactivatable for any of the three named dimensions below the broadcast threshold while joined to fact.purchase."
+
+  - id: PE-007
+    dimension: Performance
+    name: fact.purchase Delete-Then-Insert-by-Natural-Key → MERGE or Partition-Bounded Delete
+    intent: >
+      `integration.migratestagedpurchasedata` loads `fact.purchase` by first
+      deleting every existing row matching the current staging batch's
+      `WWI Purchase Order ID` set, then inserting the staged (dimension-key-resolved)
+      rows, wrapped in a single application-level transaction — not a true
+      incremental MERGE. On Delta Lake, an unbounded `DELETE ... WHERE
+      wwi_purchase_order_id IN (subquery)` with no partition predicate forces a scan
+      and rewrite of every file containing a matching row, and pairing it with a
+      separate INSERT produces two file-rewrite operations instead of one atomic
+      upsert. This load must be re-implemented on Delta Lake as a single `MERGE
+      INTO` upsert, or — where full replace-by-order semantics must be preserved
+      because a purchase order's line count can shrink between runs — as a DELETE
+      bounded by `fact.purchase`'s date partition column (PE-002).
+    activation:
+      preconditions:
+        - Source load procedure is integration.migratestagedpurchasedata, which performs a DELETE keyed on WWI Purchase Order ID sourced from integration.purchase_staging, followed by a separate INSERT, within one transaction
+        - Target purchasing.fact.purchase is loaded on a recurring nightly batch cadence, not append-only
+      scope: project
+    transformation:
+      source: >
+        DELETE p FROM Fact.Purchase p
+          WHERE p.[WWI Purchase Order ID] IN (SELECT [WWI Purchase Order ID] FROM Integration.Purchase_Staging);
+        INSERT Fact.Purchase ([Date Key], [Supplier Key], [Stock Item Key], [WWI Purchase Order ID],
+                               [Ordered Outers], [Ordered Quantity], [Received Outers], Package,
+                               [Is Order Finalized], [Lineage Key])
+          SELECT [Date Key], [Supplier Key], [Stock Item Key], [WWI Purchase Order ID],
+                 [Ordered Outers], [Ordered Quantity], [Received Outers], Package,
+                 [Is Order Finalized], @LineageKey
+          FROM Integration.Purchase_Staging;
+        -- both statements execute inside a single BEGIN TRAN / COMMIT
+      target: >
+        -- Preferred: single Delta MERGE keyed on the natural business key
+        MERGE INTO purchasing.fact.purchase AS t
+        USING purchasing.integration.stg_purchase_staging AS s
+          ON  t.wwi_purchase_order_id = s.wwi_purchase_order_id
+          AND t.stock_item_key        = s.stock_item_key
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *;
+
+        -- Alternative when a purchase order's line set can shrink and MERGE cannot
+        -- express "remove lines no longer present": partition-bounded delete + insert
+        DELETE FROM purchasing.fact.purchase
+        WHERE date_key IN (SELECT DISTINCT date_key FROM purchasing.integration.stg_purchase_staging)
+          AND wwi_purchase_order_id IN (SELECT wwi_purchase_order_id FROM purchasing.integration.stg_purchase_staging);
+        INSERT INTO purchasing.fact.purchase SELECT * FROM purchasing.integration.stg_purchase_staging;
+        -- date_key predicate leverages the PARTITIONED BY (PE-002) column for pruning
+      algorithm:
+        - Recognize integration.migratestagedpurchasedata's DELETE-by-WWI-Purchase-Order-ID followed by a separate INSERT as the delete-then-insert replace pattern requiring rewrite.
+        - Prefer rewriting the load as a single Delta MERGE INTO statement keyed on wwi_purchase_order_id (composite with stock_item_key, matching the fact grain) with WHEN MATCHED THEN UPDATE SET * and WHEN NOT MATCHED THEN INSERT *.
+        - Where MERGE cannot express full-order-replace semantics (a purchase order's line count decreasing between runs), retain a DELETE + INSERT pair but add fact.purchase's date_key partition column (PE-002) as an additional predicate on the DELETE, derived from the distinct dates present in the current staging batch.
+        - Do not wrap the DELETE/INSERT (or MERGE) in an explicit application-level transaction — rely on Delta Lake's native optimistic-concurrency-controlled commit instead.
+        - Combine with PE-005 (auto-compaction) so small files produced by the MERGE/insert-overwrite are compacted automatically.
+        - Record the chosen strategy (MERGE vs. partition-bounded delete+insert) in the Purchases ETL design document.
+    validation:
+      success_criteria:
+        - purchasing.fact.purchase's ETL load is re-implemented as either a MERGE INTO statement or a DELETE carrying an explicit date_key partition predicate
+        - DESCRIBE HISTORY on the DELETE/MERGE operation shows operation metrics scoped to the affected partitions, not a full-table rewrite
+        - No generated ETL script wraps the DELETE/INSERT or MERGE in an explicit BEGIN/COMMIT transaction block
+      quality_dimensions:
+        - timeliness
+        - consistency
+        - conformity
+      test_cases:
+        - input: "Generated Purchases ETL script for the fact.purchase load step"
+          expected: "Script contains either a MERGE INTO purchasing.fact.purchase statement or a DELETE with a date_key predicate, and no explicit transaction wrapper."
+          notes: "Replaces the source DELETE-then-INSERT-by-WWI-Purchase-Order-ID pattern in integration.migratestagedpurchasedata."
+        - input: "DESCRIBE HISTORY purchasing.fact.purchase after a nightly load"
+          expected: "operationMetrics (numTargetFilesRemoved / numTargetFilesAdded) are limited to the partitions containing changed rows."
+          notes: "Confirms the rewrite avoids the full-table-rewrite risk of the original unbounded DELETE."
+    inheritance:
+      level: project
+      override: "A product may override the default (MERGE) with the partition-bounded delete+insert alternative if load semantics require removing stale child rows that MERGE cannot express."
+      extend: "Not expected to be extended — this rule is scoped to fact.purchase, the only fact table in this project."
+      deactivate: "Not deactivatable while integration.migratestagedpurchasedata's source pattern is delete-then-insert-by-natural-key; the full-table-rewrite risk exists regardless."
+
+  - id: PE-008
+    dimension: Performance
+    name: Non-Deterministic Correlated TOP-N Against fact.purchase → Deterministic Window Function Rewrite
+    intent: >
+      `Analytics.v_OrderToYearAnalytics` (owned by GlobalSales_Project/Sales_Orders,
+      deployed as `globalsales.mart.v_order_to_year_analytics`) populates its
+      `ORDER_ID_PURCH` column with a correlated subquery that selects an unordered
+      `TOP 5` from `Fact.Purchase` — matched by the non-unique `Package` column —
+      and concatenates the result with `STRING_AGG`, re-executed once per outer row
+      with no `ORDER BY` guaranteeing a stable result set. Now that `fact.purchase`
+      lives in `purchasing` rather than `globalsales`, this view becomes a
+      cross-catalog/cross-project read of `purchasing.fact.purchase`; whichever
+      project builds the migrated equivalent, the query against
+      `purchasing.fact.purchase` must not be translated literally as a per-row
+      correlated re-scan, which would force a nested-loop-style execution against
+      this project's fact table. Any correlated TOP-N subquery reading
+      `purchasing.fact.purchase` without a fully deterministic ORDER BY must be
+      rewritten as a window function evaluated once over the full dataset, with an
+      explicit unique tiebreaker added to guarantee reproducible output.
+    activation:
+      preconditions:
+        - Source object contains a correlated subquery against Fact.Purchase using TOP(N)/equivalent LIMIT with no ORDER BY, or an ORDER BY on a non-unique column (Package), executed once per outer row
+        - Target migration is a Spark SQL view or ETL transformation reading purchasing.fact.purchase, whether built within Purchasing_Project or consumed cross-catalog by GlobalSales_Project
+      scope: project
+    transformation:
+      source: >
+        -- Analytics.v_OrderToYearAnalytics (SQL Server) — non-deterministic correlated subquery against Fact.Purchase
+        (SELECT STRING_AGG(Order_Purch, '\')
+         FROM (SELECT TOP 5 p.[Stock Item Key] AS Order_Purch
+               FROM Fact.Purchase p
+               WHERE fo.Package = p.Package) p
+         WHERE p.Order_Purch < fo.[Stock Item Key]) AS ORDER_ID_PURCH
+        -- no ORDER BY inside the TOP 5 subquery; Package is not a unique join key
+      target: >
+        -- Delta Lake / Spark SQL — single-pass window function with a deterministic tiebreaker,
+        -- evaluated once over purchasing.fact.purchase (queried cross-catalog if built outside Purchasing_Project)
+        WITH ranked_purchases AS (
+          SELECT
+            package,
+            stock_item_key,
+            wwi_purchase_order_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY package
+              ORDER BY stock_item_key, wwi_purchase_order_id   -- deterministic tiebreaker added
+            ) AS rn
+          FROM purchasing.fact.purchase
+        )
+        SELECT
+          package,
+          ARRAY_JOIN(COLLECT_LIST(stock_item_key), '\\') AS order_id_purch
+        FROM ranked_purchases
+        WHERE rn <= 5
+        GROUP BY package;
+      algorithm:
+        - Identify the correlated TOP-N-without-deterministic-ORDER-BY pattern in any query reading purchasing.fact.purchase, including cross-catalog consumers such as v_OrderToYearAnalytics.
+        - Rewrite as a window function (ROW_NUMBER, RANK, or COLLECT_LIST/ARRAY_AGG filtered by a windowed rank) partitioned on the correlation key (package) and ordered by the original comparison column plus an explicit unique tiebreaker (wwi_purchase_order_id) to guarantee deterministic, reproducible output.
+        - Evaluate the window function once over the full purchasing.fact.purchase dataset instead of once per outer row, eliminating the per-row correlated re-scan.
+        - Flag Package as a known non-unique/fuzzy correlation key inherited from the source system in the design documentation, whether the rewritten view is built in Purchasing_Project or in GlobalSales_Project.
+        - Coordinate with GlobalSales_Project/Sales_Orders (owner of v_OrderToYearAnalytics) on the cross-project/cross-catalog access mechanism to purchasing.fact.purchase before this rewrite is deployed, per the modernization plan's open cross-project dependency risk.
+        - Validate that the rewritten query produces the same result set on repeated runs against unchanged source data (determinism), rather than attempting row-for-row equivalence with the legacy non-deterministic output.
+    validation:
+      success_criteria:
+        - Generated Spark SQL for the migrated ORDER_ID_PURCH-equivalent pattern uses a window function over purchasing.fact.purchase, not a per-row correlated subquery
+        - Repeated execution of the migrated query against unchanged purchasing.fact.purchase data returns identical results across runs
+        - EXPLAIN plan for the migrated query shows a single window/aggregate scan node over purchasing.fact.purchase rather than a nested-loop or nested-subquery physical operator
+      quality_dimensions:
+        - consistency
+        - validity
+        - conformity
+      test_cases:
+        - input: "Generated Spark SQL view definition reading purchasing.fact.purchase for the ORDER_ID_PURCH-equivalent column"
+          expected: "Query contains ROW_NUMBER()/RANK() OVER (...) or an equivalent windowed aggregate; no per-row correlated subquery pattern remains."
+          notes: "Applies regardless of whether the rewritten view is deployed inside Purchasing_Project or cross-catalog by GlobalSales_Project."
+        - input: "Run the migrated query twice against the same purchasing.fact.purchase snapshot"
+          expected: "Zero differences between the two result sets."
+          notes: "Confirms determinism, replacing the legacy TOP 5 with no ORDER BY."
+    inheritance:
+      level: project
+      override: "A product may override the specific tiebreaker column chosen for determinism if its domain has a more appropriate unique key than wwi_purchase_order_id."
+      extend: "A product may extend this rule to additional correlated TOP-N patterns discovered reading purchasing.fact.purchase."
+      deactivate: "Not deactivatable for any correlated TOP-N subquery against purchasing.fact.purchase lacking a deterministic ORDER BY that is carried into a Spark SQL migration target; non-determinism and per-row re-scan cost are platform-level concerns regardless of which project builds the consuming view."
