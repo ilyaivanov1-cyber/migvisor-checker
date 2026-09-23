@@ -70,6 +70,10 @@ Immediately after scoring, write the summary for this skill into your working no
 SKILL_N_SUMMARY:
 ### N. <skill-name> — <score>/100 (<Grade>)
 <Sentence 1: final score and grade.> <Sentence 2: what was done well — best-scoring section or strongest element.> <Sentence 3: main gap — most critical missing or weak element.> <Sentence 4: top priority fix with estimated points recoverable.> <Sentence 5: second priority fix or encouraging note.>
+
+**Priority actions:**
+1. <specific fix #1> — +N pts
+2. <specific fix #2> — +N pts
 ```
 
 For MISSING files use:
@@ -156,6 +160,23 @@ generated: <YYYY-MM-DD>
 ## Skill Summaries
 
 [Paste all 21 SKILL_N_SUMMARY blocks collected in Step 2 here, in order.]
+
+---
+
+## Priority Actions — Top Fixes Across All Skills
+
+List the top 8 highest-impact fixes across all submitted skills, sorted by estimated points recoverable. Each row must name the skill, the specific fix, and the estimated gain.
+
+| # | Skill | Fix | Est. gain |
+|---|---|---|---|
+| 1 | <skill> | <specific fix> | +N pts |
+| 2 | <skill> | <specific fix> | +N pts |
+| 3 | <skill> | <specific fix> | +N pts |
+| 4 | <skill> | <specific fix> | +N pts |
+| 5 | <skill> | <specific fix> | +N pts |
+| 6 | <skill> | <specific fix> | +N pts |
+| 7 | <skill> | <specific fix> | +N pts |
+| 8 | <skill> | <specific fix> | +N pts |
 
 ---
 
