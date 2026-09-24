@@ -592,6 +592,10 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 ### Domain evaluation notes
 
+**Cross-file DDL column name check (MANDATORY)** — before scoring, read the participant's `design.md` at `{trainee_workspace}/products/{product}/current/codebase/docs/design.md`. Extract all DDL CREATE TABLE blocks and their column definitions. Then compare column names, data types, and nullability against the data dictionary entries for the same tables. For each column that exists in design.md DDL but is absent or differently named in the data dictionary, flag it as [MISSING FROM DATA DICTIONARY] (−1 pt per missing column, max −5 pts across all tables). For each column in the data dictionary that contradicts the design DDL (wrong type or nullability), flag as [SCHEMA MISMATCH] (−1 pt per mismatch, max −3 pts).
+
+**Cross-file to-be table coverage check (MANDATORY)** — read the participant's `to-be.md` at `{trainee_workspace}/products/{product}/current/specifications/to-be.md`. Extract all target tables mentioned in the pipeline steps. Then verify each target table has a corresponding entry in the data dictionary. For each table present in to-be but absent from the data dictionary, flag as [MISSING TABLE DEFINITION] (−2 pts per missing table, max −6 pts).
+
 **Reference table and column counts:**
 - `fact_purchase`: 11 columns (surrogate key, 5 SCD-2 tracking columns, 4 measure/FK columns, lineage_key)
 - `purchase_staging`: 15 columns (all fact source columns plus _extracted_at_utc, _source_file, _batch_id, lineage_key)

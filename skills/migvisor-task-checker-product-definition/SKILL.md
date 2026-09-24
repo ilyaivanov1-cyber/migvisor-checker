@@ -688,6 +688,10 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 ### Domain evaluation notes
 
+**Cross-file pipeline consistency check (MANDATORY)** — before scoring, read the participant's `to-be.md` at `{trainee_workspace}/products/{product}/current/specifications/to-be.md`. Extract the pipeline step count and notebook names. Then check the pipeline section of the product-definition YAML. If the pipeline section lists fewer steps or different notebook names than to-be, flag each gap as [PIPELINE MISMATCH] (−1 pt per missing step, max −4 pts). If the pipeline section lists a different number of expected outputs than to-be's target tables, flag as [OUTPUT MISMATCH] (−2 pts).
+
+**Cross-file consumer definition check (MANDATORY)** — read the participant's `to-be.md` at `{trainee_workspace}/products/{product}/current/specifications/to-be.md`. Extract all named consumers and their access method (BI tool, SQL query, cross-domain view). Then check the product-definition YAML's consumers/outputPorts section. For each consumer in to-be that is absent from the product-definition, flag as [MISSING CONSUMER] (−1 pt per missing consumer, max −3 pts).
+
 **ODPS 4.1 five-block structure** — a complete product-definition.yaml has 5 top-level blocks:
 1. `details` — product metadata (productID, name, type, status, visibility, description, valueProposition, categories, tags)
 2. `x-inputPorts` — ODPS extension (x- prefix marks it non-standard); lists 5 input ports: `purchase_staging`, `supplier_dimension`, `stock_item_dimension`, `date_dimension`, `etl_cutoff`; only `supplier_dimension`, `stock_item_dimension`, `date_dimension` are truly external; `purchase_staging` and `etl_cutoff` are owned by this product

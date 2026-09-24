@@ -548,6 +548,10 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 ### Domain evaluation notes
 
+**Cross-file requirements traceability check (MANDATORY)** — before scoring, read the participant's `requirements.md` at `{trainee_workspace}/products/{product}/current/specifications/development_plan/requirements.md`. Extract all requirement IDs (FR-NNN, NFR-NNN, DQR-NNN). Then check every requirement reference in the tasks document. If a task references an ID that does not exist in requirements.md (e.g., FR-013 when only FR-001 through FR-012 exist), flag it as a [DEFECT] in section feedback (−1 pt per phantom ID, max −4 pts). If a task uses only category-level labels (FR-TRN) instead of specific IDs, note it as a gap in the Requirements Traceability criterion.
+
+**Cross-file design reference check (MANDATORY)** — read the participant's `design.md` at `{trainee_workspace}/products/{product}/current/codebase/docs/design.md`. Extract all H2 and H3 section headings. Then check every `Design reference` field in the tasks document. If a task's Design reference points to a section that does not exist in design.md, flag it as a [DEFECT] (−1 pt per broken reference, max −3 pts). If no Design reference field exists on any task entry, apply the existing 0-score for the Design References criterion.
+
 **Expected task structure** — the reference documents 26 tasks across 6 types: DDL (8 tasks: table/view/schema creation), ETL (9 tasks: extract, transform, MERGE, QA), Config (2 tasks: environment and constants setup), Test (3 tasks: unit, integration, E2E), BI (2 tasks: report reconnection), Docs (2 tasks: runbook and data dictionary). A submission covering only DDL and ETL is missing at least 35% of task coverage.
 
 **Known divergences** — the reference tasks document includes 6 noted divergences from other deliverables (e.g., the MERGE key in tasks.md may differ from what design.md specifies). Submissions that acknowledge at least one divergence in the Issues/gaps section earn full points for that criterion. Submissions that present all tasks as consistent with upstream documents when known divergences exist score 0 on Issues/gaps.

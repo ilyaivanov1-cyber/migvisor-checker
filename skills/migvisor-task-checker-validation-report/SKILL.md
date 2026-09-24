@@ -349,6 +349,10 @@ Points expressed as **percentages of that section's weight**.
 
 ### Domain evaluation notes
 
+**Cross-file DQR coverage check (MANDATORY)** — before scoring the DQR Coverage section, read the participant's `requirements.md` at `{trainee_workspace}/products/{product}/current/specifications/development_plan/requirements.md`. Extract all DQR IDs (DQR-001, DQR-002, etc.). Then check the validation report's DQR Coverage section. For each DQR ID in requirements.md that is absent from the DQR Coverage section, flag it as [MISSING DQR COVERAGE] and deduct from the DQR Coverage criterion score proportionally (missing DQRs / total DQRs × section weight). If the validation report's FAIL count in the summary does not match the number of open (unresolved) findings in the Findings section, flag the count mismatch as a [DEFECT] (−2 pts).
+
+**Cross-file finding resolution check (MANDATORY)** — count all findings (F-001, F-002, etc.) in the Findings section. Count how many are marked RESOLVED vs OPEN. Verify the summary statement's FAIL/PASS count matches. If summary says "8 FAIL" but only 7 findings are marked OPEN, flag as [DEFECT] and deduct −2 pts from the Header/Run Context criterion.
+
 **Expected finding structure** — each finding (F-001 through F-008 in the reference) should contain all 4 elements: (1) affected artifact file path, (2) root cause, (3) concrete fix recommendation, and (4) spec reference (requirement ID or rule ID). Findings with only a title and one-line description score ≤ 40% on Specificity.
 
 **Reference counts** — the reference validation report covers 27 artifacts: 19 PASS, 8 FAIL. The summary section must state these three numbers. A summary that says only "mostly passing" without counts scores 0 on Specificity for that criterion.

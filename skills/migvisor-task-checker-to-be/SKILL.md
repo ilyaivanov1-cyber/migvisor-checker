@@ -334,6 +334,10 @@ For each SQL block in the participant section:
 
 ### Domain evaluation notes
 
+**Cross-file consumer consistency check (MANDATORY)** — before scoring, read the participant's `as-is.md` at `{trainee_workspace}/products/{product}/current/specifications/as-is.md`. Extract all named consumers from the Consumers section (internal ETL, BI views, cross-domain analytics views, etc.). Then check the to-be document's consumers/outputs section. For each consumer named in as-is that is absent from to-be, flag as [MISSING CONSUMER IN TO-BE] (−2 pts per missing consumer, max −6 pts). Cross-domain consumers (analytics views that join to the fact table) are especially important to carry forward.
+
+**Cross-file requirements alignment check (MANDATORY)** — read the participant's `requirements.md` at `{trainee_workspace}/products/{product}/current/specifications/development_plan/requirements.md`. Extract NFR items (SLA, retention, latency). Then verify the to-be document's Non-Functional Requirements section (§7 NFR or equivalent) addresses the same NFR categories. For each NFR category present in requirements.md but absent from to-be, flag as [MISSING NFR COVERAGE] (−1 pt per missing category, max −3 pts).
+
 **Column-level Lineage section** — the reference traces a 22-step pipeline from source extraction through MERGE into the fact table. Submissions that describe the pipeline at a high level ("extract, transform, load") without naming individual notebook steps, transformation functions, or the sk_resolver.py surrogate-key lookup score low on Specificity (< 60%).
 
 **SCD-2 validity columns** — rule TY-P001 overrides the default type mapping: `valid_from` and `valid_to` columns must use `DATE`, not `TIMESTAMP` (the default for DATETIME2 sources). This is a deliberate project exception. Submissions that use `TIMESTAMP` for these columns should be flagged as a Technical accuracy deduction.

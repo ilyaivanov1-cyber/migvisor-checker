@@ -631,6 +631,14 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 ---
 
+### Domain evaluation notes
+
+**Cross-file pipeline notebook check (MANDATORY)** — before scoring the Pipeline DAG section, read the participant's `to-be.md` at `{trainee_workspace}/products/{product}/current/specifications/to-be.md`. Extract all notebook names mentioned in the pipeline steps (nb_extract_*, nb_load_*, nb_dq_*, etc.). Then check the Pipeline DAG in the architecture diagram. For each notebook name in to-be that is absent from the DAG, flag as [MISSING FROM DAG] (−1 pt per missing notebook, max −5 pts). For each notebook in the DAG that is not in to-be, flag as [PHANTOM NOTEBOOK] (−1 pt per phantom, max −3 pts). Notebook naming variants (nb_open_batch vs nb_orchestrate) should be noted but not penalised if functionally equivalent.
+
+**Cross-file table properties check (MANDATORY)** — read the participant's `data-dictionary.md` at `{trainee_workspace}/products/{product}/current/codebase/docs/data-dictionary.md` (if present). Extract clustering keys and CDF settings per table. Then verify the Delta Lake Table Properties section of the architecture diagram lists the same clustering keys and CDF settings. For each table where the clustering key in the architecture diagram contradicts the data dictionary, flag as [SCHEMA MISMATCH] (−2 pts per mismatch, max −4 pts).
+
+---
+
 ## Score Interpretation
 
 | Score | Grade | Recommended action |

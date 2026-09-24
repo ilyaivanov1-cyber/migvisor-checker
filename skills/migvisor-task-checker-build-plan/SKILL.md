@@ -696,6 +696,10 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 ### Domain evaluation notes
 
+**Cross-file task ID check (MANDATORY)** — before scoring, read the participant's `tasks.md` at `{trainee_workspace}/products/{product}/current/specifications/development_plan/tasks.md`. Extract all task IDs (TASK-NNN or equivalent). Then check every task ID in the build-plan's Task-to-Skill Mapping table. If the mapping references a task ID that does not exist in tasks.md, flag it as [MISSING TASK] (−1 pt per missing ID, max −4 pts). If the mapping has fewer task IDs than tasks.md, flag the gap as a coverage issue in the Task-to-Skill Mapping criterion.
+
+**Cross-file SmartBuilder skill name check (MANDATORY)** — read the participant's `design.md` at `{trainee_workspace}/products/{product}/current/codebase/docs/design.md`. Extract SmartBuilder skill names referenced in the design (e.g., `/smartbuilder_generate-db`, `/smartbuilder_generate-etl`). Then check the Execution Instructions section of the build-plan. If the build-plan's CLI invocation examples use skill names that differ from what design.md documents, flag each mismatch as a [DEFECT] (−2 pts per mismatched skill name, max −4 pts).
+
 **Expected pending decisions** — the reference build plan documents 4 open decisions: PD-001 (JDBC connectivity for source extraction), PD-002 (reseed sign-off from data steward), PD-003 (Unity Catalog grants from platform team), QA-DQ-01 (data quality threshold values). Note: PD-001 and QA-DQ-01 were discovered during planning and do not appear in upstream specifications — only PD-002 and PD-003 are traceable to requirements. A submission that omits the pending decisions section scores 0 on the Issues/gaps criterion.
 
 **Phase and batch structure** — the reference organizes work into 3 phases and 10 batches (Phase 1: 3 batches; Phase 2: 7 batches; Phase 3: mostly parallel). Phase 1 = DDL (run by `/smartbuilder_generate-db`); Phase 2+3 = ETL+Config+Tests+BI+Docs (run by `/smartbuilder_generate-etl`). A submission with only a flat task list and no phase/batch grouping scores ≤ 50% on Structure.
