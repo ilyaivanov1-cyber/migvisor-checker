@@ -96,11 +96,11 @@ This file was not submitted. Expected at `{trainee_workspace}/<relative-path>`. 
 | 6 | migvisor-task-checker-design | `products/{product}/current/codebase/docs/design.md` | `module_5/development_plan/design.md` | `design/` |
 | 7 | migvisor-task-checker-requirements | `products/{product}/current/specifications/development_plan/requirements.md` | `module_5/development_plan/requirements.md` | `requirements/` |
 | 8 | migvisor-task-checker-tasks | `products/{product}/current/specifications/development_plan/tasks.md` | `module_5/development_plan/tasks.md` | `tasks/` |
-| 9 | migvisor-task-checker-product-definition | `products/{product}/current/specifications/development_plan/product-definition.yaml` | `module_5/development_plan/product-definition.yaml` | `definition/` |
+| 9 | migvisor-task-checker-product-definition | `products/{product}/current/specifications/development_plan/product-definition.yaml` | `module_5/development_plan/product-definition.yaml` | `product-definition/` |
 | 10 | migvisor-task-checker-build-plan | `products/{product}/current/codebase/build-plan.md` | `module_5/codebase/build-plan.md` | `build-plan/` |
 | 11 | migvisor-task-checker-data-dictionary | `products/{product}/current/codebase/docs/data-dictionary.md` | `module_5/codebase/docs/data_dictionary.md` | `data-dictionary/` |
 | 12 | migvisor-task-checker-pipeline-runbook | `products/{product}/current/codebase/docs/runbook.md` | `module_5/codebase/docs/pipeline_runbook.md` | `pipeline-runbook/` |
-| 13 | migvisor-task-checker-validation-report | `products/{product}/current/codebase/validation-report.md` | `module_5/reports/validation/report.md` | `validation/` |
+| 13 | migvisor-task-checker-validation-report | `products/{product}/current/codebase/validation-report.md` | `module_5/reports/validation/report.md` | `validation-report/` |
 | 14 | migvisor-task-checker-architecture-diagram | `products/{product}/current/codebase/docs/architecture_diagram.md` | `module_5/codebase/docs/architecture_diagram.md` | `architecture/` |
 | 15 | migvisor-task-checker-go-live-checklist | `products/{product}/current/codebase/docs/go_live_checklist.md` | `module_5/codebase/docs/go_live_checklist.md` | `go-live/` |
 | 16 | migvisor-task-checker-bi-connections | `products/{product}/current/codebase/docs/bi/bi_connections.md` | `module_5/codebase/config/bi_connections.md` | `bi-connections/` |

@@ -1,30 +1,51 @@
-# Validation Report Check Report — v5
+---
+task_id: TASK-VR-001
+product: Purchase
+participant_file: Inventory_Stock_Project/products/Purchase/current/codebase/validation-report.md
+reference_file: reference/answers/module_5/reports/validation/report.md
+checked_at: 2026-09-24T12:00:00
+sections_evaluated: 6
+total_score: 87/100
+grade: Good
+identical_to_reference: false
+---
 
-**Trainee:** Inventory_Stock_Project
-**Product:** Purchase
-**Date:** 2026-09-24
-**Score:** 70/100 (Acceptable)
+# Task Check Report — validation-report (v6)
+_Purchase | 2026-09-24_
 
-## Section Scores
+## Score Summary
 
-| Section | Weight | Score | Notes |
+| Section | Weight | Score | Status |
 |---|---|---|---|
-| Header/Run Context | 17 | 82 | Run metadata, date, and trainee context present |
-| SmartBuilder Skills Executed | 17 | 78 | Skills list documented |
-| Build Results | 17 | 75 | Build outcome documented per phase |
-| DQR Coverage | 17 | 45 | DQR-to-validation mapping missing; pass/fail/deferred status absent |
-| Validation Findings | 16 | 80 | Findings and recommendations documented |
-| Sign-off | 16 | 78 | Sign-off section present |
+| Header/Run Context | 17 | 15 | ✓ |
+| Build Output Detail | 17 | 15 | ✓ |
+| SmartBuilder Skills Executed | 17 | 15 | ✓ |
+| DQR Coverage | 17 | 15 | ✓ |
+| Validation Findings | 16 | 14 | ✓ |
+| Sign-off | 16 | 13 | ✓ |
+| **Total** | **100** | **87** | |
 
-## Auto-deducts
+---
 
-None.
+## Section Feedback
 
-## Summary
+### Build Output Detail (15/17)
+New Section 2 added — 5 sub-tables (ING, DIM, FACT, DQ, MART layers) with rows per notebook: tables updated, rows processed, duration. Summary totals: 13m 12s wall clock, 52,847 rows ingested, 48,356 fact rows after MERGE, 231 DQ rejections. Near reference quality. Minor: ING layer notebook list has 3 of 4 expected notebooks.
 
-The validation report scored 70/100 (Acceptable), with Header/Run Context, SmartBuilder Skills Executed, Build Results, Validation Findings, and Sign-off all scoring 72 to 85. The critical gap is the DQR Coverage section at only 45/100 — the report does not map which Data Quality Requirements from requirements.md were validated, which passed, and which were deferred. Adding a DQR Coverage table with pass/fail/deferred status per DQR item is the top fix, worth up to +14 pts. Adding per-skill build output detail is the second priority at +5 pts.
+### DQR Coverage (15/17)
+DQR Coverage table present mapping DQR-001 through DQR-006 with pass/fail/deferred status and notes. Good. Minor: deferred items don't specify which sprint or task they're deferred to.
 
-## Priority Actions
+### Validation Findings (14/16)
+Strong findings section. Minor: findings not all linked to specific task IDs for remediation.
 
-1. Add DQR Coverage table mapping each DQR item to pass/fail/deferred status — +14 pts
-2. Add per-skill build output detail (rows processed, tables created, execution time) — +5 pts
+---
+
+## Priority Improvements
+
+1. Add remediation task IDs to each Validation Finding — +2 pts
+2. Add deferred-to sprint reference for deferred DQR items — +2 pts
+
+---
+
+## Next Step
+Score ≥ 75 — you can proceed to the next task.
