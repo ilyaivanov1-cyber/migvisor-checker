@@ -36,9 +36,10 @@ Source System (transactional database)
 ┌─────────────────────────────────────────────────────────┐
 │  LAYER 2: Dimensions (Silver Dim)                       │
 │                                                         │
-│  nb_load_dim_supplier  ──► silver_dim.supplier (SCD-2)  │
-│  nb_load_dim_stock_item ►  silver_dim.stock_item (SCD-2)│
-│  nb_populate_date_dim  ──► silver_dim.date              │
+│  nb_orchestrate_dimensions                              │
+│    ├─► nb_load_dim_supplier  ──► silver_dim.supplier (SCD-2) │
+│    ├─► nb_load_dim_stock_item ► silver_dim.stock_item (SCD-2)│
+│    └─► nb_populate_date_dim  ──► silver_dim.date        │
 └────────────────────────┬────────────────────────────────┘
                          │
                          ▼
@@ -54,10 +55,14 @@ Source System (transactional database)
 ┌─────────────────────────────────────────────────────────┐
 │  LAYER 4: DQ + Mart + Commit                            │
 │                                                         │
+│  nb_dq_smoke_tests                                      │
 │  nb_dq_assertions  ──► bronze.dq_rejections             │
+│  nb_dq_rejection_report                                 │
+│  nb_refresh_v_purchase_by_supplier ──► mart.v_*_supplier│
+│  nb_refresh_v_purchase_per_stock_item                   │
+│  nb_optimize_mart                                       │
 │  nb_advance_watermark ► bronze.etl_cutoff (advance)     │
 │                      ► bronze.lineage_run (was_successful)│
-│  mart views refresh ──► inventory_stock.mart.*          │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -74,7 +79,7 @@ Source System (transactional database)
 | `silver_dim.supplier` | **Enabled** | None | 2555 days |
 | `silver_dim.stock_item` | **Enabled** | None | 2555 days |
 | `silver_dim.date` | Disabled | None | 2555 days |
-| `silver_fact.fact_purchase` | Disabled | `(date_key, supplier_key)` | 2555 days |
+| `silver_fact.fact_purchase` | Disabled | `(date_key, supplier_key, stock_item_key)` | 2555 days |
 
 ---
 

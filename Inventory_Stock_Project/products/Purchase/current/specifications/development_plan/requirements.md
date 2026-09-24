@@ -19,7 +19,8 @@ _Derived from: `products/Purchase/current/specifications/development_plan/produc
 | FR-008 | Conditional OPTIMIZE after fact merge | The product must execute `OPTIMIZE inventory_stock.silver_fact.fact_purchase` only when `rows_merged > FACT_OPTIMIZE_ROW_THRESHOLD` (10,000). The threshold must be read from `config/environment.yaml` under `purchase.etl.fact_optimize_row_threshold`. | should-have | When `rows_merged > 10000`, OPTIMIZE executes after the MERGE and log entry is written; when `rows_merged <= 10000`, OPTIMIZE is skipped and no OPTIMIZE log entry appears. | Details / x-inputPorts + CX-P001 |
 | FR-009 | Configuration externalisation | All date filter boundaries and business validation parameters must be read from `config/environment.yaml` at notebook startup. No hard-coded date literals or business-factor constants may appear in ETL notebooks or SQL files. | must-have | Static scan of `src/etl/` finds zero hard-coded ISO date literals; `config/environment.yaml` contains all externalised values under `purchase.etl` and `purchase.business_rules`. | Details / CX-P001 + CX-P002 |
 | FR-010 | Databricks SQL Warehouse data delivery | The product must expose `inventory_stock.silver_fact.fact_purchase` for BI consumption via a Databricks SQL Warehouse connected to Unity Catalog `inventory_stock`. The two Power BI reports must be connectable to the SQL Warehouse using their updated target-schema table and column references. | must-have | Both Power BI reports connect to the Databricks SQL Warehouse endpoint without error; `SELECT COUNT(*) FROM inventory_stock.silver_fact.fact_purchase` returns a non-zero row count after first successful load. | dataAccess / bi_reports |
-| FR-011 | Environment initialisation notebook | The product must provide a `reseed_purchase_environment.py` notebook that (a) creates all required Bronze and Silver tables if they do not exist, (b) inserts `key=0` sentinel rows into `silver_dim.supplier` and `silver_dim.stock_item`, and (c) resets `bronze.etl_cutoff` to the configured `initial_load_date`. Execution requires explicit scope-owner sign-off (PD-002). | must-have | After `reseed_purchase_environment.py` executes: all required tables exist; `SELECT * FROM silver_dim.supplier WHERE supplier_key = 0` returns exactly one row; `SELECT * FROM bronze.etl_cutoff WHERE table_name = 'fact_purchase'` returns the configured initial load date. | Details / x-inputPorts + PD-002 |
+| FR-011 | Environment initialisation notebook | The product must provide a `reseed_purchase_environment.py` notebook that (a) creates all required Bronze and Silver tables if they do not exist using `IF NOT EXISTS` DDL guards, (b) inserts `key=0` sentinel rows into `silver_dim.supplier` and `silver_dim.stock_item` if not already present, and (c) resets `bronze.etl_cutoff` to the configured `initial_load_date`. Execution requires explicit scope-owner sign-off (PD-002) and must be idempotent — running it twice must not duplicate sentinel rows or corrupt the watermark. | must-have | After `reseed_purchase_environment.py` executes: all required tables exist; `SELECT COUNT(*) FROM silver_dim.supplier WHERE supplier_key = 0` returns exactly 1; `SELECT etl_cutoff FROM bronze.etl_cutoff WHERE table_name = 'fact_purchase'` returns the configured initial load date; a second execution produces no errors and no additional sentinel rows. | Details / x-inputPorts + PD-002 |
+| FR-012 | Mart layer population for BI consumption | The product must populate two mart-layer views in `inventory_stock.mart` after each successful fact merge: (a) `mart.v_purchase_by_supplier` — aggregate view joining `silver_fact.fact_purchase` to `silver_dim.supplier` for supplier-level order volume and fill-rate analysis; (b) `mart.v_purchase_per_stock_item` — aggregate view joining `silver_fact.fact_purchase` to `silver_dim.stock_item` for stock-item-level procurement analysis. Both views must be queryable by the `bi-service-principal` via Unity Catalog RBAC without additional grants beyond the standard role matrix. | must-have | After a successful nightly run, `SELECT COUNT(*) FROM mart.v_purchase_by_supplier` and `SELECT COUNT(*) FROM mart.v_purchase_per_stock_item` return non-zero values; both views are accessible to the `bi-service-principal` without error; the two Power BI reports can reconnect to these views via Databricks SQL Warehouse. | dataAccess / bi_reports + NFR-002 |
 
 ---
 
@@ -58,4 +59,23 @@ _Derived from: `products/Purchase/current/specifications/development_plan/produc
 
 ---
 
-_Total requirements: 11 functional + 12 non-functional + 9 data quality = **32 requirements**_
+_Total requirements: 12 functional + 12 non-functional + 9 data quality = **33 requirements**_
+
+---
+
+## 4. DQR-to-Acceptance-Criteria Traceability
+
+The table below maps each Data Quality Requirement to the Functional and Non-Functional Acceptance Criteria it satisfies. This traceability ensures every DQR can be validated during acceptance testing.
+
+| DQR ID | DQR Title | Satisfied by AC | FR / NFR Description |
+|---|---|---|---|
+| DQR-001 | Row count reconciliation — zero tolerance | NFR-003 AC | After each MERGE, staging count must equal merged count; mismatch raises RuntimeError and FAILED status |
+| DQR-001 | Row count reconciliation — zero tolerance | FR-007 AC (4) | `lineage_key` is non-null on every fact row — row count mismatch would break this invariant |
+| DQR-002 | RI completeness — supplier_key | NFR-004 AC | LEFT ANTI JOIN on `supplier_key` after MERGE; violations written to `bronze.dq_rejections` with `rule_id = 'QA-P003'` |
+| DQR-003 | RI completeness — stock_item_key | NFR-004 AC | Same LEFT ANTI JOIN pattern for `stock_item_key`; pipeline continues regardless of violation count |
+| DQR-004 | RI completeness — date_key | NFR-004 AC | LEFT ANTI JOIN on `date_key` against `silver_dim.date.date`; violations written to `bronze.dq_rejections` |
+| DQR-005 | Quantity non-negativity | NFR-006 AC | Zero rows with negative `ordered_outers` / `ordered_quantity` in clean load; WARNING log on violation |
+| DQR-006 | Date key within batch window | NFR-006 AC | Zero rows with out-of-window `date_key` in clean load; WARNING log on violation; pipeline does not FAIL |
+| DQR-007 | Package non-null | NFR-006 AC | Zero rows with null or empty `package` in clean load; WARNING log on violation |
+| DQR-008 | DQ rejection traceability | NFR-007 AC | Every rejection row in `bronze.dq_rejections` carries the `lineage_key` of the producing run |
+| DQR-009 | Surrogate key default coverage | FR-004 AC (c) + FR-005 AC (c) | After `sk_resolver.py`, no staging row has null `supplier_key` or `stock_item_key` |

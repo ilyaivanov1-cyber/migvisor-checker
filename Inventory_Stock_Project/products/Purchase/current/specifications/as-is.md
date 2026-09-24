@@ -42,12 +42,13 @@ The migration target is **Databricks Delta Lake** (catalog: `inventory_stock`), 
 
 ## 2. Consumers
 
-The Purchase data product is consumed by two BI reports that read `fact.purchase` directly and by one internal ETL process that depends on the shared watermark control table written by the Purchase load procedure.
+The Purchase data product is consumed by two BI reports that read `fact.purchase` directly, by one cross-domain analytical view that reads it via a correlated subquery, and by one internal ETL process that depends on the shared watermark control table written by the Purchase load procedure.
 
 | Consumer Name | Use Cases | Business Questions Answered | Consumption Method |
 |---|---|---|---|
 | `wwidw purchase and sale per stockitem dynamic` | Cross-domain procurement-vs-sales comparison report used by procurement and inventory analysts. Presents ordered quantity, received quantity, and order finalization status per stock item alongside corresponding sales volume data for the same items. | Which stock items are being ordered in volumes that match or exceed sales demand? How do procurement receipt quantities compare to sales quantities per stock item? Which stock items have open (non-finalized) purchase orders relative to their sales activity? | Direct table read — queries `fact.purchase` directly. Cross-domain join with `fact.sale` (Sales_Orders product) on stock item. No intermediate view or procedure. |
 | `wwidw-ordered-by-supplier` | Supplier performance and order fill rate report used by procurement teams. Groups purchase order volumes, ordered and received quantities, and finalization status by supplier to assess fulfillment reliability. | Which suppliers are filling orders in full (received outers vs ordered outers)? What is the open vs finalized order distribution per supplier? Which suppliers have the highest purchase order volumes? What is the fill rate trend across suppliers? | Direct table read — queries `fact.purchase` and `dimension.supplier` directly. No intermediate view or procedure. Joins on `Supplier Key` (SCD-2 surrogate key). |
+| `analytics.v_ordertoyearanalytics` | Cross-domain analytical view driven by `fact.order`. Reads `fact.purchase` to correlate purchase stock item keys with order package types for year-to-date analytics. | (Cross-domain, out-of-scope for Purchase.) How do order-to-year analytics relate to purchase package types and stock items? | Correlated subquery in SELECT list: `SELECT TOP 5 p.[Stock Item Key] FROM Fact.Purchase p WHERE fo.Package = p.Package`. The join predicate is a string equality on the `Package` column — not a primary key join. Requires the `Package` column to be preserved with the same name and type in the migrated schema. **Coordination with the Order product team is required before migration** — this view is driven by `fact.order` and cannot be rebuilt by the Purchase product alone. |
 | `integration.migratestagedpurchasedata` | Internal ETL load procedure. Reads the ETL high-watermark from `integration.etl cutoff` (via `integration.getlastetlcutofftime`) to determine the incremental extract window for the current run, then upserts resolved purchase rows into `fact.purchase`. | (Internal only — not a business-facing consumer.) Controls which source rows are eligible for the current incremental load cycle. | Indirect dependency — does not query `fact.purchase` as a consumer but reads `integration.etl cutoff` (the watermark last written by the Purchase load procedure itself) to govern extract boundaries. Calls `integration.getlastetlcutofftime` stored procedure; updates `integration.etl cutoff` upon successful completion of each run. |
 
 ## 3. Model
@@ -196,6 +197,55 @@ erDiagram
 **Fact table:** `fact.purchase`
 **ETL engine:** SSIS — `pipeline_dailyetlmain` (daily batch), Purchase container
 **Lineage scope:** OLTP source tables → SSIS extract → integration staging → SCD-2 key resolution → fact upsert → BI consumption
+
+---
+
+### 4.0 Target Data Flow — Bronze → Silver → Gold (Databricks)
+
+The table below shows how each source-system object maps to the target Databricks medallion layer and its Delta table name in the `inventory_stock` Unity Catalog.
+
+```
+SOURCE (SQL Server 2014)
+══════════════════════════════════════════════════════════════════════════
+  wideworldimporters.purchasing.*  ──► JDBC incremental extract
+  wideworldimporters.warehouse.*          (watermark-bounded)
+                                               │
+                                               ▼
+BRONZE LAYER — inventory_stock.bronze.*
+══════════════════════════════════════════════════════════════════════════
+  integration.purchase_staging  → bronze.purchase_staging   (OVERWRITE/run)
+  integration.[ETL Cutoff]      → bronze.etl_cutoff          (control)
+  integration.lineage           → bronze.lineage_run         (audit log)
+  stg.dq_rejections             → bronze.dq_rejections       (DQ violations)
+                                               │
+                   ┌───────────────────────────┤
+                   ▼                           ▼
+SILVER DIM — inventory_stock.silver_dim.*    SILVER FACT — inventory_stock.silver_fact.*
+═══════════════════════════════════════════  ═══════════════════════════════════════════
+  dimension.supplier   → silver_dim.supplier (SCD-2)
+  dimension.stock item → silver_dim.stock_item (SCD-2)    → silver_fact.fact_purchase
+  dimension.date       → silver_dim.date (static)
+                                               │
+                                               ▼
+MART LAYER — inventory_stock.mart.*
+══════════════════════════════════════════════════════════════════════════
+  (BI-facing views)
+  mart.v_purchase_by_supplier        ──► wwidw-ordered-by-supplier (Power BI)
+  mart.v_purchase_per_stock_item     ──► wwidw purchase and sale per stockitem dynamic (Power BI)
+```
+
+| Source Object | Source Layer | Target Delta Table | Target Layer | Notes |
+|---|---|---|---|---|
+| `integration.purchase_staging` | SQL Server Integration | `bronze.purchase_staging` | Bronze | OVERWRITE per run; corrects SSIS truncation bug |
+| `integration.[ETL Cutoff]` | SQL Server Integration | `bronze.etl_cutoff` | Bronze | Watermark control; one row per entity |
+| `integration.lineage` | SQL Server Integration | `bronze.lineage_run` | Bronze | ETL run audit; IDENTITY key replaces SEQUENCE |
+| `stg.dq_rejections` | (new in target) | `bronze.dq_rejections` | Bronze | Centralised DQ violation store with lineage_key |
+| `dimension.supplier` | SQL Server Dimension | `silver_dim.supplier` | Silver Dim | SCD-2; is_current_row flag; key=0 sentinel required |
+| `dimension.stock item` | SQL Server Dimension | `silver_dim.stock_item` | Silver Dim | SCD-2; renamed (space removed); key=0 sentinel required |
+| `dimension.date` | SQL Server Dimension | `silver_dim.date` | Silver Dim | Static calendar; pre-populated at bootstrap |
+| `fact.purchase` | SQL Server Fact | `silver_fact.fact_purchase` | Silver Fact | MERGE INTO keyed on `wwi_purchase_order_id` |
+| (new in target) | — | `mart.v_purchase_by_supplier` | Mart | BI view — supplier performance |
+| (new in target) | — | `mart.v_purchase_per_stock_item` | Mart | BI view — stock item procurement |
 
 ---
 

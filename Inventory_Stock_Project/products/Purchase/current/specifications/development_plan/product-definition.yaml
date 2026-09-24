@@ -13,6 +13,9 @@ product:
     en:
       productID: purchase
       name: Purchase
+      status: draft
+      domain: procurement
+      owner: "[USER INPUT REQUIRED — confirm with scope owner]"
       description: >
         Grain-level Delta Lake fact table for procurement transactions on Databricks.
         Each row represents one purchase order line identified by purchase_key (IDENTITY),
@@ -32,7 +35,6 @@ product:
         observability foundation (lineage, DQ rejection store, watermark control)
         required for production operations.
       type: analytical_data_product
-      status: draft
       visibility: organisation
       categories:
         - procurement
@@ -190,6 +192,42 @@ product:
           violation_column, violation_value, and detection timestamp.
         strategy: centralised_sink
         blocking: false
+
+  # -------------------------------------------------------------------------
+  # Pipeline
+  # -------------------------------------------------------------------------
+  pipeline:
+    orchestration: Databricks Workflows
+    schedule: nightly
+    lineage_key:
+      source: inventory_stock.bronze.lineage_run (IDENTITY column)
+      propagation: >
+        Generated once per run in nb_extract_watermark via open_lineage_record();
+        published to all downstream tasks via dbutils.jobs.taskValues.set(key="lineage_key");
+        stamped on every row written to bronze.purchase_staging, silver_fact.fact_purchase,
+        and bronze.dq_rejections; closed on run completion in nb_advance_watermark.
+      traceability: lineage_key
+    assertions:
+      - id: QA-P001
+        description: Row count reconciliation — staging count must equal merged fact count. Blocking.
+        severity: BLOCKING
+        rule: DQR-001
+      - id: QA-P002
+        description: Orphaned surrogate key detection via LEFT ANTI JOIN for supplier_key and stock_item_key. Informational.
+        severity: Informational
+        rule: DQR-002 / DQR-003
+      - id: QA-P003
+        description: Referential integrity checks per FK column (date_key, supplier_key, stock_item_key) via LEFT ANTI JOIN. Violations written to bronze.dq_rejections.
+        severity: Informational
+        rule: DQR-004
+      - id: QA-P004
+        description: Business rule assertions — negative ordered_outers/ordered_quantity; date_key outside batch window; null/empty package. Informational.
+        severity: Informational
+        rule: DQR-005 / DQR-006 / DQR-007
+      - id: QA-P005
+        description: All DQ violations written to bronze.dq_rejections with lineage_key, rule_id, source_table, pk_column, pk_value, violation_column, violation_value, detected_at.
+        severity: Informational
+        rule: DQR-008
 
   # -------------------------------------------------------------------------
   # SLA

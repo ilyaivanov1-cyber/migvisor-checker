@@ -165,3 +165,29 @@ The IF (Interface) dimension defines cross-product consumption contracts, schema
 | LN-006 | Propagate lineage_key to `silver_fact.fact_purchase.lineage_key` and `bronze.purchase_staging.lineage_key`; set from open_lineage_record() at run start |
 | LN-007 | Retire sequences.reseedallsequences and sequences.reseedsequencebeyondtablevalues; application.configuration_reseedetl (Purchase portions) flagged for scope-owner sign-off |
 | LN-008 | Unity Catalog system lineage auto-captures all Delta reads/writes via three-part naming; no additional instrumentation required |
+
+---
+
+## lineage_run Table Schema
+
+The target `inventory_stock.bronze.lineage_run` table replaces both `integration.lineage` (SQL Server) and `sequences.lineagekey` (SQL Server SEQUENCE). The schema is defined below for cross-product reference — all products in Inventory_Stock_Project must use this shared schema.
+
+```sql
+CREATE TABLE IF NOT EXISTS inventory_stock.bronze.lineage_run (
+  lineage_key      BIGINT GENERATED ALWAYS AS IDENTITY COMMENT 'Surrogate run key — replaces sequences.lineagekey',
+  etl_run_id       STRING  NOT NULL                    COMMENT 'UUID generated at run start; used to retrieve lineage_key after INSERT',
+  pipeline_name    STRING  NOT NULL                    COMMENT 'Workflow job name (e.g. purchase_workflow)',
+  table_name       STRING  NOT NULL                    COMMENT 'Target table being loaded (e.g. fact_purchase)',
+  start_time       TIMESTAMP NOT NULL                  COMMENT 'Run start timestamp — replaces integration.lineage.[Data Load Started]',
+  end_time         TIMESTAMP                           COMMENT 'Run end timestamp — NULL until close_lineage_record() completes',
+  rows_loaded      BIGINT                              COMMENT 'Row count merged into target table; NULL until close_lineage_record() completes',
+  was_successful   BOOLEAN NOT NULL DEFAULT false      COMMENT 'True only after close_lineage_record(succeeded=True) — monitoring signal for incomplete runs',
+  source_cutoff    TIMESTAMP                           COMMENT 'Upper bound of the extract window for this run'
+) USING DELTA
+TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
+COMMENT 'ETL run audit log. One row per pipeline run per product. Replaces integration.lineage + sequences.lineagekey.';
+```
+
+**run_id generation strategy:** Each ETL run generates a UUID at the start of `nb_extract_watermark` using `str(uuid.uuid4())`. This UUID is written as `etl_run_id` when the lineage row is opened, then used to retrieve the IDENTITY-generated `lineage_key` via `SELECT lineage_key FROM bronze.lineage_run WHERE etl_run_id = '<uuid>'`. This approach avoids the `NEXT VALUE FOR sequences.lineagekey` anti-pattern and works correctly in distributed Databricks environments.
+
+**Monitoring signal:** A `was_successful = false` row in `bronze.lineage_run` where `start_time < current_timestamp() - INTERVAL 4 HOURS` indicates a stuck or failed pipeline run — equivalent to `integration.lineage.[Data Load Completed] IS NULL` in the legacy system.

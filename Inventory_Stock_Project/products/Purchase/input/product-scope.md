@@ -98,10 +98,11 @@ Known schema: `PurchaseKey` (BIGINT IDENTITY PK), `Date Key` (date FK), `Supplie
 
 ## 5 Consumers
 
-| Consumer | Type | Objects Consumed |
-|---|---|---|
-| `wwidw purchase and sale per stockitem dynamic` | BI Report (Power BI / SSRS) | `fact.purchase` (cross-domain; also reads `fact.sale`) |
-| `wwidw-ordered-by-supplier` | BI Report (Power BI / SSRS) | `fact.purchase`, `dimension.supplier` |
+| Consumer | Type | Objects Consumed | Notes |
+|---|---|---|---|
+| `wwidw purchase and sale per stockitem dynamic` | BI Report (Power BI / SSRS) | `fact.purchase` (cross-domain; also reads `fact.sale`) | Cross-domain; requires coordinated cutover with Sales_Orders product |
+| `wwidw-ordered-by-supplier` | BI Report (Power BI / SSRS) | `fact.purchase`, `dimension.supplier` | Purchase-specific; no cross-domain dependency |
+| `analytics.v_ordertoyearanalytics` | Analytical View (SQL Server) | `fact.purchase` via correlated subquery on `Package` column | **Cross-domain — out-of-scope for Purchase.** Driven by `fact.order`; cannot be rebuilt by this product alone. Coordination with Order product team required before migration. If `Package` column is renamed, this view's predicate must be updated. |
 
 ---
 

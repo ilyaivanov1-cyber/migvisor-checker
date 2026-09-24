@@ -121,6 +121,18 @@ The Purchase data product serves two categories of consumers in the target state
 | `wwidw_ordered_by_supplier` | Supplier performance and fulfillment reliability: assesses order fill rates by supplier, tracks open vs finalized order distribution, and surfaces high-volume suppliers for procurement review. | Which suppliers are filling orders in full (received vs ordered outers)? What is the open vs finalized order distribution per supplier? Which suppliers have the highest purchase order volumes? What is the fill rate trend across suppliers? | Databricks SQL Warehouse (replaces direct SQL Server connection); table references updated to `inventory_stock.silver_fact.fact_purchase` and `inventory_stock.silver_dim.supplier`; column names updated to snake_case. |
 | `migrate_staged_purchase_data` (Databricks Workflow task) | Internal ETL orchestration: bounds the incremental extract window using the watermark stored in the ETL cutoff control table, upserts resolved purchase rows into `inventory_stock.silver_fact.fact_purchase`, and updates the cutoff timestamp on completion. Not a business-facing consumer. | N/A — internal ETL dependency; no business questions exposed. | Databricks Workflow task executing `migrate_staged_purchase_data.py` Python notebook (replaces `integration.migratestagedpurchasedata` stored procedure); reads and writes watermark via the target control table equivalent of `integration.etl_cutoff`. |
 
+### 2.1. Cross-Domain Views
+
+`analytics.v_ordertoyearanalytics` is an existing SQL Server view that reads `fact.purchase` via a correlated subquery on the `Package` column. It is driven by `fact.order` and is owned by the Order product team — **it is out of scope for the Purchase product to rebuild**. However, because its join predicate uses `fo.Package = p.Package`, the `package` column in `silver_fact.fact_purchase` must retain the same name and data type to avoid breaking this view when it is eventually migrated by the Order product team.
+
+| Cross-Domain View | Access Pattern | Purchase Dependency | Migration Responsibility |
+|---|---|---|---|
+| `analytics.v_ordertoyearanalytics` | Correlated subquery: `SELECT TOP 5 p.[Stock Item Key] FROM Fact.Purchase p WHERE fo.Package = p.Package` — returns a string-aggregated list of stock item keys per order row | Reads `fact.purchase.Package` (string equality join) and `fact.purchase.[Stock Item Key]` | **Order product team** — cannot be rebuilt by Purchase alone; requires both Purchase and Order to be migrated first |
+
+**Impact on Purchase migration:** The `package` column must be preserved as `STRING` in `silver_fact.fact_purchase` (mapping from `NVARCHAR` per TY-009). No renaming of this column is permitted unless the Order product team confirms they will update `analytics.v_ordertoyearanalytics` before or during cutover.
+
+---
+
 > **Transformation summary (Section 2):**
 > All Power BI reports have been reconnected to Databricks SQL Warehouse, replacing the prior direct connections to the SQL Server 2014 `wideworldimportersdw` database; object references in both reports have been updated from legacy schema-qualified names (e.g., `fact.purchase`, `dimension.supplier`) to their target equivalents (`inventory_stock.silver_fact.fact_purchase`, `inventory_stock.silver_dim.supplier`), and all space-bearing column names have been normalised to lowercase snake_case per rule NM-002.
 > The internal ETL consumer `integration.migratestagedpurchasedata` has been replaced by the Python notebook `migrate_staged_purchase_data.py` running as a Databricks Workflow task (`migrate_staged_purchase_data`), per rules OB-007 and PL-006, removing any stored-procedure dependency from the target state.
@@ -900,3 +912,42 @@ Rules applied across all calculations:
 > **Transformation summary (Section 6):** All Purchase product input sources are migrated from `wideworldimportersdw` (SQL Server 2014) to Unity Catalog `inventory_stock` medallion layers. The bronze layer hosts transient staging (`purchase_staging`) and run-control tables (`etl_cutoff`, `lineage_run`, `dq_rejections`); the silver_dim layer hosts SCD-2 dimension tables (`supplier`, `stock_item`) and the shared date reference table (`date`); the silver_fact layer hosts the primary analytical output (`fact_purchase`). Space-bearing source names (NM-002) and legacy SEQUENCE objects (LN-002, OB-006) are resolved. Power BI / SSRS consumers reconnect to Databricks SQL Warehouse via renamed three-part Unity Catalog references (OB-008). The Purchase Workflow does not own `silver_dim.date` — its load is a shared infrastructure responsibility (OB-011). The geography CLR column `DeliveryLocation` in `dimension.Supplier` is decomposed into `delivery_location_wkt STRING`, `delivery_location_lat DOUBLE`, and `delivery_location_lon DOUBLE` on the target `silver_dim.supplier` table (TY-P004). MONEY/SMALLMONEY currency columns in `dimension.stock item` (`unit_price`, `recommended_retail_price`) are mapped to `DECIMAL(18,2)` (TY-P003). SCD-2 `_current` views are classified as regular `CREATE OR REPLACE VIEW`; Gold-layer analytics views that aggregate must use `CREATE OR REPLACE MATERIALIZED VIEW` (OB-P003). For runtimes below DBR 13.3 where Liquid Clustering is unavailable, the fallback strategy `PARTITIONED BY (date_key) ZORDER BY (supplier_key, stock_item_key)` applies to `fact_purchase` (PE-P001). Duplicate scalar function patterns are consolidated into NULL-guarded Python UDFs in `src/common/udfs.py` (CX-P003). All DDL files in `src/db/ddl/` carry a standard header block with PROJECT, PRODUCT, FILE, PURPOSE, SOURCE, TARGET, RULES, and GENERATED fields (CX-P006).
 
 **Stop condition:** Stop after Section 6.2. This is the final section of the to-be specification.
+
+---
+
+## 7. Non-Functional Requirements
+
+### 7.1. SLA Targets
+
+| Dimension | Target | Detail |
+|---|---|---|
+| Data freshness | Daily — available by 06:00 UTC | Nightly ETL job starts at 02:00 UTC; `silver_fact.fact_purchase` must reflect all purchase records with modification timestamps up to midnight UTC of the preceding calendar day |
+| Pipeline completion SLA | ≤ 4 hours end-to-end | Full pipeline (extract → dim load → fact MERGE → DQ assertions → mart refresh) must complete within 4 hours |
+| SQL Warehouse availability | ≥ 99.5% during business hours | Databricks SQL Warehouse endpoint serving BI consumers; planned maintenance windows excluded |
+| Alerting | Failed run alert within 15 minutes | Databricks Workflow failure notifications sent to configured alert recipients within 15 minutes of job failure |
+
+### 7.2. Data Retention Policy
+
+| Layer | Table(s) | Retention Period | Policy |
+|---|---|---|---|
+| Bronze | `bronze.purchase_staging` | 90 days | Transient staging; truncated each run; Delta history retained for 90 days for time-travel debugging |
+| Bronze | `bronze.etl_cutoff` | 7 years | Control table; low volume; retained indefinitely for audit |
+| Bronze | `bronze.lineage_run` | 7 years | ETL audit log; each row references a pipeline run; required for compliance and incident investigation |
+| Bronze | `bronze.dq_rejections` | 90 days | DQ violation store; rolling 90-day window; older rows purged via scheduled VACUUM |
+| Silver Dim | `silver_dim.supplier`, `silver_dim.stock_item`, `silver_dim.date` | 7 years | SCD-2 history must be retained for accurate point-in-time reporting across the full retention window |
+| Silver Fact | `silver_fact.fact_purchase` | 7 years | Core analytical fact; 7-year retention per data governance policy; Unity Catalog table properties enforce this |
+
+**Delta VACUUM policy:** `VACUUM` runs must not delete Delta table history within the configured retention period. Set `delta.deletedFileRetentionDuration = interval 90 days` on bronze staging tables; set `delta.logRetentionDuration = interval 7 years` on silver fact and dimension tables.
+
+### 7.3. Unity Catalog Permission Model
+
+The Purchase product uses a three-tier RBAC model in Unity Catalog on the `inventory_stock` catalog:
+
+| Principal | Role | Accessible Objects | Prohibited Objects |
+|---|---|---|---|
+| `etl-service-principal` | ETL executor | All `bronze.*`, all `silver_dim.*`, all `silver_fact.*`, all `mart.*` (SELECT + MODIFY + REFRESH MV) | — |
+| `bi-service-principal` | BI read-only | `mart.v_purchase_by_supplier`, `mart.v_purchase_per_stock_item`, `silver_fact.fact_purchase` (SELECT only) | `bronze.*` (PERMISSION_DENIED) |
+| `purchase-analysts` | Analyst read-only | `mart.v_purchase_by_supplier`, `mart.v_purchase_per_stock_item`, `silver_fact.fact_purchase` (SELECT only) | `bronze.*`, `silver_dim.*` write operations |
+| `data-engineering` | DQ observer | `bronze.dq_rejections` (SELECT only), `bronze.lineage_run` (SELECT only) | `silver_fact.*` write operations |
+
+**Grant scripts:** Defined in `config/uc_permission_audit.sql`. Grants are applied as part of the environment initialisation notebook (`reseed_purchase_environment.py`) and verified by the go-live checklist. Access role matrix definition is tracked under PD-003.

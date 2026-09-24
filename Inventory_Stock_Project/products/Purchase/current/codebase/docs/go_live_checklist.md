@@ -20,7 +20,7 @@
 ## 3. Security
 
 - [ ] GRANT-001 through GRANT-004 applied (all principals have correct privileges)
-- [ ] PII compliance check passed (zero hardcoded credentials)
+- [ ] `nb_pii_compliance_check` passed (zero hardcoded credentials)
 - [ ] Dev and prod Secrets scopes created (`inventory-stock-dev`, `inventory-stock-prod`)
 - [ ] All secret keys registered: `jdbc_url`, `jdbc_username`, `jdbc_password`
 - [ ] `bi-service-principal` verified: can SELECT mart views, cannot MODIFY
@@ -28,6 +28,7 @@
 
 ## 4. Pipeline
 
+- [ ] `deploy_workflow.sh --env prod` executed successfully
 - [ ] Workflow deployed and visible in Databricks Jobs UI with correct schedule
 - [ ] Manual trigger of Workflow in dev completes end-to-end without errors
 - [ ] `bronze.lineage_run` shows `was_successful = true` for the manual test run
@@ -35,9 +36,10 @@
 
 ## 5. Data Quality
 
-- [ ] `tests/dq_assertions_purchase.yaml` loaded and all DQR rules enabled
-- [ ] Blocking DQR rules halt the pipeline on failure
-- [ ] Informational DQR rules log to `bronze.dq_rejections` without stopping the pipeline
+- [ ] `config/dq_assertions_purchase.yaml` loaded and all six DQR rules enabled
+- [ ] DQR-001, DQR-004, DQR-005, DQR-006 are `severity: BLOCKING`
+- [ ] DQR-002, DQR-003 are `severity: Informational`
+- [ ] `nb_dq_smoke_tests` passes on a populated catalog
 - [ ] `bronze.dq_rejections` table exists and is writable by `etl-service-principal`
 - [ ] Test DQ failure: introduce a synthetic count mismatch, verify pipeline halts at nb_dq_assertions
 
