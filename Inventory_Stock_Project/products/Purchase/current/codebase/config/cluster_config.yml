@@ -1,0 +1,30 @@
+# CFG-001: Databricks cluster configuration for Purchase ETL pipeline.
+# Apply this policy to the job cluster used by the nightly ETL workflow.
+
+cluster_name: purchase-etl-cluster
+spark_version: "14.3.x-scala2.12"
+node_type_id: Standard_DS3_v2
+num_workers: 2
+
+spark_conf:
+  spark.databricks.delta.retentionDurationCheck.enabled: "false"
+  spark.databricks.delta.schema.autoMerge.enabled: "true"
+  spark.sql.catalog.inventory_stock: "com.databricks.backend.daemon.driver.CatalogPlugin"
+
+autoscale:
+  min_workers: 1
+  max_workers: 4
+
+cluster_log_conf:
+  dbfs:
+    destination: "dbfs:/cluster-logs/purchase-etl"
+
+init_scripts: []
+
+custom_tags:
+  product: "Purchase"
+  team: "data-engineering"
+  environment: "prod"
+
+data_security_mode: "SINGLE_USER"
+runtime_engine: "STANDARD"

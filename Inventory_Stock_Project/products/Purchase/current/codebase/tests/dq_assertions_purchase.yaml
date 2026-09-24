@@ -1,0 +1,36 @@
+# DQ assertions for Purchase ETL pipeline.
+# Loaded by nb_dq_assertions.py at runtime.
+# severity: BLOCKING  — pipeline halts on violation
+# severity: Informational — violations logged to bronze.dq_rejections, pipeline continues
+
+rules:
+
+  - rule_id: DQR-001
+    severity: BLOCKING
+    description: "No NULL values in purchase order ID"
+    condition: "wwi_purchase_order_id IS NOT NULL"
+
+  - rule_id: DQR-002
+    severity: Informational
+    description: "Ordered quantity must be positive"
+    condition: "ordered_quantity > 0"
+
+  - rule_id: DQR-003
+    severity: Informational
+    description: "Received outers must not exceed ordered outers"
+    condition: "received_outers <= ordered_outers OR ordered_outers IS NULL"
+
+  - rule_id: DQR-004
+    severity: BLOCKING
+    description: "supplier_key must be resolved (non-NULL, non-sentinel preferred)"
+    condition: "supplier_key IS NOT NULL"
+
+  - rule_id: DQR-005
+    severity: BLOCKING
+    description: "stock_item_key must be resolved (non-NULL)"
+    condition: "stock_item_key IS NOT NULL"
+
+  - rule_id: DQR-006
+    severity: BLOCKING
+    description: "date_key must be resolved (non-NULL, non-zero)"
+    condition: "date_key IS NOT NULL AND date_key != 0"

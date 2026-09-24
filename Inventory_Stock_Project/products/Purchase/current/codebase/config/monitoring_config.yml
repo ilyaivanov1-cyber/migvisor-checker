@@ -1,0 +1,43 @@
+# CFG-011: Monitoring and alerting configuration for Purchase ETL pipeline.
+
+pipeline: purchase_etl
+product: Purchase
+catalog: inventory_stock
+
+# ── Alert channels ────────────────────────────────────────────────────────────
+alerts:
+  email:
+    recipients:
+      - data-engineering@company.com
+      - oncall-de@company.com
+  slack:
+    webhook_url_secret: "inventory-stock-prod/slack_webhook_url"
+    channel: "#data-engineering-alerts"
+
+# ── Monitoring checks ─────────────────────────────────────────────────────────
+checks:
+  lineage_run:
+    table: inventory_stock.bronze.lineage_run
+    success_field: was_successful
+    alert_on_failure: true
+    max_run_duration_minutes: 60
+
+  dq_rejections:
+    table: inventory_stock.bronze.dq_rejections
+    alert_on_blocking_violations: true
+    informational_threshold: 100
+
+  watermark:
+    table: inventory_stock.bronze.etl_cutoff
+    entity: fact_purchase
+    max_lag_hours: 26
+
+  row_count:
+    fact_table: inventory_stock.silver_fact.fact_purchase
+    alert_on_zero_rows: true
+
+# ── SLA ───────────────────────────────────────────────────────────────────────
+sla:
+  pipeline_completion_by: "06:00"
+  timezone: "UTC"
+  business_days_only: false

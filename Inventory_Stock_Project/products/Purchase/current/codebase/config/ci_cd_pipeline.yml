@@ -1,0 +1,61 @@
+# CFG-009: CI/CD pipeline configuration for Purchase ETL deployment.
+# Deploys the Databricks Workflow and notebooks on merge to main.
+
+name: purchase-etl-deploy
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - "products/Purchase/**"
+
+variables:
+  DATABRICKS_HOST: $(DATABRICKS_HOST)
+  DATABRICKS_TOKEN: $(DATABRICKS_TOKEN)
+  CATALOG: inventory_stock
+  PRODUCT: Purchase
+
+stages:
+
+  - stage: Test
+    displayName: "Run unit tests"
+    jobs:
+      - job: pytest
+        steps:
+          - script: |
+              pip install -r requirements.txt
+              pytest tests/ -v --tb=short
+            displayName: "pytest"
+
+  - stage: Deploy_Dev
+    displayName: "Deploy to Dev"
+    dependsOn: Test
+    variables:
+      ENV_SCOPE: inventory-stock-dev
+    jobs:
+      - job: deploy_dev
+        steps:
+          - script: |
+              databricks workspace import_dir products/Purchase/current/codebase/src \
+                /Repos/purchase-etl/src --overwrite
+              databricks jobs reset --job-id $(DEV_JOB_ID) \
+                --json @config/workflows/nightly_etl_purchase.json
+            displayName: "Deploy notebooks and workflow (dev)"
+
+  - stage: Deploy_Prod
+    displayName: "Deploy to Prod"
+    dependsOn: Deploy_Dev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    variables:
+      ENV_SCOPE: inventory-stock-prod
+    jobs:
+      - job: deploy_prod
+        steps:
+          - script: |
+              databricks workspace import_dir products/Purchase/current/codebase/src \
+                /Repos/purchase-etl/src --overwrite
+              databricks jobs reset --job-id $(PROD_JOB_ID) \
+                --json @config/workflows/nightly_etl_purchase.json
+            displayName: "Deploy notebooks and workflow (prod)"
