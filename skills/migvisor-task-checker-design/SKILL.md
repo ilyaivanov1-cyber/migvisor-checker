@@ -52,6 +52,8 @@ All arguments are optional. Examples:
 | Participant's design file | Path supplied at invocation (positional arg 1) OR auto-resolved | Yes |
 | Reference (final) design file | Path supplied at invocation (positional arg 2) OR auto-resolved | Yes |
 | Product name | Derived from: (1) `--product` flag, (2) `# Design: <Name>` H1 heading, (3) `**Product:**` metadata field, (4) `product:` YAML frontmatter, (5) parent directory name | Derived |
+| **Participant's to-be.md** | `{trainee_workspace}/products/{product}/current/specifications/to-be.md` — read in parallel with design file | **Required for cross-check** |
+| **Participant's data-dictionary.md** | `{trainee_workspace}/products/{product}/current/codebase/docs/data-dictionary.md` — read to verify DDL column names | Optional (skip if missing) |
 
 ---
 
@@ -438,6 +440,10 @@ Then immediately output a **plain-English summary** of 5–6 sentences. Rules:
 ---
 
 ### Domain evaluation notes
+
+**Cross-file MERGE key consistency check (MANDATORY)** — after reading the design file, read the participant's `to-be.md`. Extract the MERGE ON predicate grain from to-be (e.g., "4-column composite key: purchase_order_id, line_id, order_date, supplier_id"). Then check the MERGE ON predicate in the design file. If the design MERGE ON predicate uses fewer columns than the grain specified in to-be, this is a cross-deliverable inconsistency — flag it as a [DEFECT] and apply the −5 pt auto-deduct regardless of whether the reference has the same issue. Do not skip this check even if the reference also has the single-column predicate.
+
+**Cross-file DDL column name check (MANDATORY)** — after reading `data-dictionary.md` (if present), verify that every column name used in the design's DDL blocks (`dq_rejections`, `lineage_run`, etc.) matches the actual schema in the data dictionary. If a column name in the design DDL differs from the data dictionary (e.g., `fk_column` vs `violation_column`), flag each mismatch as a [DEFECT] in section feedback. Apply −1 pt per mismatch, max −3 pts.
 
 **Known MERGE key defect** — the reference `design.md` (§3.3) documents that the generated MERGE ON predicate uses a single `wwi_purchase_order_id` key, but the actual fact grain is order-line (4-column composite: order_id, line_id, order_date, supplier_id). A well-researched submission calls this out explicitly as a known defect requiring a fix. A submission that documents the single-column MERGE without flagging it loses all Issues/gaps points for the Transformation section.
 

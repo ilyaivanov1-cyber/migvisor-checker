@@ -516,6 +516,10 @@ Do **not** exceed 6 sentences. Do **not** use bullet points in the prose verdict
 
 **Priority classification** — 26 must-have, 6 should-have: FR-008 (conditional OPTIMIZE), NFR-002 (uptime), NFR-012 (retention), DQR-005/006/007 (business-rule data conditions). A submission without priority classification scores 0 on the Issues/gaps criterion for the Priority section.
 
+**Cross-file column name check (MANDATORY)** — before scoring, read the participant's `data-dictionary.md` at `{trainee_workspace}/products/{product}/current/codebase/docs/data-dictionary.md`. Extract the actual column names for `dq_rejections` and other tables. Then verify every column name referenced in NFR and DQR requirements against the actual schema. If a requirement references a column that does not exist (e.g., `fk_column` when the data dictionary says `violation_column`), mark it as a [DEFECT] in section feedback and subtract from the Content completeness criterion (−2 pts per wrong column reference, max −6 pts).
+
+**Cross-file MERGE key check (MANDATORY)** — read the participant's `to-be.md` at `{trainee_workspace}/products/{product}/current/specifications/to-be.md`. Extract the MERGE grain (number of ON predicate columns). Then check FR-007 (or equivalent MERGE requirement) in the requirements document. If the requirement specifies fewer MERGE key columns than the to-be grain, flag as [DEFECT] even if the trainee did not catch it themselves.
+
 **Known requirement errors to flag** — a well-researched submission calls out at least one:
 - FR-007: MERGE key specified as single-column (`wwi_purchase_order_id`) but fact grain is 4-column (order-line composite) — known defect
 - NFR-007: description says "9 columns" but lists 10 — count mismatch
