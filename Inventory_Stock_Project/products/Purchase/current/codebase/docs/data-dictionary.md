@@ -151,4 +151,86 @@ This document is the column-level data dictionary for all tables owned or manage
 
 ---
 
-_Rules applied across all tables: NM-001, NM-002, NM-009, TY-003, TY-004, TY-009, TY-010, TY-012, TY-015, TY-017, TY-P001, LN-001, LN-002, LN-P001, OB-003, OB-004, OB-P002, QA-P005, CX-P006_
+---
+
+## 6. `inventory_stock.silver_dim.supplier`
+
+**Purpose:** SCD-2 supplier dimension table. Tracks full attribute history for every supplier. Change Data Feed enabled. Populated by the Dimensions team (external dependency for Purchase ETL).
+
+**Grain:** One row per supplier attribute-version. Exactly one row per `wwi_supplier_id` has `is_current_row = TRUE`.
+
+**Load pattern:** SCD-2 two-step MERGE (expire + insert) by `scd2_merge.apply_scd2_merge`. Not owned by Purchase ETL.
+
+**Rules:** OB-001, TY-P001, TY-P002, LN-001, NM-001, CX-P006
+
+| # | Column Name | Data Type | Nullable | Description | Business Meaning | Derivation / Source |
+|---|---|---|---|---|---|---|
+| 1 | `supplier_key` | INT | No | Surrogate primary key. `GENERATED ALWAYS AS IDENTITY`. Key=0 is the sentinel "Unknown" member; never updated by SCD-2 MERGE. | Stable row reference for fact.purchase FK joins. No business meaning — a key=0 value in fact.purchase identifies an order whose supplier could not be resolved. | `INT GENERATED ALWAYS AS IDENTITY` assigned by Delta on INSERT. Key=0 pre-seeded by `reseed_purchase_environment.py` (`wwi_supplier_id = 0`, `supplier_name = 'Unknown'`). Rule: TY-017. |
+| 2 | `wwi_supplier_id` | INT | No | Source system natural key — the WideWorldImporters `Purchasing.Suppliers.SupplierID`. SCD-2 business key. | Identifies the supplier in the source OLTP system. Used as the join key in `sk_resolver.py` temporal range join (`stg.wwi_supplier_id = dim.wwi_supplier_id`). | Pass-through from `Purchasing.Suppliers.SupplierID` at SCD-2 load time. |
+| 3 | `supplier_name` | STRING | No | Full legal or trading name of the supplier. | Core descriptive attribute for supplier identification in reports and BI. | Pass-through from `Purchasing.Suppliers.SupplierName` (NVARCHAR → STRING, TY-009). |
+| 4 | `supplier_category_name` | STRING | Yes | Supplier category as defined in the source system (e.g. "Novelty Goods Supplier"). | Enables supplier segmentation by category in analytical queries. | Joined from `Purchasing.SupplierCategories.SupplierCategoryName` at SCD-2 load time. Nullable — unknown category allowed. |
+| 5 | `primary_contact` | STRING | Yes | Name of the primary contact person at this supplier. | Operational attribute for procurement and relationship management. | Pass-through from `Application.People.FullName` via `Purchasing.Suppliers.PrimaryContactPersonID`. Nullable. |
+| 6 | `phone_number` | STRING | Yes | Main telephone number. | Operational contact attribute. | Pass-through from `Purchasing.Suppliers.PhoneNumber`. Nullable. |
+| 7 | `fax_number` | STRING | Yes | Fax number, if applicable. | Legacy operational attribute. | Pass-through from `Purchasing.Suppliers.FaxNumber`. Nullable. |
+| 8 | `website_url` | STRING | Yes | Supplier website URL. | Reference attribute for supplier due-diligence and onboarding. | Pass-through from `Purchasing.Suppliers.WebsiteURL`. Nullable. |
+| 9 | `delivery_city_name` | STRING | Yes | City used for delivery address. | Enables geographic segmentation of procurement activity. | Joined from `Application.Cities.CityName` via `Purchasing.Suppliers.DeliveryCityID`. Nullable. |
+| 10 | `delivery_postal_code` | STRING | Yes | Postal code for delivery address. | Supplementary geographic attribute for logistics analysis. | Pass-through from `Purchasing.Suppliers.DeliveryPostalCode`. Nullable. |
+| 11 | `delivery_country_name` | STRING | Yes | Country for delivery address. | Enables country-level supplier origin analysis. | Joined from `Application.Countries.CountryName` via delivery location chain. Nullable. |
+| 12 | `payment_days` | INT | Yes | Standard payment terms in days (e.g. 30, 60). | Financial attribute used for AP aging and cash-flow forecasting. | Pass-through from `Purchasing.Suppliers.PaymentDays`. Nullable. |
+| 13 | `valid_from` | DATE | No | Inclusive start date of this attribute version (source effective date). `9999-12-31` future version marker is never used. | SCD-2 temporal boundary — defines the date range during which this supplier version is the source-accurate record. Used in `sk_resolver.py` temporal range join: `last_modified_when > CAST(valid_from AS TIMESTAMP)`. Rule: TY-P001 (DATE, not TIMESTAMP). | Set by `scd2_merge.apply_scd2_merge` to the `effective_date` parameter (typically `current_date()`). |
+| 14 | `valid_to` | DATE | No | Inclusive end date of this version. `9999-12-31` indicates this is the current active version. | SCD-2 temporal boundary — upper bound for the range join in `sk_resolver.py`: `last_modified_when <= CAST(valid_to AS TIMESTAMP)`. Rule: TY-P001. | Set by `scd2_merge.apply_scd2_merge`: `9999-12-31` on INSERT; updated to `effective_date - 1 day` on the prior version during the expire step. |
+| 15 | `row_effective_date` | DATE | No | Date this row was physically inserted into the dimension table. | Physical insertion audit date. Distinguishes when the DW record was created (row_effective_date) from when the source attribute became effective (valid_from). | Set by `scd2_merge.apply_scd2_merge` to `effective_date` parameter at INSERT time. Rule: TY-P002. |
+| 16 | `row_expiry_date` | DATE | No | Date this row was logically closed. `9999-12-31` means the row is still active. | Physical closure audit date. Indicates when this DW record was superseded by a newer version. | Set by `scd2_merge.apply_scd2_merge`: `9999-12-31` on INSERT; updated to `effective_date` (same as new `valid_from`) during the expire step. Rule: TY-P002. |
+| 17 | `is_current_row` | BOOLEAN | No | `TRUE` for the single active version of each supplier (the version with `valid_to = 9999-12-31`). | Fast-filter flag: `WHERE is_current_row = TRUE` in `silver_dim.supplier_current` view avoids date-range filtering overhead. Exactly one row per `wwi_supplier_id` has `is_current_row = TRUE`. | Set by `scd2_merge.apply_scd2_merge`: `TRUE` on INSERT; updated to `FALSE` during the expire step on the prior version. Default `TRUE`. Rule: TY-P002. |
+| 18 | `lineage_key` | BIGINT | No | FK to `inventory_stock.bronze.lineage_run.lineage_key`. Links this dimension row to the specific SCD-2 load run that created it. | End-to-end traceability from any dimension row back to the pipeline run that produced it. Enables impact analysis if a SCD-2 load is found to have errors. | Propagated from `dbutils.jobs.taskValues` by the Dimensions team notebook at SCD-2 load time. Rules: LN-001, LN-P001. |
+
+---
+
+## 7. `inventory_stock.silver_dim.stock_item`
+
+**Purpose:** SCD-2 stock item (product) dimension table. Tracks full attribute history. Change Data Feed enabled. Populated by the Dimensions team (external dependency for Purchase ETL).
+
+**Grain:** One row per stock item attribute-version. Exactly one row per `wwi_stock_item_id` has `is_current_row = TRUE`.
+
+**Load pattern:** SCD-2 two-step MERGE (expire + insert) by `scd2_merge.apply_scd2_merge`. Not owned by Purchase ETL.
+
+**Rules:** OB-001, TY-P001, TY-P002, TY-P003, LN-001, NM-001, CX-P006
+
+| # | Column Name | Data Type | Nullable | Description | Business Meaning | Derivation / Source |
+|---|---|---|---|---|---|---|
+| 1 | `stock_item_key` | INT | No | Surrogate primary key. `GENERATED ALWAYS AS IDENTITY`. Key=0 is the sentinel "Unknown" member. | Stable row reference for fact.purchase FK joins. Key=0 identifies orders whose stock item could not be resolved. | `INT GENERATED ALWAYS AS IDENTITY`. Sentinel key=0 pre-seeded by `reseed_purchase_environment.py`. Rule: TY-017. |
+| 2 | `wwi_stock_item_id` | INT | No | Source system natural key — `Warehouse.StockItems.StockItemID`. SCD-2 business key. | Identifies the stock item in the source OLTP system. Used as the join key in `sk_resolver.py`. | Pass-through from `Warehouse.StockItems.StockItemID`. |
+| 3 | `stock_item_name` | STRING | No | Full descriptive name of the stock item. | Primary attribute for item identification in purchase analysis and BI reports. | Pass-through from `Warehouse.StockItems.StockItemName` (NVARCHAR → STRING, TY-009). |
+| 4 | `color` | STRING | Yes | Color of the item. | Product attribute enabling color-level analysis of purchases. | Pass-through from `Warehouse.Colors.ColorName` via join. Nullable — `NULL` for items with no color attribute. |
+| 5 | `size` | STRING | Yes | Size descriptor (e.g. "M", "L", "XL" or dimension string). | Product variant attribute for size-level purchase analysis. | Pass-through from `Warehouse.StockItems.Size`. Nullable. |
+| 6 | `unit_package_name` | STRING | Yes | Packaging type for individual units (e.g. "Each", "Packet"). | Determines the unit of measure for individual item quantities. | Joined from `Warehouse.PackageTypes.PackageTypeName` via `Warehouse.StockItems.UnitPackageTypeID`. Nullable. |
+| 7 | `outer_package_name` | STRING | Yes | Packaging type for outer containers (e.g. "Carton", "Box"). | Determines the unit of measure for outer quantities (`ordered_outers`, `received_outers` in fact.purchase). | Joined from `Warehouse.PackageTypes.PackageTypeName` via `Warehouse.StockItems.OuterPackageTypeID`. Nullable. |
+| 8 | `brand` | STRING | Yes | Brand name. | Brand-level aggregation in purchase volume analysis. | Pass-through from `Warehouse.StockItems.Brand`. Nullable — house-label items have no brand. |
+| 9 | `description` | STRING | Yes | Long-form product description. | Extended reference attribute for product cataloguing. Not typically used in analytical queries. | Pass-through from `Warehouse.StockItems.MarketingComments`. Nullable. |
+| 10 | `unit_price` | DECIMAL(18,2) | Yes | Standard unit price in source currency. | Financial measure enabling price-based purchase value analysis. | Pass-through from `Warehouse.StockItems.UnitPrice` (MONEY → DECIMAL(18,2), TY-P003). Nullable. |
+| 11 | `recommended_retail_price` | DECIMAL(18,2) | Yes | Recommended retail price. | Financial reference for margin analysis (compare cost to RRP). | Pass-through from `Warehouse.StockItems.RecommendedRetailPrice` (MONEY → DECIMAL(18,2), TY-P003). Nullable. |
+| 12 | `typical_weight_per_unit` | DECIMAL(18,3) | Yes | Typical weight per unit in kilograms. | Logistics attribute for shipping cost estimation. | Pass-through from `Warehouse.StockItems.TypicalWeightPerUnit` (DECIMAL → DECIMAL(18,3), TY-005). Nullable. |
+| 13 | `is_chiller_stock` | BOOLEAN | Yes | `TRUE` if item requires cold-chain storage. | Cold-chain flag enabling differentiated handling analysis for chiller vs. ambient products. | Pass-through from `Warehouse.StockItems.IsChillerStock` (BIT → BOOLEAN, TY-015). Nullable. |
+| 14 | `tax_rate` | DECIMAL(18,3) | Yes | Applicable tax rate percentage. | Financial attribute for tax compliance and net-cost calculations. | Pass-through from `Warehouse.StockItems.TaxRate` (DECIMAL → DECIMAL(18,3)). Nullable. |
+| 15 | `valid_from` | DATE | No | Inclusive start date of this attribute version. | SCD-2 temporal boundary — lower bound for `sk_resolver.py` range join. Rule: TY-P001. | Set by `scd2_merge.apply_scd2_merge` to `effective_date`. |
+| 16 | `valid_to` | DATE | No | Inclusive end date. `9999-12-31` = current version. | SCD-2 temporal boundary — upper bound for `sk_resolver.py` range join. Rule: TY-P001. | Set by `scd2_merge.apply_scd2_merge`. |
+| 17 | `row_effective_date` | DATE | No | Date this row was physically inserted. | Physical insertion audit date for this DW record. | Set by `scd2_merge.apply_scd2_merge` to `effective_date`. Rule: TY-P002. |
+| 18 | `row_expiry_date` | DATE | No | Date this row was logically closed. `9999-12-31` = still active. | Physical closure audit date. | Set by `scd2_merge.apply_scd2_merge` during expire step. Rule: TY-P002. |
+| 19 | `is_current_row` | BOOLEAN | No | `TRUE` for the single active version per stock item. | Fast-filter flag for `silver_dim.stock_item_current` view. Exactly one `TRUE` row per `wwi_stock_item_id`. | Managed by `scd2_merge.apply_scd2_merge`. Default `TRUE`. Rule: TY-P002. |
+| 20 | `lineage_key` | BIGINT | No | FK to `inventory_stock.bronze.lineage_run.lineage_key`. | Traceability from dimension row back to the SCD-2 load run. | Propagated by the Dimensions team notebook at SCD-2 load time. Rules: LN-001, LN-P001. |
+
+---
+
+## Glossary: SCD-2 Tracking Columns
+
+| Column | Applies to | Meaning |
+|---|---|---|
+| `valid_from` | silver_dim.supplier, silver_dim.stock_item | Inclusive start date of this attribute version (source-system effective date). Rule: TY-P001 (DATE, not TIMESTAMP) |
+| `valid_to` | silver_dim.supplier, silver_dim.stock_item | Inclusive end date; `9999-12-31` means this is the current version |
+| `row_effective_date` | silver_dim.supplier, silver_dim.stock_item | Date this row was physically inserted into the dimension |
+| `row_expiry_date` | silver_dim.supplier, silver_dim.stock_item | Date this row was logically closed; `9999-12-31` means still open |
+| `is_current_row` | silver_dim.supplier, silver_dim.stock_item | Boolean flag; exactly one row per business key has `is_current_row = TRUE` |
+
+FK relationships are logical — Delta Lake does not enforce physical constraints. Referential integrity is enforced at the ETL layer (`sk_resolver.py` + DQ rules QA-P002/QA-P003).
+
+_Rules applied across all tables: NM-001, NM-002, NM-009, TY-003, TY-004, TY-009, TY-010, TY-012, TY-015, TY-017, TY-P001, TY-P002, TY-P003, LN-001, LN-002, LN-P001, OB-003, OB-004, OB-P002, QA-P005, CX-P006_

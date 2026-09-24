@@ -1,5 +1,37 @@
 # Runbook — Purchase ETL Product
 
+---
+
+## 0. Daily Monitoring Checklist
+
+Run each morning after the nightly pipeline (expected completion by ~03:00 UTC):
+
+- [ ] Check Databricks Workflow run status: `nightly_etl_purchase` — confirm `Succeeded` in the Jobs UI
+- [ ] Verify `bronze.lineage_run` latest row has `was_successful = true`
+- [ ] Verify alert inbox — no failure emails or Slack alerts from the monitoring webhook
+- [ ] Spot-check `silver_dim.supplier` and `silver_dim.stock_item` for expected row counts (Dimensions team dependency)
+- [ ] Confirm `bronze.etl_cutoff.cutoff_time` for `table_name = 'fact_purchase'` advanced since yesterday
+- [ ] Confirm `silver_fact.fact_purchase` row count is consistent with expected daily batch size
+
+**Quick lineage query:**
+```sql
+SELECT lineage_key, pipeline_name, data_load_started, data_load_completed,
+       was_successful, table_row_count, source_system_cutoff_time
+FROM inventory_stock.bronze.lineage_run
+WHERE table_name = 'fact_purchase'
+ORDER BY data_load_started DESC
+LIMIT 5;
+```
+
+**Watermark check:**
+```sql
+SELECT table_name, cutoff_time, last_updated_utc
+FROM inventory_stock.bronze.etl_cutoff
+WHERE table_name = 'fact_purchase';
+```
+
+---
+
 **Project:** Inventory_Stock_Project  
 **Product:** Purchase  
 **Target:** `inventory_stock` Unity Catalog (Databricks Delta Lake)  
@@ -154,7 +186,49 @@ Before running in production for the first time, resolve all Pending Decisions:
 
 ---
 
-## 5. Useful Queries
+## 5. DQ Investigation
+
+**Query all violations for a specific run:**
+```sql
+SELECT rule_id, violation_column, violation_value, rejection_reason, detected_at
+FROM inventory_stock.bronze.dq_rejections
+WHERE lineage_key = <lineage_key>
+ORDER BY detected_at;
+```
+
+**Query recent DQ summary across runs:**
+```sql
+SELECT lr.pipeline_name, lr.data_load_started, dq.rule_id, COUNT(*) AS violations
+FROM inventory_stock.bronze.dq_rejections dq
+JOIN inventory_stock.bronze.lineage_run lr ON dq.lineage_key = lr.lineage_key
+GROUP BY lr.pipeline_name, lr.data_load_started, dq.rule_id
+ORDER BY lr.data_load_started DESC;
+```
+
+**Common DQ failures and actions:**
+
+| Rule ID | Description | Action |
+|---|---|---|
+| QA-P001 | Staging/fact count mismatch | Check for MERGE errors; compare `SELECT COUNT(*) FROM bronze.purchase_staging` vs `lineage_run.table_row_count` |
+| QA-P002 | Orphaned surrogate key (key=0) | Investigate unresolvable `wwi_supplier_id` or `wwi_stock_item_id`; check if Dimensions team SCD-2 load ran |
+| QA-P003 | FK integrity violation | Rows reference dimension keys that don't exist; check dimension load freshness |
+| QA-P004 | Business rule violation | Negative quantities or null package field; investigate source data quality |
+
+**Query to find all DQ rejections from the most recent run:**
+```sql
+SELECT dq.rule_id, dq.pk_column, dq.pk_value, dq.violation_column,
+       dq.violation_value, dq.rejection_reason, dq.detected_at
+FROM inventory_stock.bronze.dq_rejections dq
+WHERE dq.lineage_key = (
+    SELECT MAX(lineage_key) FROM inventory_stock.bronze.lineage_run
+    WHERE table_name = 'fact_purchase'
+)
+ORDER BY dq.detected_at;
+```
+
+---
+
+## 6. Useful Queries
 
 ```sql
 -- Last 10 pipeline runs

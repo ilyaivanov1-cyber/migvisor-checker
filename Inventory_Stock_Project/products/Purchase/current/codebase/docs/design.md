@@ -267,7 +267,225 @@ The `lineage_key` value is also written into every row of `fact_purchase` (colum
 
 ---
 
-## 7. Configuration Management
+## 7. DDL Reference
+
+Complete `CREATE TABLE IF NOT EXISTS` DDL for all Bronze and Silver tables owned by the Purchase product. All tables use `USING DELTA` and Unity Catalog three-part naming.
+
+### bronze.lineage_run
+
+```sql
+-- ============================================================
+-- PROJECT  : Inventory_Stock_Project
+-- PRODUCT  : Purchase
+-- FILE     : bronze_lineage_run.sql
+-- PURPOSE  : ETL audit log; one row per run; IDENTITY PK
+-- TARGET   : inventory_stock.bronze.lineage_run
+-- RULES    : LN-001, LN-002, OB-004, TY-017, NM-001
+-- ============================================================
+CREATE TABLE IF NOT EXISTS inventory_stock.bronze.lineage_run (
+    lineage_key               BIGINT     GENERATED ALWAYS AS IDENTITY  NOT NULL
+        COMMENT 'Surrogate PK; IDENTITY auto-incremented; propagated to all downstream tables',
+    etl_run_id                STRING     NOT NULL
+        COMMENT 'UUID string uniquely identifying this pipeline execution',
+    table_name                STRING     NOT NULL
+        COMMENT 'Name of the target table being loaded (e.g. fact_purchase)',
+    pipeline_name             STRING     NOT NULL
+        COMMENT 'Name of the Databricks Workflow executing this run',
+    data_load_started         TIMESTAMP  NOT NULL
+        COMMENT 'UTC timestamp when the pipeline run was initiated',
+    data_load_completed       TIMESTAMP  NULL
+        COMMENT 'UTC timestamp when run completed; NULL while in progress',
+    was_successful            BOOLEAN    NULL
+        COMMENT 'NULL while running; TRUE on success; FALSE on failure',
+    table_row_count           BIGINT     NULL
+        COMMENT 'Row count merged into target fact table; NULL while running',
+    source_system_cutoff_time TIMESTAMP  NOT NULL
+        COMMENT 'Upper boundary of incremental extract window used for this run',
+    CONSTRAINT pk_lineage_run PRIMARY KEY (lineage_key)
+)
+USING DELTA
+TBLPROPERTIES (
+    'delta.enableChangeDataFeed' = 'true',
+    'delta.autoOptimize.optimizeWrite' = 'true'
+);
+```
+
+### bronze.purchase_staging
+
+```sql
+-- ============================================================
+-- PROJECT  : Inventory_Stock_Project
+-- PRODUCT  : Purchase
+-- FILE     : bronze_purchase_staging.sql
+-- PURPOSE  : Bronze landing table; OVERWRITE mode per run
+-- TARGET   : inventory_stock.bronze.purchase_staging
+-- RULES    : OB-003, OB-P002, TY-017, TY-015, TY-010, LN-001, NM-001
+-- ============================================================
+CREATE TABLE IF NOT EXISTS inventory_stock.bronze.purchase_staging (
+    purchase_staging_key  BIGINT     GENERATED ALWAYS AS IDENTITY  NOT NULL
+        COMMENT 'Surrogate PK; used as PARTITION BY key in sk_resolver window functions',
+    date_key              DATE       NOT NULL
+        COMMENT 'Order date derived from source OrderDate; FK to silver_dim.date',
+    supplier_key          BIGINT     NULL
+        COMMENT 'NULL at extract time; populated by sk_resolver.py before fact MERGE',
+    stock_item_key        BIGINT     NULL
+        COMMENT 'NULL at extract time; populated by sk_resolver.py before fact MERGE',
+    wwi_purchase_order_id INT        NOT NULL
+        COMMENT 'Source system natural key; MERGE predicate for fact_purchase',
+    ordered_outers        INT        NOT NULL
+        COMMENT 'Number of outer packaging units ordered',
+    ordered_quantity      INT        NOT NULL
+        COMMENT 'Total individual units ordered',
+    received_outers       INT        NULL
+        COMMENT 'Outer units received; NULL = not yet received',
+    package               STRING     NOT NULL
+        COMMENT 'Package type name (e.g. Each, Carton)',
+    is_order_finalized    BOOLEAN    NOT NULL
+        COMMENT 'TRUE when purchase order is fully confirmed',
+    wwi_supplier_id       INT        NOT NULL
+        COMMENT 'Source supplier ID; used by sk_resolver for temporal range join',
+    wwi_stock_item_id     INT        NOT NULL
+        COMMENT 'Source stock item ID; used by sk_resolver for temporal range join',
+    last_modified_when    TIMESTAMP  NOT NULL
+        COMMENT 'Source last-edit timestamp; watermark and SK resolution probe column',
+    lineage_key           BIGINT     NOT NULL
+        COMMENT 'FK to bronze.lineage_run; set at extract time',
+    _extracted_at_utc     TIMESTAMP  NOT NULL
+        COMMENT 'UTC timestamp when row was written to bronze by nb_extract_purchase'
+)
+USING DELTA
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite' = 'false',
+    'delta.autoOptimize.autoCompact' = 'false'
+);
+```
+
+### silver_fact.fact_purchase
+
+```sql
+-- ============================================================
+-- PROJECT  : Inventory_Stock_Project
+-- PRODUCT  : Purchase
+-- FILE     : silver_fact_fact_purchase.sql
+-- PURPOSE  : Grain-level purchase order line fact table
+-- TARGET   : inventory_stock.silver_fact.fact_purchase
+-- RULES    : OB-002, TY-004, TY-010, TY-003, TY-009, TY-015, TY-017,
+--            PE-002, PE-008, PE-P001, LN-001, NM-001, NM-009
+-- ============================================================
+CREATE TABLE IF NOT EXISTS inventory_stock.silver_fact.fact_purchase (
+    purchase_key          BIGINT     GENERATED ALWAYS AS IDENTITY  NOT NULL
+        COMMENT 'Surrogate PK; IDENTITY auto-incremented; no business meaning',
+    date_key              DATE       NOT NULL
+        COMMENT 'Order date; FK to silver_dim.date',
+    supplier_key          BIGINT     NOT NULL
+        COMMENT 'SCD-2 surrogate FK to silver_dim.supplier (current version at order time)',
+    stock_item_key        BIGINT     NOT NULL
+        COMMENT 'SCD-2 surrogate FK to silver_dim.stock_item (current version at order time)',
+    wwi_purchase_order_id INT        NOT NULL
+        COMMENT 'Source natural key; MERGE predicate',
+    ordered_outers        INT        NOT NULL
+        COMMENT 'Number of outer packaging units ordered',
+    ordered_quantity      INT        NOT NULL
+        COMMENT 'Total individual units ordered',
+    received_outers       INT        NULL
+        COMMENT 'Outer units received; NULL = not yet received',
+    package               STRING     NOT NULL
+        COMMENT 'Package type name',
+    is_order_finalized    BOOLEAN    NOT NULL
+        COMMENT 'TRUE when purchase order is fully confirmed',
+    lineage_key           BIGINT     NOT NULL
+        COMMENT 'FK to bronze.lineage_run; identifies ETL run that loaded this row'
+)
+USING DELTA
+CLUSTER BY (date_key, supplier_key)
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite' = 'true',
+    'delta.autoOptimize.autoCompact' = 'true'
+);
+-- Fallback for pre-DBR 13.3 (remove CLUSTER BY, use instead):
+-- PARTITIONED BY (date_key)
+-- Post-DDL: OPTIMIZE inventory_stock.silver_fact.fact_purchase ZORDER BY (supplier_key, stock_item_key)
+```
+
+---
+
+## 8. Mart Layer
+
+The serving (gold) layer exposes aggregated and row-level views of the purchase data for BI consumption. Mart views are built on top of `silver_fact.fact_purchase` joined to the current-version SCD-2 dimension records (`is_current_row = TRUE`).
+
+### mart.v_purchase_by_supplier — Materialized View
+
+Aggregated purchase volume by supplier and stock item. Serves the `wwidw_ordered_by_supplier` Power BI report. Refreshed by `nb_refresh_v_purchase_by_supplier.py` after each successful fact load and DQ gate pass.
+
+```sql
+CREATE OR REPLACE MATERIALIZED VIEW inventory_stock.mart.v_purchase_by_supplier
+COMMENT 'Aggregated purchase volume by supplier and stock item — refreshed nightly'
+AS
+SELECT
+    s.wwi_supplier_id,
+    s.supplier_name,
+    s.supplier_category_name,
+    si.wwi_stock_item_id,
+    si.stock_item_name,
+    si.color,
+    si.unit_package_name,
+    SUM(f.ordered_quantity)        AS total_quantity_ordered,
+    COUNT(DISTINCT f.purchase_key) AS purchase_order_count
+FROM inventory_stock.silver_fact.fact_purchase f
+JOIN inventory_stock.silver_dim.supplier s
+    ON f.supplier_key = s.supplier_key AND s.is_current_row = TRUE
+JOIN inventory_stock.silver_dim.stock_item si
+    ON f.stock_item_key = si.stock_item_key AND si.is_current_row = TRUE
+GROUP BY
+    s.wwi_supplier_id, s.supplier_name, s.supplier_category_name,
+    si.wwi_stock_item_id, si.stock_item_name, si.color, si.unit_package_name;
+```
+
+**Refresh:** `REFRESH MATERIALIZED VIEW inventory_stock.mart.v_purchase_by_supplier` — executed by `nb_refresh_v_purchase_by_supplier.py` after DQ gate.
+
+### mart.v_purchase_per_stock_item — Regular View
+
+Row-level purchase detail joined to stock item and supplier. Serves the `wwidw_purchase_and_sale_per_stockitem_dynamic` Power BI report. No aggregation — row-level view.
+
+```sql
+CREATE OR REPLACE VIEW inventory_stock.mart.v_purchase_per_stock_item
+COMMENT 'Row-level purchase detail with stock item and supplier attributes — serves wwidw_purchase_and_sale_per_stockitem_dynamic report'
+AS
+SELECT
+    f.purchase_key,
+    f.date_key,
+    f.wwi_purchase_order_id,
+    f.ordered_outers,
+    f.ordered_quantity,
+    f.received_outers,
+    f.package,
+    f.is_order_finalized,
+    f.lineage_key,
+    si.wwi_stock_item_id,
+    si.stock_item_name,
+    si.color,
+    si.unit_package_name,
+    s.wwi_supplier_id,
+    s.supplier_name
+FROM inventory_stock.silver_fact.fact_purchase f
+JOIN inventory_stock.silver_dim.stock_item si
+    ON f.stock_item_key = si.stock_item_key AND si.is_current_row = TRUE
+JOIN inventory_stock.silver_dim.supplier s
+    ON f.supplier_key = s.supplier_key AND s.is_current_row = TRUE;
+```
+
+### Mart Validation
+
+After each mart refresh, `nb_validate_mart_views.py` asserts:
+1. Both views return non-empty result sets
+2. Mart row counts are consistent with `silver_fact.fact_purchase` totals
+3. No null FK columns in either view
+
+Mart validation failure raises an exception and is logged with `lineage_key` for full traceability.
+
+---
+
+## 9. Configuration Management
 
 All environment-specific literals are externalised to `config/environment.yaml`. No hard-coded connection strings, table names, thresholds, or cluster parameters appear in `src/etl/` notebooks.
 

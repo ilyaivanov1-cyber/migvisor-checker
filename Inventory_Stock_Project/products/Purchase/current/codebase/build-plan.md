@@ -257,5 +257,79 @@ Before executing Phase 1, verify:
 
 ---
 
-_Build plan generated from `specifications/development_plan/tasks.md` (26 tasks) and `specifications/development_plan/design.md`._
-_SmartBuilder version: 4.1 | Next skill: `/smartbuilder_generate-db Purchase TASK-001`_
+---
+
+## Phase 4 — Mart + DQ Layer
+
+**Skill:** `/smartbuilder_generate-etl`
+**Purpose:** Build the serving layer (gold/mart) and standalone DQ engine. These tasks depend on Phase 2 (ETL pipeline complete) and the silver fact + dim tables being populated.
+
+**Execution order within Phase 4:**
+
+```
+Batch 1 (parallel): TASK-027, TASK-028 (mart view DDL — no mutual deps)
+Batch 2 (sequential): TASK-032 (dq_engine — no deps beyond DDL complete)
+Batch 3 (parallel): TASK-029, TASK-030 (mart refresh notebooks — after view DDL)
+Batch 4 (sequential): TASK-033 (nb_dq_purchase — after TASK-032)
+Batch 5 (sequential): TASK-034 (nb_dq_rejection_report — after TASK-033)
+Batch 6 (sequential): TASK-031 (nb_validate_mart_views — after TASK-029, TASK-030)
+```
+
+| Task ID | Title | Output File | Dependencies |
+|---|---|---|---|
+| TASK-027 | Create `mart.v_purchase_by_supplier` materialized view | `src/db/ddl/mart/v_purchase_by_supplier.sql` | TASK-005 (silver_fact.fact_purchase DDL) |
+| TASK-028 | Create `mart.v_purchase_per_stock_item` view | `src/db/ddl/mart/v_purchase_per_stock_item.sql` | TASK-005 |
+| TASK-029 | Write `nb_refresh_v_purchase_by_supplier.py` | `src/etl/mart/nb_refresh_v_purchase_by_supplier.py` | TASK-027 |
+| TASK-030 | Write `nb_refresh_v_purchase_per_stock_item.py` | `src/etl/mart/nb_refresh_v_purchase_per_stock_item.py` | TASK-028 |
+| TASK-031 | Write `nb_validate_mart_views.py` | `src/etl/mart/nb_validate_mart_views.py` | TASK-029, TASK-030 |
+| TASK-032 | Write `src/etl/dq/dq_engine.py` | `src/etl/dq/dq_engine.py` | TASK-004, TASK-005 |
+| TASK-033 | Write `src/etl/dq/nb_dq_purchase.py` | `src/etl/dq/nb_dq_purchase.py` | TASK-032 |
+| TASK-034 | Write `src/etl/dq/nb_dq_rejection_report.py` | `src/etl/dq/nb_dq_rejection_report.py` | TASK-033 |
+
+**Phase 4 acceptance gate:** Mart view DDL files exist under `src/db/ddl/mart/`; DQ engine and notebooks exist under `src/etl/dq/`; `nb_validate_mart_views.py` asserts both mart views non-empty after a fact load.
+
+---
+
+## Task-to-Skill Mapping
+
+| Task ID | Group | Output File | SmartBuilder Skill |
+|---|---|---|---|
+| TASK-001 | DDL | `src/db/ddl/bronze_lineage_run.sql` | `/smartbuilder_generate-db` |
+| TASK-002 | DDL | `src/db/ddl/bronze_etl_cutoff.sql` | `/smartbuilder_generate-db` |
+| TASK-003 | DDL | `src/db/ddl/bronze_purchase_staging.sql` | `/smartbuilder_generate-db` |
+| TASK-004 | DDL | `src/db/ddl/bronze_dq_rejections.sql` | `/smartbuilder_generate-db` |
+| TASK-005 | DDL | `src/db/ddl/silver_fact_fact_purchase.sql` | `/smartbuilder_generate-db` |
+| TASK-006 | DDL | `src/db/ddl/silver_dim_supplier_current.sql` | `/smartbuilder_generate-db` |
+| TASK-007 | DDL | `src/db/ddl/silver_dim_stock_item_current.sql` | `/smartbuilder_generate-db` |
+| TASK-008 | DDL | `src/db/grants/purchase_grants.sql` | `/smartbuilder_generate-db` |
+| TASK-027 | MART | `src/db/ddl/mart/v_purchase_by_supplier.sql` | `/smartbuilder_generate-db` |
+| TASK-028 | MART | `src/db/ddl/mart/v_purchase_per_stock_item.sql` | `/smartbuilder_generate-db` |
+| TASK-009 | ETL | `src/common/constants.py` | `/smartbuilder_generate-etl` |
+| TASK-010 | ETL | `src/common/scd2_merge.py` | `/smartbuilder_generate-etl` |
+| TASK-011 | ETL | `src/common/sk_resolver.py` | `/smartbuilder_generate-etl` |
+| TASK-012 | ETL | `src/common/fact_merge.py` | `/smartbuilder_generate-etl` |
+| TASK-013 | ETL | `src/common/udfs.py` | `/smartbuilder_generate-etl` |
+| TASK-014 | ETL | `src/etl/nb_extract_watermark.py` | `/smartbuilder_generate-etl` |
+| TASK-015 | ETL | `src/etl/nb_extract_purchase.py` | `/smartbuilder_generate-etl` |
+| TASK-016 | ETL | `src/etl/migrate_staged_purchase_data.py` | `/smartbuilder_generate-etl` |
+| TASK-017 | ETL | `src/init/reseed_purchase_environment.py` | `/smartbuilder_generate-etl` |
+| TASK-018 | Config | `config/environment.yaml` | `/smartbuilder_generate-etl` |
+| TASK-019 | Config | `config/workflows/nightly_etl_purchase.json` | `/smartbuilder_generate-etl` |
+| TASK-029 | MART | `src/etl/mart/nb_refresh_v_purchase_by_supplier.py` | `/smartbuilder_generate-etl` |
+| TASK-030 | MART | `src/etl/mart/nb_refresh_v_purchase_per_stock_item.py` | `/smartbuilder_generate-etl` |
+| TASK-031 | MART | `src/etl/mart/nb_validate_mart_views.py` | `/smartbuilder_generate-etl` |
+| TASK-032 | DQ | `src/etl/dq/dq_engine.py` | `/smartbuilder_generate-etl` |
+| TASK-033 | DQ | `src/etl/dq/nb_dq_purchase.py` | `/smartbuilder_generate-etl` |
+| TASK-034 | DQ | `src/etl/dq/nb_dq_rejection_report.py` | `/smartbuilder_generate-etl` |
+| TASK-020 | Test | `tests/common/test_sk_resolver.py` | `/smartbuilder_generate-etl` |
+| TASK-021 | Test | `tests/common/test_udfs.py` | `/smartbuilder_generate-etl` |
+| TASK-022 | Test | `tests/etl/test_migrate_staged_purchase_data.py` | `/smartbuilder_generate-etl` |
+| TASK-023 | BI | `docs/bi/wwidw_purchase_and_sale_per_stockitem_dynamic.md` | `/smartbuilder_generate-etl` |
+| TASK-024 | BI | `docs/bi/wwidw_ordered_by_supplier.md` | `/smartbuilder_generate-etl` |
+| TASK-025 | Docs | `docs/design.md` | `/smartbuilder_generate-etl` |
+| TASK-026 | Docs | `docs/data-dictionary.md` | `/smartbuilder_generate-etl` |
+
+---
+
+_Build plan generated from `specifications/development_plan/tasks.md` (34 tasks) and `specifications/development_plan/design.md`._
+_SmartBuilder version: 4.1 | Next skill: `/smartbuilder_generate-db Purchase TASK-027`_

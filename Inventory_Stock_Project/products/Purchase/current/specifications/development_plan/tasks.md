@@ -36,7 +36,16 @@ _Derived from: `design.md` + `requirements.md`_
 | TASK-025 | docs | Write `docs/design.md` (ETL design document) | TASK-016 | NFR-011 |
 | TASK-026 | docs | Write `docs/data-dictionary.md` | TASK-005 | NFR-011 |
 
-**Total: 26 tasks** | DDL: 8 | ETL: 9 | Config: 2 | Test: 3 | BI: 2 | Docs: 2
+| TASK-027 | MART | Create mart view `v_purchase_by_supplier` | TASK-005 | FR-010 |
+| TASK-028 | MART | Create mart view `v_purchase_per_stock_item` | TASK-005 | FR-010 |
+| TASK-029 | MART | Write `nb_refresh_v_purchase_by_supplier.py` | TASK-027 | FR-010, NFR-001 |
+| TASK-030 | MART | Write `nb_refresh_v_purchase_per_stock_item.py` | TASK-028 | FR-010, NFR-001 |
+| TASK-031 | MART | Write `nb_validate_mart_views.py` | TASK-029, TASK-030 | FR-010, NFR-001 |
+| TASK-032 | DQ | Write `src/etl/dq/dq_engine.py` | TASK-004, TASK-005 | NFR-004, NFR-005, DQR-001, DQR-002, DQR-003, DQR-006 |
+| TASK-033 | DQ | Write `src/etl/dq/nb_dq_purchase.py` | TASK-032 | DQR-001, DQR-005, DQR-006 |
+| TASK-034 | DQ | Write `src/etl/dq/nb_dq_rejection_report.py` | TASK-033 | NFR-007, DQR-004 |
+
+**Total: 34 tasks** | DDL: 8 | ETL: 9 | MART: 5 | DQ: 3 | Config: 2 | Test: 3 | BI: 2 | Docs: 2
 
 ---
 
@@ -759,4 +768,181 @@ Write the column-level data dictionary for `inventory_stock.silver_fact.fact_pur
 
 ---
 
-_End of task list. Total: 26 tasks (DDL: 8 | ETL: 9 | Config: 2 | Test: 3 | BI: 2 | Docs: 2)_
+---
+
+### TASK-027 — Create `mart.v_purchase_by_supplier` Materialized View
+
+**Type:** MART (DDL)
+**Depends On:** TASK-005
+**Requirements:** FR-010, NFR-001
+**Output File:** `src/db/ddl/mart/v_purchase_by_supplier.sql`
+
+**Description:**
+Create `CREATE OR REPLACE MATERIALIZED VIEW inventory_stock.mart.v_purchase_by_supplier`. Join `silver_fact.fact_purchase` to `silver_dim.supplier` (on `supplier_key`) and `silver_dim.stock_item` (on `stock_item_key`). Aggregate: `SUM(ordered_quantity) AS total_quantity_ordered`, `COUNT(DISTINCT purchase_key) AS purchase_order_count`. GROUP BY all dimension attributes from supplier and stock_item. Add COMMENT. Serves the `wwidw_ordered_by_supplier` BI report.
+
+**DDL (key structure):**
+```sql
+CREATE OR REPLACE MATERIALIZED VIEW inventory_stock.mart.v_purchase_by_supplier
+COMMENT 'Aggregated purchase volume by supplier and stock item — serves wwidw_ordered_by_supplier report'
+AS
+SELECT
+    s.wwi_supplier_id,
+    s.supplier_name,
+    s.supplier_category_name,
+    si.wwi_stock_item_id,
+    si.stock_item_name,
+    si.color,
+    si.unit_package_name,
+    SUM(f.ordered_quantity)       AS total_quantity_ordered,
+    COUNT(DISTINCT f.purchase_key) AS purchase_order_count
+FROM inventory_stock.silver_fact.fact_purchase f
+JOIN inventory_stock.silver_dim.supplier s
+    ON f.supplier_key = s.supplier_key AND s.is_current_row = TRUE
+JOIN inventory_stock.silver_dim.stock_item si
+    ON f.stock_item_key = si.stock_item_key AND si.is_current_row = TRUE
+GROUP BY
+    s.wwi_supplier_id, s.supplier_name, s.supplier_category_name,
+    si.wwi_stock_item_id, si.stock_item_name, si.color, si.unit_package_name;
+```
+
+**Acceptance:** `SELECT COUNT(*) FROM inventory_stock.mart.v_purchase_by_supplier` returns a non-negative integer after a fact load; `REFRESH MATERIALIZED VIEW` can be triggered by the ETL service principal.
+
+---
+
+### TASK-028 — Create `mart.v_purchase_per_stock_item` View
+
+**Type:** MART (DDL)
+**Depends On:** TASK-005
+**Requirements:** FR-010, NFR-001
+**Output File:** `src/db/ddl/mart/v_purchase_per_stock_item.sql`
+
+**Description:**
+Create `CREATE OR REPLACE VIEW inventory_stock.mart.v_purchase_per_stock_item`. Join `silver_fact.fact_purchase` to `silver_dim.stock_item` and `silver_dim.supplier`. Expose all fact columns plus `stock_item_name`, `color`, `unit_package_name`, `supplier_name`. No aggregation — row-level view for the `wwidw_purchase_and_sale_per_stockitem_dynamic` BI report.
+
+**DDL (key structure):**
+```sql
+CREATE OR REPLACE VIEW inventory_stock.mart.v_purchase_per_stock_item
+COMMENT 'Row-level purchase detail joined to stock item and supplier — serves wwidw_purchase_and_sale_per_stockitem_dynamic report'
+AS
+SELECT
+    f.purchase_key,
+    f.date_key,
+    f.wwi_purchase_order_id,
+    f.ordered_outers,
+    f.ordered_quantity,
+    f.received_outers,
+    f.package,
+    f.is_order_finalized,
+    f.lineage_key,
+    si.wwi_stock_item_id,
+    si.stock_item_name,
+    si.color,
+    si.unit_package_name,
+    s.wwi_supplier_id,
+    s.supplier_name
+FROM inventory_stock.silver_fact.fact_purchase f
+JOIN inventory_stock.silver_dim.stock_item si
+    ON f.stock_item_key = si.stock_item_key AND si.is_current_row = TRUE
+JOIN inventory_stock.silver_dim.supplier s
+    ON f.supplier_key = s.supplier_key AND s.is_current_row = TRUE;
+```
+
+**Acceptance:** `DESCRIBE inventory_stock.mart.v_purchase_per_stock_item` shows all expected columns; SELECT returns rows consistent with joined tables.
+
+---
+
+### TASK-029 — Write `nb_refresh_v_purchase_by_supplier.py`
+
+**Type:** MART (ETL)
+**Depends On:** TASK-027
+**Requirements:** FR-010, NFR-001
+**Output File:** `src/etl/mart/nb_refresh_v_purchase_by_supplier.py`
+
+**Description:**
+Implement the materialized view refresh notebook. Execute `spark.sql("REFRESH MATERIALIZED VIEW inventory_stock.mart.v_purchase_by_supplier")`. Log refresh time. Post-refresh: assert `SELECT COUNT(*) FROM inventory_stock.mart.v_purchase_by_supplier > 0`. Raise on failure to halt Workflow. Must only run after DQ gate passes (`dq_passed = TRUE` task value from nb_dq_purchase).
+
+**Acceptance:** REFRESH executes without error; COUNT returns positive integer post-refresh; exception propagates on failure.
+
+---
+
+### TASK-030 — Write `nb_refresh_v_purchase_per_stock_item.py`
+
+**Type:** MART (ETL)
+**Depends On:** TASK-028
+**Requirements:** FR-010, NFR-001
+**Output File:** `src/etl/mart/nb_refresh_v_purchase_per_stock_item.py`
+
+**Description:**
+Implement the view validation notebook. Since `v_purchase_per_stock_item` is a standard view (not materialized), run a COUNT validation to confirm the view is queryable after fact and dimension loads. Log row count. Raise if view returns 0 rows when `silver_fact.fact_purchase` is non-empty. Re-create view via DDL if definition is stale.
+
+**Acceptance:** SELECT returns rows consistent with current fact layer; notebook raises if view is not queryable.
+
+---
+
+### TASK-031 — Write `nb_validate_mart_views.py`
+
+**Type:** MART (ETL)
+**Depends On:** TASK-029, TASK-030
+**Requirements:** FR-010, NFR-001
+**Output File:** `src/etl/mart/nb_validate_mart_views.py`
+
+**Description:**
+Implement mart validation notebook. Assertions:
+1. `SELECT COUNT(*) FROM mart.v_purchase_by_supplier > 0`
+2. `SELECT COUNT(*) FROM mart.v_purchase_per_stock_item > 0`
+3. Row count in mart consistent with `silver_fact.fact_purchase` total
+4. No null FK columns in mart views (LEFT ANTI JOIN check)
+Log all assertion results. Raise if any assertion fails.
+
+**Acceptance:** All assertions pass on a clean run; mismatch raises observable exception logged with `lineage_key`.
+
+---
+
+### TASK-032 — Write `src/etl/dq/dq_engine.py`
+
+**Type:** DQ
+**Depends On:** TASK-004, TASK-005
+**Requirements:** NFR-004, NFR-005, DQR-001, DQR-002, DQR-003, DQR-006
+**Output File:** `src/etl/dq/dq_engine.py`
+
+**Description:**
+Implement the DQ rule evaluation engine. Define `evaluate_rules(spark, lineage_key, batch_id, rules_config) -> dict` function. Evaluates:
+- DQR-001: row count reconciliation between `bronze.purchase_staging` and fact delta — BLOCKING
+- DQR-002: FK integrity via LEFT ANTI JOIN (`supplier_key`, `stock_item_key`, `date_key`) — Informational
+- DQR-003: orphaned key detection (key=0) — Informational
+- DQR-006: null `lineage_key` in `silver_fact.fact_purchase` — BLOCKING
+For each violation, write one row to `bronze.dq_rejections`. Return `{rule_id: {passed: bool, violation_count: int}}`.
+
+**Acceptance:** Count mismatch returns DQR-001 failed + writes rejection rows; FK violations logged per row; clean batch returns all passed + zero rejection rows.
+
+---
+
+### TASK-033 — Write `src/etl/dq/nb_dq_purchase.py`
+
+**Type:** DQ
+**Depends On:** TASK-032
+**Requirements:** DQR-001, DQR-005, DQR-006
+**Output File:** `src/etl/dq/nb_dq_purchase.py`
+
+**Description:**
+Implement the DQ orchestrator notebook. Retrieves `lineage_key` from taskValues. Loads `config/environment.yaml` DQ config. Calls `dq_engine.evaluate_rules`. On BLOCKING rule failure: raises `DQBlockingFailure` exception to halt pipeline and prevent mart tasks from running. Informational failures logged only. Publishes `dq_passed` boolean task value.
+
+**Acceptance:** BLOCKING failure causes raise preventing downstream mart tasks; informational-only failure allows mart promotion; `dq_passed = TRUE` only when no BLOCKING failures.
+
+---
+
+### TASK-034 — Write `src/etl/dq/nb_dq_rejection_report.py`
+
+**Type:** DQ
+**Depends On:** TASK-033
+**Requirements:** NFR-007, DQR-004
+**Output File:** `src/etl/dq/nb_dq_rejection_report.py`
+
+**Description:**
+Implement the rejection report notebook. Reads `bronze.dq_rejections` filtered to current `lineage_key`. Aggregates by `rule_id` and severity: count violations per rule. Logs formatted per-run summary table. Optionally writes summary as JSON task output. Does NOT raise on violations — reporting only artifact.
+
+**Acceptance:** Rejection summary visible in Workflow logs; zero violations logged as "0 DQ violations for this run"; notebook does not raise on DQ violations.
+
+---
+
+_End of task list. Total: 34 tasks (DDL: 8 | ETL: 9 | MART: 5 | DQ: 3 | Config: 2 | Test: 3 | BI: 2 | Docs: 2)_

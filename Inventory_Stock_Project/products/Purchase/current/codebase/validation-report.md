@@ -351,7 +351,24 @@ This gate will report false failures because the grants file does not exist unde
 
 ---
 
-## 4. Summary
+## 4. DQR Coverage
+
+Coverage status for each Data Quality Requirement defined in `requirements.md` and enforced by the `migrate_staged_purchase_data.py` notebook and `config/environment.yaml` DQ assertion configuration.
+
+| DQR ID | Description | Severity | Status | Notes |
+|---|---|---|---|---|
+| DQR-001 | Row count reconciliation — staging vs. fact delta after MERGE | BLOCKING | **Pass** | Implemented in `migrate_staged_purchase_data.py` QA-P001 assertion; raises `RuntimeError` on mismatch. Test coverage: `test_qa_p001_fail_raises_runtime_error` in TASK-022. |
+| DQR-002 | FK integrity check — `supplier_key`, `stock_item_key`, `date_key` LEFT ANTI JOIN | Informational | **Pass** | Implemented as QA-P003 in `migrate_staged_purchase_data.py`; violations written to `bronze.dq_rejections` with `rule_id = 'QA-P003'`. |
+| DQR-003 | Orphaned surrogate key detection — any FK column = 0 (sentinel fallback) | Informational | **Pass** | Implemented as QA-P002 in `migrate_staged_purchase_data.py`; orphan rate logged to `bronze.lineage_run`; alert triggered if rate exceeds threshold in `environment.yaml`. |
+| DQR-004 | DQ rejection store write — atomic Delta write to `bronze.dq_rejections` | BLOCKING | **Pass** | Implemented as QA-P005; write failure raises to prevent silent data loss. All rejection rows carry `lineage_key` for traceability. |
+| DQR-005 | Mart promotion gate — mart tasks must not run if DQ blocking rules fail | BLOCKING | **Deferred** | Gate implemented via Databricks Workflow task dependency (`nb_dq_purchase` must succeed before mart refresh tasks). Mart layer (MART-001 through MART-004) pending creation — see Priority Action: add MART task group. |
+| DQR-006 | Null `lineage_key` in `fact_purchase` rows from current batch | BLOCKING | **Pass** | Checked pre-MERGE in `nb_extract_watermark.py`; `lineage_key` is NOT NULL constraint on `bronze.purchase_staging`. Post-MERGE: `lineage_key NOT NULL` DDL constraint on `silver_fact.fact_purchase` enforces this at write time. |
+
+**DQR Summary:** 5 of 6 DQRs are fully implemented and passing. DQR-005 (mart promotion gate) is partially implemented at the Workflow orchestration level; full validation requires the MART task group (MART-001 through MART-004) to be created and integrated into the Workflow DAG.
+
+---
+
+## 5. Summary
 
 ### Severity Breakdown
 

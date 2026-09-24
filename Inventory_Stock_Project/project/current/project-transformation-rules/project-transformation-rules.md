@@ -21,6 +21,7 @@
 | Types | TY | [TY-types.yaml](TY-types.yaml) | 26 |
 | Objects | OB | [OB-objects.yaml](OB-objects.yaml) | 11 |
 | Syntax | SX | [SX-syntax.yaml](SX-syntax.yaml) | 17 |
+| Interface | IF | [IF-interface.yaml](IF-interface.yaml) | 5 |
 | Performance | PE | [PE-performance.yaml](PE-performance.yaml) | 9 |
 | Lineage | LN | [LN-lineage.yaml](LN-lineage.yaml) | 8 |
 
@@ -139,6 +140,18 @@
 | PE-007 | Use OVERWRITE mode for bronze.purchase_staging at run start; corrects SSIS truncation bug; no CLUSTER BY / OPTIMIZE on staging tables |
 | PE-008 | Enable `delta.autoOptimize.optimizeWrite` and `autoCompact` on all silver tables; disable on bronze staging |
 | PE-009 | Remove SQL Server WITH (NOLOCK) and WITH (FORCESEEK) hints; Delta ACID isolation and Spark optimizer replace both |
+
+### IF — Interface (5 rules)
+
+The IF (Interface) dimension defines cross-product consumption contracts, schema evolution policy, and connector types at the project level. All products in Inventory_Stock_Project inherit these rules and may add product-specific extensions.
+
+| ID | Intent |
+|---|---|
+| IF-001 | Cross-product schema evolution contract: any change to a shared table or view schema (silver_dim.*, silver_fact.*) that breaks an existing consumer requires a migration window notification to all downstream products — no silent schema changes |
+| IF-002 | Dimension ownership contract: dim.supplier and dim.stock_item are owned by the Dimensions product team; Purchase ETL must treat these tables as external read-only inputs for SK resolution; no Purchase ETL notebook may write to silver_dim.* tables |
+| IF-003 | Lineage key interface: all products in the project must propagate `lineage_key` from the ingestion layer (bronze.lineage_run) into every target table row; cross-product joins on `lineage_key` are the standard mechanism for end-to-end pipeline traceability audits |
+| IF-004 | Unity Catalog access control contract: all inter-product data access must go through Unity Catalog GRANTs; direct cluster-level filesystem access to Delta table paths is prohibited; BI and analytical consumers must access data exclusively via `silver_dim.*` and `silver_fact.*` schemas |
+| IF-005 | DQ gate interface: no product's mart-layer promotion (gold/serving layer writes) may proceed until its own product-level DQ assertions pass; cross-product mart views that join multiple products must wait for all source product DQ gates before refreshing |
 
 ### LN — Lineage (8 rules)
 

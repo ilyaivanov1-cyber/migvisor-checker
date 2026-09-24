@@ -26,6 +26,20 @@
 
 ---
 
+## Action Files
+
+| File | Content | Status |
+|---|---|---|
+| [CX-custom.yaml](CX-custom.yaml) | 6 product-only CX rules (CX-P001 through CX-P006): date externalization, business factor externalization, UDF consolidation, codebase layout, notebook skeleton, DDL header block | Present |
+| [LN-lineage.yaml](LN-lineage.yaml) | 9 lineage rules (8 inherited + 1 extension LN-P001): lineage_key taskValues injection pattern | Present |
+| [QA-quality.yaml](QA-quality.yaml) | 5 product-only QA rules (QA-P001 through QA-P005): row count reconciliation, orphaned SK, RI rejections, business rule assertions, DQ rejection store | Present |
+| [extensions.yaml](extensions.yaml) | 13 extension rules (TY-P001 through TY-P004, OB-P001 through OB-P004, SX-P001 through SX-P004, PE-P001, PE-P002, LN-P001, IF-P001): product-specific type overrides and patterns | Present |
+| [IF-interface.yaml](IF-interface.yaml) | 3 interface rules (IF-001 through IF-003): dimension load ordering contract, SK resolution data contract, DQ gate interface | Present |
+| [override.yaml](override.yaml) | 1 override (TY-P001): SCD-2 validity columns → DATE instead of TIMESTAMP_NTZ | Present |
+| deactivations.yaml | Not applicable — no project rules deactivated | Absent (expected) |
+
+---
+
 ## Dimension Table
 
 | Dimension | Prefix | File | Rule Count | Customizations Applied |
@@ -35,6 +49,7 @@
 | Types | TY | [TY-types.yaml](TY-types.yaml) | 30 | 1 override (TY-P001), 3 extensions (TY-P002, TY-P003, TY-P004) |
 | Objects | OB | [OB-objects.yaml](OB-objects.yaml) | 15 | 4 extensions (OB-P001, OB-P002, OB-P003, OB-P004) |
 | Syntax | SX | [SX-syntax.yaml](SX-syntax.yaml) | 21 | 3 extensions (SX-P001, SX-P002, SX-P003), 1 new (SX-P004) |
+| Interface | IF | [IF-interface.yaml](IF-interface.yaml) | 3 | Product-only dimension — 3 new rules |
 | Performance | PE | [PE-performance.yaml](PE-performance.yaml) | 11 | 2 extensions (PE-P001, PE-P002) |
 | Lineage | LN | [LN-lineage.yaml](LN-lineage.yaml) | 9 | 1 extension (LN-P001) |
 | Quality | QA | [QA-quality.yaml](QA-quality.yaml) | 5 | Product-only dimension — 5 new rules |
@@ -153,6 +168,16 @@
 | SX-P002 | Add CONVERT(CHAR(8), GETDATE()-N, 112) → DATE_FORMAT(DATE_SUB(current_date(), N), 'yyyyMMdd') mapping not covered by SX-017 | EXTENSION |
 | SX-P003 | Replace inline UPDATE staging SET key = (SELECT TOP(1)...) pattern with pre-join call to sk_resolver.py before the MERGE step | EXTENSION |
 | SX-P004 | Convert UPDATE Integration.Lineage SET [Data Load Completed] = ... inline lineage-close pattern to spark.sql UPDATE with Python variable injection | NEW |
+
+### IF — Interface (product-only dimension — 3 new rules)
+
+The IF (Interface) dimension defines the data contracts and connector types between the Purchase product and its upstream and downstream dependencies. These rules govern the integration boundaries and must be satisfied before the Purchase fact load can proceed.
+
+| ID | Intent | Tag |
+|---|---|---|
+| IF-001 | Dimension load ordering contract: `silver_dim.supplier` and `silver_dim.stock_item` must both be fully loaded (sentinel rows present, `is_current_row = TRUE` rows exist) before `nb_load_fact_purchase.py` may execute — enforced by Databricks Workflow task dependency graph (DIM-005 → FACT-004) | NEW |
+| IF-002 | SK resolution data contract: `sk_resolver.py` consumes `silver_dim.supplier` and `silver_dim.stock_item` exclusively via the `is_current_row = TRUE` filter view (`silver_dim.supplier_current`, `silver_dim.stock_item_current`); direct reads against the SCD-2 base tables (without the `is_current_row` filter) are prohibited in Purchase ETL notebooks — prevents stale-version resolution | NEW |
+| IF-003 | DQ gate interface: mart refresh notebooks (`nb_refresh_v_purchase_by_supplier.py`, `nb_refresh_v_purchase_per_stock_item.py`) must only run after `nb_dq_purchase.py` publishes `dq_passed = TRUE` via Databricks `taskValues`; any blocking DQ failure must prevent mart layer promotion — enforced by CFG-002 Workflow DAG dependency chain | NEW |
 
 ### PE — Performance (9 inherited + 2 product = 11 rules)
 
