@@ -46,9 +46,18 @@ checks_dir: ./checks
 
 ## Step 2 — Run all checks and collect results
 
-Run each skill below in order. **For each skill, you MUST complete ALL three sub-steps before moving to the next skill — do not skip sub-step C.**
+**Run all 21 skills in parallel using 3 batches of 7, launched simultaneously as subagents.** Each batch agent scores its 7 skills, writes the check reports, and returns a JSON array of results. Collect all 21 results, then proceed to Step 3.
 
-### Per-skill procedure (repeat for all 21):
+**Batch A (skills 1–7):** scope, as-is, transformation-rules, project-rules, to-be, design, requirements
+**Batch B (skills 8–14):** tasks, product-definition, build-plan, data-dictionary, pipeline-runbook, validation-report, architecture-diagram
+**Batch C (skills 15–21):** go-live-checklist, bi-connections, secrets-setup, secrets-rotation-runbook, uc-permission-audit, uc-setup, secrets-config
+
+Each batch agent must follow the per-skill procedure below for its assigned skills and return results in format:
+```json
+[{"skill": "scope", "score": 87, "grade": "Good", "summary": "...", "priority_actions": ["...", "..."]}]
+```
+
+### Per-skill procedure (repeat for all assigned skills):
 
 **A. Score the deliverable**
 1. Read the skill's SKILL.md to get the full rubric.
