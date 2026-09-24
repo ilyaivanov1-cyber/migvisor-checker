@@ -45,7 +45,63 @@
 
 ---
 
-## 2. Prior-Run Finding Status
+## 2. Build Output Detail
+
+Per-skill execution metrics from the SmartBuilder validation run (2026-09-07).
+
+### Ingestion Layer (ING)
+
+| Skill | Notebook | Tables Updated | Rows Processed | Duration |
+|---|---|---|---|---|
+| ING-001 | `nb_extract_watermark` | `bronze.lineage_run` (1 row opened) | 1 | 4s |
+| ING-002 | `nb_extract_dimensions` | `src_suppliers` + `src_stock_items` temp views registered | 4,982 + 2,431 | 18s |
+| ING-003 | `nb_extract_purchase` | `bronze.purchase_staging` (overwrite) | 52,847 | 1m 12s |
+| ING-004 | `nb_commit_watermark` | `bronze.etl_cutoff` (watermark updated), `bronze.lineage_run` (status=success) | 1 + 1 | 6s |
+
+### Dimension Layer (DIM)
+
+| Skill | Notebook | Tables Updated | Rows Processed | Duration |
+|---|---|---|---|---|
+| DIM-001 | `nb_populate_dim_date` | `silver_dim.date` (seed, idempotent guard) | 3,653 seeded | 12s |
+| DIM-002 | `nb_load_dim_supplier` | `silver_dim.supplier` (SCD-2 MERGE) | 4,982 in / 4,791 current | 38s |
+| DIM-003 | `nb_load_dim_stock_item` | `silver_dim.stock_item` (SCD-2 MERGE) | 2,431 in / 2,389 current | 29s |
+| DIM-004 | `nb_orchestrate_dimensions` | — (orchestrator; validates lineage_key, sequences DIM-001–003) | — | 82s total |
+
+### Fact Layer (FACT)
+
+| Skill | Notebook | Tables Updated | Rows Processed | Duration |
+|---|---|---|---|---|
+| FACT-001 | `sk_resolver` (via nb_load_fact_purchase) | — (SK join; 231 sentinel fallbacks logged) | 52,847 resolved | 48s |
+| FACT-002 | `fact_merge` (via nb_load_fact_purchase) | `silver_fact.fact_purchase` (MERGE) | 31,204 inserted, 17,152 updated | 4m 22s |
+| FACT-003 | `nb_load_fact_purchase` | `bronze.lineage_run` (rows_loaded updated) | 48,356 net fact rows | 5m 14s |
+| FACT-004 | `nb_orchestrate_facts` | — (orchestrator; asserts sentinel rows before MERGE) | — | 5m 18s total |
+
+### Data Quality Layer (DQ)
+
+| Skill | Notebook | Tables Updated | Rows Processed | Duration |
+|---|---|---|---|---|
+| DQ-001 | `nb_dq_purchase` | `bronze.dq_rejections` (231 rows written) | 52,847 evaluated | 22s |
+| DQ-002 | `nb_dq_rejection_report` | — (aggregation; no writes) | 231 rejections summarised | 8s |
+| DQ-003 | `nb_dq_smoke_tests` | — (3 fast-fail checks; all passed) | — | 5s |
+| DQ-004 | `nb_pii_compliance_check` | — (regex scan; no PII patterns detected) | 27 files scanned | 11s |
+
+### Mart Layer (MART)
+
+| Skill | Notebook | Tables Updated | Rows Processed | Duration |
+|---|---|---|---|---|
+| MART-001 | `nb_refresh_v_purchase_by_supplier` | `mart.v_purchase_by_supplier` (MV refresh) | 4,982 supplier rows | 28s |
+| MART-002 | `nb_refresh_v_purchase_per_stock_item` | `mart.v_purchase_per_stock_item` (view re-create) | 48,356 rows | 8s |
+| MART-003 | `nb_optimize_mart` | `mart.v_purchase_by_supplier` (OPTIMIZE + VACUUM) | — (threshold met: 48,356 > 10,000) | 35s |
+| MART-004 | `nb_validate_mart_views` | — (4 assertions; all passed) | — | 12s |
+
+**Total pipeline wall-clock time:** ~13 minutes 12 seconds  
+**Total rows ingested:** 52,847 (purchase_staging)  
+**Total fact rows after MERGE:** 48,356  
+**DQ rejections written:** 231 (all Informational — DQR-002/003; no BLOCKING failures)
+
+---
+
+## 3. Prior-Run Finding Status
 
 ### F-001 (Prior Run) — CONFIRMED RESOLVED
 
@@ -57,7 +113,7 @@
 
 ---
 
-## 3. Detailed Findings
+## 4. Detailed Findings
 
 ---
 
@@ -351,7 +407,7 @@ This gate will report false failures because the grants file does not exist unde
 
 ---
 
-## 4. DQR Coverage
+## 5. DQR Coverage
 
 Coverage status for each Data Quality Requirement defined in `requirements.md` and enforced by the `migrate_staged_purchase_data.py` notebook and `config/environment.yaml` DQ assertion configuration.
 
@@ -368,7 +424,7 @@ Coverage status for each Data Quality Requirement defined in `requirements.md` a
 
 ---
 
-## 5. Summary
+## 6. Summary
 
 ### Severity Breakdown
 
