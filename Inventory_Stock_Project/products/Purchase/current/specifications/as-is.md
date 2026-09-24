@@ -647,16 +647,16 @@ FROM Integration.Purchase_Staging stg;
 
 ### 6.1 Input Source Tables
 
-| Source Platform | Source System | Source Schema | Source Object | Source Object Type | Description | Key Fields Used |
-|---|---|---|---|---|---|---|
-| Microsoft SQL Server 2014 | wideworldimporters | Purchasing | PurchaseOrders | Table | Purchase order header records; one row per order placed with a supplier | PurchaseOrderID, SupplierID, OrderDate, DeliveryMethodID, ContactPersonID, ExpectedDeliveryDate, SupplierReference, IsOrderFinalized, LastEditedWhen |
-| Microsoft SQL Server 2014 | wideworldimporters | Purchasing | PurchaseOrderLines | Table | Purchase order line items; one row per stock item per purchase order | PurchaseOrderLineID, PurchaseOrderID, StockItemID, OrderedOuters, OrderedQuantity, ReceivedOuters, ReceivedQuantity, PackageTypeID, LastEditedWhen |
-| Microsoft SQL Server 2014 | wideworldimporters | Warehouse | StockItems | Table | Stock item product master; temporal table with `_Archive` variant | StockItemID, StockItemName, IsChillerStock, BuyingPackageTypeID |
-| Microsoft SQL Server 2014 | wideworldimporters | Warehouse | PackageTypes | Table | Packaging type lookup | PackageTypeID, PackageTypeName |
-| Microsoft SQL Server 2014 | wideworldimporters | Purchasing | Suppliers | Table | Supplier master; temporal table with `_Archive` variant | SupplierID, SupplierName, SupplierCategoryID, PostalCityID |
-| Microsoft SQL Server 2014 | wideworldimportersdw | Integration | ETL Cutoff | Table (control) | Per-entity ETL watermark store; one row per tracked entity; consumed via `integration.getlastetlcutofftime` to determine incremental extract window | Table Name (PK), Cutoff Time |
-| Microsoft SQL Server 2014 | wideworldimportersdw | Integration | Lineage | Table (control) | ETL run audit log; tracks start time, end time, and success status per entity per run; updated at end of each `migratestagedpurchasedata` execution | Lineage Key (PK), Data Load Started, Table Name, Data Load Completed, Was Successful, Source System Cutoff Time |
-| Microsoft SQL Server 2014 | wideworldimportersdw | Sequences | LineageKey | Sequence object | SQL Server SEQUENCE object generating monotonically increasing lineage run identifiers; consumed via `integration.getlineagekey`; no native Databricks equivalent | NEXT VALUE FOR Sequences.LineageKey |
+| Source Platform | Source System | Source Schema | Source Object | Source Object Type | Transformation Type | Description | Key Fields Used |
+|---|---|---|---|---|---|---|---|
+| Microsoft SQL Server 2014 | wideworldimporters | Purchasing | PurchaseOrders | Table | Direct Load | Purchase order header records; one row per order placed with a supplier | PurchaseOrderID, SupplierID, OrderDate, DeliveryMethodID, ContactPersonID, ExpectedDeliveryDate, SupplierReference, IsOrderFinalized, LastEditedWhen |
+| Microsoft SQL Server 2014 | wideworldimporters | Purchasing | PurchaseOrderLines | Table | Direct Load | Purchase order line items; one row per stock item per purchase order | PurchaseOrderLineID, PurchaseOrderID, StockItemID, OrderedOuters, OrderedQuantity, ReceivedOuters, ReceivedQuantity, PackageTypeID, LastEditedWhen |
+| Microsoft SQL Server 2014 | wideworldimporters | Warehouse | StockItems | Table | Lookup/Enrichment | Stock item product master; temporal table with `_Archive` variant; `QuantityPerOuter` used to derive `[Ordered Quantity]` at extract time | StockItemID, StockItemName, IsChillerStock, BuyingPackageTypeID |
+| Microsoft SQL Server 2014 | wideworldimporters | Warehouse | PackageTypes | Table | Lookup/Enrichment | Packaging type lookup; `PackageTypeName` denormalized into staging at extract time | PackageTypeID, PackageTypeName |
+| Microsoft SQL Server 2014 | wideworldimporters | Purchasing | Suppliers | Table | SCD-2 Merge | Supplier master; temporal table with `_Archive` variant; loaded into `dimension.supplier` via SCD Type-2 MERGE before fact load | SupplierID, SupplierName, SupplierCategoryID, PostalCityID |
+| Microsoft SQL Server 2014 | wideworldimportersdw | Integration | ETL Cutoff | Table (control) | Passthrough | Per-entity ETL watermark store; one row per tracked entity; consumed via `integration.getlastetlcutofftime` to determine incremental extract window | Table Name (PK), Cutoff Time |
+| Microsoft SQL Server 2014 | wideworldimportersdw | Integration | Lineage | Table (control) | Passthrough | ETL run audit log; tracks start time, end time, and success status per entity per run; updated at end of each `migratestagedpurchasedata` execution | Lineage Key (PK), Data Load Started, Table Name, Data Load Completed, Was Successful, Source System Cutoff Time |
+| Microsoft SQL Server 2014 | wideworldimportersdw | Sequences | LineageKey | Sequence object | Passthrough | SQL Server SEQUENCE object generating monotonically increasing lineage run identifiers; consumed via `integration.getlineagekey`; no native Databricks equivalent | NEXT VALUE FOR Sequences.LineageKey |
 
 ---
 

@@ -23,10 +23,17 @@ Source System (transactional database)
 ┌─────────────────────────────────────────────────────────┐
 │  LAYER 1: Ingestion (Bronze)                            │
 │                                                         │
-│  nb_extract_watermark  ──► nb_extract_purchase          │
+│  nb_extract_watermark                                   │
+│         │ (task values: last_cutoff, run_id)            │
+│         ▼                                               │
+│  nb_preflight_dim_check ──► nb_preflight_date_check     │
+│  (dims loaded & current?)   (date dim covers cutoff?)   │
 │         │                         │                     │
-│         │ (task values)           │ (JDBC → staging)    │
-│         ▼                         ▼                     │
+│         └──────────┬──────────────┘                     │
+│                    ▼                                    │
+│           nb_extract_purchase                           │
+│                    │ (JDBC → staging)                   │
+│                    ▼                                    │
 │  bronze.purchase_staging ◄─── watermark-bounded         │
 │  bronze.etl_cutoff       (watermark control)            │
 │  bronze.lineage_run      (pipeline audit log)           │
