@@ -190,7 +190,26 @@ List the top 8 highest-impact fixes across all submitted skills, sorted by estim
 
 ---
 
-## Step 4 — Console output
+## Step 4 — Commit and push results
+
+After writing SUMMARY.md, run the following git commands to commit and push all new check reports and the updated SUMMARY:
+
+```
+git add {checks_dir}/{trainee_name}/
+git commit -m "Add vN check reports (21 skills) + updated SUMMARY for {trainee_name}
+
+Overall score: <avg>/100 (<grade>)
+<N> of 21 skills reached Excellent (≥90).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+git push
+```
+
+Replace `vN` with the next version number (count existing SUMMARY versions + 1).
+
+---
+
+## Step 5 — Console output
 
 Print the score table in the conversation followed by 3-4 sentences: overall grade, strongest deliverable, weakest submitted deliverable, top priority fix.
 
