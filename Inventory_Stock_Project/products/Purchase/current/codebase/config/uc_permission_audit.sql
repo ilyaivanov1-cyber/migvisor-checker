@@ -4,7 +4,11 @@
 -- Idempotent: SHOW GRANTS statements do not modify any state.
 
 -- ── Catalog level ─────────────────────────────────────────────────────────────
--- Expected: etl-service-principal and bi-service-principal have USE CATALOG
+-- Expected grants at the catalog level after running all GRANT scripts:
+--   etl-service-principal  → USE CATALOG  (required to access all schemas)
+--   bi-service-principal   → USE CATALOG  (required to query mart views)
+-- If these are absent, downstream SHOW GRANTS on schema/table will also fail
+-- with insufficient privileges. Re-run CFG-004 GRANT-001 to restore.
 SHOW GRANTS ON CATALOG inventory_stock;
 
 -- ── Schema level ─────────────────────────────────────────────────────────────

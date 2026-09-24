@@ -43,6 +43,12 @@ databricks secrets put --scope inventory-stock-dev --key jdbc_username
 databricks secrets put --scope inventory-stock-dev --key jdbc_password
 ```
 
+> **Verify after Step 3:** In a Databricks notebook, run:
+> ```python
+> dbutils.secrets.get(scope="inventory-stock-dev", key="jdbc_url")
+> ```
+> It should return the value without raising an exception. `REDACTED` in the output is expected — this confirms the key is registered.
+
 ---
 
 ## Step 4 — Register Required Keys (Prod)
@@ -52,6 +58,12 @@ databricks secrets put --scope inventory-stock-prod --key jdbc_url
 databricks secrets put --scope inventory-stock-prod --key jdbc_username
 databricks secrets put --scope inventory-stock-prod --key jdbc_password
 ```
+
+> **Verify after Step 4:** In a Databricks notebook, run:
+> ```python
+> dbutils.secrets.get(scope="inventory-stock-prod", key="jdbc_url")
+> ```
+> It should return the value without raising an exception.
 
 ---
 
@@ -77,4 +89,4 @@ See `config/secrets_rotation_runbook.md` for rotation procedures.
 
 - [Databricks Secrets documentation](https://docs.databricks.com/security/secrets/index.html)
 - Key names consumed by notebooks: `jdbc_url`, `jdbc_username`, `jdbc_password`
-- Scope used in ETL widgets: `env_scope` widget value set to `inventory-stock-dev` or `inventory-stock-prod`
+- Scope used in ETL widgets: `env_scope` widget → set to exactly `inventory-stock-dev` (dev) or `inventory-stock-prod` (prod); these values must match the scope names created in Steps 1–2 exactly, including hyphens

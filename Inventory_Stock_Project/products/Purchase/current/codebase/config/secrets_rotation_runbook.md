@@ -38,8 +38,8 @@ databricks secrets put --scope inventory-stock-prod --key jdbc_password
 ## 3. Verification Steps
 
 1. Trigger a manual Workflow run in the dev environment.
-2. Confirm `nb_extract_purchase` and `nb_extract_watermark` complete without JDBC auth errors.
-3. Run a PII compliance check to verify zero hardcoded credentials in the codebase.
+2. Confirm `nb_extract_purchase`, `nb_extract_watermark`, and `nb_extract_dimensions` complete without JDBC auth errors.
+3. Run `nb_pii_compliance_check` to verify zero hardcoded credentials in the codebase.
 4. Check `inventory_stock.bronze.lineage_run` — the run status must be `was_successful = true`.
 
 ---

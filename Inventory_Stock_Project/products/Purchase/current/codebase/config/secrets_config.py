@@ -16,6 +16,7 @@ Prerequisites:
 from __future__ import annotations
 
 import argparse
+import getpass
 import subprocess
 import sys
 
@@ -54,10 +55,12 @@ def create_scope(scope: str) -> None:
     print(f"Scope '{scope}' created.")
 
 
-def register_key(scope: str, key: str) -> None:
+def register_key(scope: str, key: str, dry_run: bool = False) -> None:
     print(f"Registering key '{key}' in scope '{scope}' ...")
+    if dry_run:
+        print(f"  [dry-run] Would register key '{key}' — skipping.")
+        return
     print(f"  Enter value for {key} (input is hidden in terminal):")
-    import getpass
     value = getpass.getpass(prompt="  > ")
     _run(["databricks", "secrets", "put", "--scope", scope, "--key", key, "--string-value", value])
     print(f"  Key '{key}' registered. Value is not logged.")
@@ -66,15 +69,20 @@ def register_key(scope: str, key: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Bootstrap Databricks Secrets for inventory-stock")
     parser.add_argument("--env", choices=["dev", "prod"], required=True)
+    parser.add_argument("--dry-run", action="store_true", help="Preview scope/key registration without executing any CLI commands")
     args = parser.parse_args()
 
     scope = SCOPES[args.env]
-    print(f"\n=== Bootstrapping secrets for environment: {args.env} (scope: {scope}) ===\n")
+    if args.dry_run:
+        print(f"\n=== [DRY RUN] Would bootstrap secrets for environment: {args.env} (scope: {scope}) ===\n")
+    else:
+        print(f"\n=== Bootstrapping secrets for environment: {args.env} (scope: {scope}) ===\n")
 
-    create_scope(scope)
+    if not args.dry_run:
+        create_scope(scope)
 
     for key in REQUIRED_KEYS:
-        register_key(scope, key)
+        register_key(scope, key, dry_run=args.dry_run)
 
     print(f"\nAll keys registered in scope '{scope}'.")
     print(f"Verify with: databricks secrets list --scope {scope}")

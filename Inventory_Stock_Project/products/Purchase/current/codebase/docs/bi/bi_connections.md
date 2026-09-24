@@ -23,6 +23,14 @@ This guide helps BI developers reconnect their reports and dashboards to the new
 SELECT * FROM inventory_stock.mart.v_purchase_by_supplier LIMIT 100;
 ```
 
+**Sample aggregate query:**
+```sql
+SELECT supplier_name, SUM(ordered_quantity) AS total_ordered, SUM(line_amount) AS total_amount
+FROM inventory_stock.mart.v_purchase_by_supplier
+GROUP BY supplier_name
+ORDER BY total_amount DESC;
+```
+
 ---
 
 ### 2.2 `v_purchase_per_stock_item` — Per-Stock-Item Purchase Detail
@@ -70,7 +78,7 @@ Schema:           mart
 
 | Issue | Workaround |
 |---|---|
-| Materialized view shows stale data | Check `bronze.lineage_run` for the latest `was_successful = true` run; wait for the nightly ETL or trigger a manual REFRESH via the ETL workflow. |
+| Materialized view shows stale data | Check `bronze.lineage_run` for the latest `was_successful = true` run; wait for the nightly ETL or trigger a manual REFRESH via the ETL workflow. Note: `bronze.lineage_run` in this product corresponds to `stg.lineage` in the GlobalPurchase reference pattern — different catalog naming convention, same purpose. |
 | `ACCESS DENIED` on mart view | Confirm `bi-service-principal` has `SELECT` on the view and `USE SCHEMA` on `inventory_stock.mart` (see GRANT-004). |
 
 ---
