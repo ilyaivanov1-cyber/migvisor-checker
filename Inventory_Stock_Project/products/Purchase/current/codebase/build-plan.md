@@ -15,7 +15,7 @@ _SDD version: 4.1 | Manifest: `products/Purchase/current/_manifest.yaml`_
 | **Target catalog** | `inventory_stock` (Databricks Delta Lake Unity Catalog) |
 | **Total tasks** | 26 |
 | **Execution phases** | 3 |
-| **Primary skill** | `/smartbuilder_generate-db` (Phase 1) + `/smartbuilder_generate-etl` (Phases 2–3) |
+| **Primary skill** | `/12_migvisor_smartbuilder_generate-db` (Phase 1) + `/13_migvisor_smartbuilder_generate-etl` (Phases 2–3) |
 
 **Task breakdown by type:**
 
@@ -84,7 +84,7 @@ _BI reconnection specs (TASK-023, TASK-024) are delivered as Markdown documents 
 
 ### Phase 1 — Database Layer (DDL)
 
-**Skill:** `/smartbuilder_generate-db`
+**Skill:** `/12_migvisor_smartbuilder_generate-db`
 **Parallelism:** TASK-001, TASK-002, TASK-006, TASK-007 can run in parallel (no dependencies). TASK-003, TASK-004, TASK-005 depend on TASK-001 or TASK-002. TASK-008 depends on TASK-001, TASK-003, TASK-004, TASK-005.
 
 **Execution order within Phase 1:**
@@ -112,7 +112,7 @@ Batch 3 (sequential): TASK-008                      ← after Batch 2
 
 ### Phase 2 — ETL Pipeline + Configuration
 
-**Skill:** `/smartbuilder_generate-etl`
+**Skill:** `/13_migvisor_smartbuilder_generate-etl`
 **Parallelism:** TASK-009 (constants) and TASK-010 (scd2_merge) can run in parallel. TASK-011, TASK-012, TASK-013 depend on TASK-009. TASK-018 (environment.yaml) has no dependencies. Notebooks are sequential: TASK-014 → TASK-015 → TASK-016 → TASK-017.
 
 **Execution order within Phase 2:**
@@ -160,7 +160,7 @@ Batch 7 (sequential): TASK-019                     ← after TASK-014, TASK-015,
 
 ### Phase 3 — Tests, BI Specs, Documentation
 
-**Skill:** `/smartbuilder_generate-etl`
+**Skill:** `/13_migvisor_smartbuilder_generate-etl`
 **Parallelism:** TASK-020, TASK-021, TASK-023, TASK-024, TASK-025, TASK-026 can all run in parallel after Phase 2. TASK-022 depends on TASK-016 (Phase 2 complete).
 
 | Task ID | Title | Output File | Dependencies |
@@ -246,14 +246,92 @@ Before executing Phase 1, verify:
 
 ---
 
+## Execution Instructions
+
+Execute the SmartBuilder skill for each phase in order. All tasks within a batch that have no mutual dependencies can be run in parallel.
+
+### Phase 1 — Database Layer (DDL)
+
+```bash
+# Batch 1 — parallel (no dependencies)
+/12_migvisor_smartbuilder_generate-db --task TASK-001 --product Purchase --project Inventory_Stock_Project
+/12_migvisor_smartbuilder_generate-db --task TASK-002 --product Purchase --project Inventory_Stock_Project
+/12_migvisor_smartbuilder_generate-db --task TASK-006 --product Purchase --project Inventory_Stock_Project
+/12_migvisor_smartbuilder_generate-db --task TASK-007 --product Purchase --project Inventory_Stock_Project
+
+# Batch 2 — parallel (after TASK-001 and TASK-002 complete)
+/12_migvisor_smartbuilder_generate-db --task TASK-003 --product Purchase --project Inventory_Stock_Project
+/12_migvisor_smartbuilder_generate-db --task TASK-004 --product Purchase --project Inventory_Stock_Project
+/12_migvisor_smartbuilder_generate-db --task TASK-005 --product Purchase --project Inventory_Stock_Project
+
+# Batch 3 — sequential (after Batch 2 complete)
+/12_migvisor_smartbuilder_generate-db --task TASK-008 --product Purchase --project Inventory_Stock_Project
+```
+
+### Phase 2 — ETL Pipeline + Configuration
+
+```bash
+# Batch 1 — parallel (no dependencies)
+/13_migvisor_smartbuilder_generate-etl --task TASK-009 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-010 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-018 --product Purchase --project Inventory_Stock_Project
+
+# Batch 2 — parallel (after TASK-009 complete)
+/13_migvisor_smartbuilder_generate-etl --task TASK-011 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-012 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-013 --product Purchase --project Inventory_Stock_Project
+
+# Batches 3–7 — sequential (follow dependency chain)
+/13_migvisor_smartbuilder_generate-etl --task TASK-014 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-015 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-016 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-017 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-019 --product Purchase --project Inventory_Stock_Project
+```
+
+### Phase 3 — Tests, BI Specs, Documentation
+
+```bash
+# All Phase 3 tasks can run in parallel after Phase 2 (TASK-022 requires TASK-016)
+/13_migvisor_smartbuilder_generate-etl --task TASK-020 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-021 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-022 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-023 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-024 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-025 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-026 --product Purchase --project Inventory_Stock_Project
+```
+
+### Phase 4 — Mart + DQ Layer
+
+```bash
+# Batch 1 — parallel DDL (no mutual deps)
+/12_migvisor_smartbuilder_generate-db --task TASK-027 --product Purchase --project Inventory_Stock_Project
+/12_migvisor_smartbuilder_generate-db --task TASK-028 --product Purchase --project Inventory_Stock_Project
+
+# Batch 2 — DQ engine (no deps beyond DDL)
+/13_migvisor_smartbuilder_generate-etl --task TASK-032 --product Purchase --project Inventory_Stock_Project
+
+# Batch 3 — parallel mart refresh notebooks (after view DDL complete)
+/13_migvisor_smartbuilder_generate-etl --task TASK-029 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-030 --product Purchase --project Inventory_Stock_Project
+
+# Batches 4–6 — sequential
+/13_migvisor_smartbuilder_generate-etl --task TASK-033 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-034 --product Purchase --project Inventory_Stock_Project
+/13_migvisor_smartbuilder_generate-etl --task TASK-031 --product Purchase --project Inventory_Stock_Project
+```
+
+---
+
 ## Pending Decisions (from SDD)
 
-| ID | Blocks | Description |
-|---|---|---|
-| PD-001 | TASK-015, TASK-019 | Source JDBC connectivity — confirm connection profile and credentials for SQL Server 2014 incremental extract |
-| PD-002 | TASK-017 | `reseed_purchase_environment.py` scope — requires scope owner sign-off before execution |
-| PD-003 | TASK-008 | Unity Catalog access role matrix — role assignments not yet defined; GRANT statements in TASK-008 must be reviewed after PD-003 resolves |
-| QA-DQ-01 | TASK-016, TASK-022 | Business DQ thresholds — acceptable failure rates for informational QA assertions; does not block code generation but affects test expectations |
+| ID | Blocks | Description | Owner | Target Date |
+|---|---|---|---|---|
+| PD-001 | TASK-015, TASK-019 | Source JDBC connectivity — confirm connection profile and credentials for SQL Server 2014 incremental extract | TBD | TBD |
+| PD-002 | TASK-017 | `reseed_purchase_environment.py` scope — requires scope owner sign-off before execution | TBD | TBD |
+| PD-003 | TASK-008 | Unity Catalog access role matrix — role assignments not yet defined; GRANT statements in TASK-008 must be reviewed after PD-003 resolves | TBD | TBD |
+| QA-DQ-01 | TASK-016, TASK-022 | Business DQ thresholds — acceptable failure rates for informational QA assertions; does not block code generation but affects test expectations | TBD | TBD |
 
 ---
 
@@ -261,7 +339,7 @@ Before executing Phase 1, verify:
 
 ## Phase 4 — Mart + DQ Layer
 
-**Skill:** `/smartbuilder_generate-etl`
+**Skill:** `/13_migvisor_smartbuilder_generate-etl`
 **Purpose:** Build the serving layer (gold/mart) and standalone DQ engine. These tasks depend on Phase 2 (ETL pipeline complete) and the silver fact + dim tables being populated.
 
 **Execution order within Phase 4:**
@@ -294,42 +372,42 @@ Batch 6 (sequential): TASK-031 (nb_validate_mart_views — after TASK-029, TASK-
 
 | Task ID | Group | Output File | SmartBuilder Skill |
 |---|---|---|---|
-| TASK-001 | DDL | `src/db/ddl/bronze_lineage_run.sql` | `/smartbuilder_generate-db` |
-| TASK-002 | DDL | `src/db/ddl/bronze_etl_cutoff.sql` | `/smartbuilder_generate-db` |
-| TASK-003 | DDL | `src/db/ddl/bronze_purchase_staging.sql` | `/smartbuilder_generate-db` |
-| TASK-004 | DDL | `src/db/ddl/bronze_dq_rejections.sql` | `/smartbuilder_generate-db` |
-| TASK-005 | DDL | `src/db/ddl/silver_fact_fact_purchase.sql` | `/smartbuilder_generate-db` |
-| TASK-006 | DDL | `src/db/ddl/silver_dim_supplier_current.sql` | `/smartbuilder_generate-db` |
-| TASK-007 | DDL | `src/db/ddl/silver_dim_stock_item_current.sql` | `/smartbuilder_generate-db` |
-| TASK-008 | DDL | `src/db/grants/purchase_grants.sql` | `/smartbuilder_generate-db` |
-| TASK-027 | MART | `src/db/ddl/mart/v_purchase_by_supplier.sql` | `/smartbuilder_generate-db` |
-| TASK-028 | MART | `src/db/ddl/mart/v_purchase_per_stock_item.sql` | `/smartbuilder_generate-db` |
-| TASK-009 | ETL | `src/common/constants.py` | `/smartbuilder_generate-etl` |
-| TASK-010 | ETL | `src/common/scd2_merge.py` | `/smartbuilder_generate-etl` |
-| TASK-011 | ETL | `src/common/sk_resolver.py` | `/smartbuilder_generate-etl` |
-| TASK-012 | ETL | `src/common/fact_merge.py` | `/smartbuilder_generate-etl` |
-| TASK-013 | ETL | `src/common/udfs.py` | `/smartbuilder_generate-etl` |
-| TASK-014 | ETL | `src/etl/nb_extract_watermark.py` | `/smartbuilder_generate-etl` |
-| TASK-015 | ETL | `src/etl/nb_extract_purchase.py` | `/smartbuilder_generate-etl` |
-| TASK-016 | ETL | `src/etl/migrate_staged_purchase_data.py` | `/smartbuilder_generate-etl` |
-| TASK-017 | ETL | `src/init/reseed_purchase_environment.py` | `/smartbuilder_generate-etl` |
-| TASK-018 | Config | `config/environment.yaml` | `/smartbuilder_generate-etl` |
-| TASK-019 | Config | `config/workflows/nightly_etl_purchase.json` | `/smartbuilder_generate-etl` |
-| TASK-029 | MART | `src/etl/mart/nb_refresh_v_purchase_by_supplier.py` | `/smartbuilder_generate-etl` |
-| TASK-030 | MART | `src/etl/mart/nb_refresh_v_purchase_per_stock_item.py` | `/smartbuilder_generate-etl` |
-| TASK-031 | MART | `src/etl/mart/nb_validate_mart_views.py` | `/smartbuilder_generate-etl` |
-| TASK-032 | DQ | `src/etl/dq/dq_engine.py` | `/smartbuilder_generate-etl` |
-| TASK-033 | DQ | `src/etl/dq/nb_dq_purchase.py` | `/smartbuilder_generate-etl` |
-| TASK-034 | DQ | `src/etl/dq/nb_dq_rejection_report.py` | `/smartbuilder_generate-etl` |
-| TASK-020 | Test | `tests/common/test_sk_resolver.py` | `/smartbuilder_generate-etl` |
-| TASK-021 | Test | `tests/common/test_udfs.py` | `/smartbuilder_generate-etl` |
-| TASK-022 | Test | `tests/etl/test_migrate_staged_purchase_data.py` | `/smartbuilder_generate-etl` |
-| TASK-023 | BI | `docs/bi/wwidw_purchase_and_sale_per_stockitem_dynamic.md` | `/smartbuilder_generate-etl` |
-| TASK-024 | BI | `docs/bi/wwidw_ordered_by_supplier.md` | `/smartbuilder_generate-etl` |
-| TASK-025 | Docs | `docs/design.md` | `/smartbuilder_generate-etl` |
-| TASK-026 | Docs | `docs/data-dictionary.md` | `/smartbuilder_generate-etl` |
+| TASK-001 | DDL | `src/db/ddl/bronze_lineage_run.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-002 | DDL | `src/db/ddl/bronze_etl_cutoff.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-003 | DDL | `src/db/ddl/bronze_purchase_staging.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-004 | DDL | `src/db/ddl/bronze_dq_rejections.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-005 | DDL | `src/db/ddl/silver_fact_fact_purchase.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-006 | DDL | `src/db/ddl/silver_dim_supplier_current.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-007 | DDL | `src/db/ddl/silver_dim_stock_item_current.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-008 | DDL | `src/db/grants/purchase_grants.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-027 | MART | `src/db/ddl/mart/v_purchase_by_supplier.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-028 | MART | `src/db/ddl/mart/v_purchase_per_stock_item.sql` | `/12_migvisor_smartbuilder_generate-db` |
+| TASK-009 | ETL | `src/common/constants.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-010 | ETL | `src/common/scd2_merge.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-011 | ETL | `src/common/sk_resolver.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-012 | ETL | `src/common/fact_merge.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-013 | ETL | `src/common/udfs.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-014 | ETL | `src/etl/nb_extract_watermark.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-015 | ETL | `src/etl/nb_extract_purchase.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-016 | ETL | `src/etl/migrate_staged_purchase_data.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-017 | ETL | `src/init/reseed_purchase_environment.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-018 | Config | `config/environment.yaml` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-019 | Config | `config/workflows/nightly_etl_purchase.json` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-029 | MART | `src/etl/mart/nb_refresh_v_purchase_by_supplier.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-030 | MART | `src/etl/mart/nb_refresh_v_purchase_per_stock_item.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-031 | MART | `src/etl/mart/nb_validate_mart_views.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-032 | DQ | `src/etl/dq/dq_engine.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-033 | DQ | `src/etl/dq/nb_dq_purchase.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-034 | DQ | `src/etl/dq/nb_dq_rejection_report.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-020 | Test | `tests/common/test_sk_resolver.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-021 | Test | `tests/common/test_udfs.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-022 | Test | `tests/etl/test_migrate_staged_purchase_data.py` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-023 | BI | `docs/bi/wwidw_purchase_and_sale_per_stockitem_dynamic.md` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-024 | BI | `docs/bi/wwidw_ordered_by_supplier.md` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-025 | Docs | `docs/design.md` | `/13_migvisor_smartbuilder_generate-etl` |
+| TASK-026 | Docs | `docs/data-dictionary.md` | `/13_migvisor_smartbuilder_generate-etl` |
 
 ---
 
 _Build plan generated from `specifications/development_plan/tasks.md` (34 tasks) and `specifications/development_plan/design.md`._
-_SmartBuilder version: 4.1 | Next skill: `/smartbuilder_generate-db Purchase TASK-027`_
+_SmartBuilder version: 4.1 | Next skill: `/12_migvisor_smartbuilder_generate-db Purchase TASK-027`_

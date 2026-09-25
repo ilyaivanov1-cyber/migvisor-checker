@@ -251,3 +251,69 @@ ORDER BY cnt DESC;
 -- Fact table row count
 SELECT COUNT(*) FROM inventory_stock.silver_fact.fact_purchase;
 ```
+
+---
+
+## 7. Partial Reprocessing — Watermark Reset
+
+Use this procedure when you need to reprocess a historical date range — for example, after a source-side data correction that altered records outside the most recent batch window.
+
+> **Warning:** Resetting the watermark causes the next pipeline run to re-extract all rows where `last_modified_when > <target_date>`. Verify the source system has the corrected data before resetting. The MERGE INTO pattern is idempotent: re-extracted rows with the same MERGE predicate key `(wwi_purchase_order_id, date_key, supplier_key, stock_item_key)` will UPDATE in place; new rows will INSERT. No duplicates are created.
+
+**Step 1 — Reset the watermark to the target start date:**
+
+```sql
+UPDATE inventory_stock.bronze.etl_cutoff
+SET cutoff_time     = '<target_start_date>',
+    last_updated_utc = current_timestamp()
+WHERE table_name = 'fact_purchase';
+```
+
+Replace `<target_start_date>` with the earliest date from which you need to reprocess (e.g. `'2026-09-01 00:00:00'`).
+
+**Step 2 — Trigger the full pipeline:**
+
+Navigate to **Workflows → nightly_etl_purchase → Run now** in the Databricks UI. The pipeline extracts all rows where `last_modified_when > <target_start_date>` from the source system.
+
+**Step 3 — Verify reprocessing:**
+
+```sql
+-- Confirm the watermark advanced past the reprocessed period
+SELECT table_name, cutoff_time, last_updated_utc
+FROM inventory_stock.bronze.etl_cutoff
+WHERE table_name = 'fact_purchase';
+
+-- Confirm a new successful lineage run exists
+SELECT lineage_key, data_load_started, data_load_completed, was_successful, table_row_count
+FROM inventory_stock.bronze.lineage_run
+WHERE table_name = 'fact_purchase'
+ORDER BY data_load_started DESC
+LIMIT 3;
+```
+
+---
+
+## 8. Escalation Path
+
+| Severity | Condition | Channel | Target Response Time |
+|---|---|---|---|
+| P1 — Pipeline Blocked | `was_successful = false` AND pipeline not recovered within 2 hours of 02:00 UTC run start | Slack `#data-eng-incidents` + PagerDuty on-call | 30 minutes |
+| P2 — DQ Blocking Failure | QA-P001 RuntimeError raised (row count mismatch) — MERGE did not execute; data may be stale | Slack `#data-eng-incidents` | 1 hour |
+| P3 — Informational DQ | QA-P003 RI violations or QA-P004 business rule warnings logged but pipeline succeeded | Slack `#data-eng-monitoring` | Next business day |
+| P4 — Source Unavailable | JDBC connectivity failure in `nb_extract_purchase` (PD-001 pending); source system unreachable | Slack `#platform-engineering` | 2 hours |
+| P5 — Security Incident | Unexpected secret access, Unity Catalog audit alert, credential rotation required | Email `security@company.com` + Slack `#security-incidents` | Immediate |
+
+Escalation owner: Data Engineering Lead — see Contacts section.
+
+---
+
+## 9. Contacts
+
+| Team | Role | Contact |
+|---|---|---|
+| Data Engineering | Pipeline owner; primary on-call for Purchase ETL failures and DQ incidents | `data-engineering@company.com` / Slack `#data-engineering` |
+| Platform Engineering | Databricks cluster, Unity Catalog, Workflow infrastructure, secret scopes | `platform@company.com` / Slack `#platform-engineering` |
+| Security / IAM | Secret scope management, service principal credentials, Unity Catalog permission audits | `security@company.com` / Slack `#security-incidents` |
+| Dimensions Team | Owns `silver_dim.supplier` and `silver_dim.stock_item` loads (external dependency for Purchase ETL) | `dimensions-team@company.com` / Slack `#dimensions-team` |
+
+> Placeholder contacts — update with actual team aliases before production go-live.
