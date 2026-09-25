@@ -7,43 +7,43 @@ _Derived from: `design.md` + `requirements.md`_
 
 ## Task Summary
 
-| Task ID | Type | Title | Depends On | Requirements |
-|---|---|---|---|---|
-| TASK-001 | DDL | Create `bronze.lineage_run` table | — | FR-003, NFR-007 |
-| TASK-002 | DDL | Create `bronze.etl_cutoff` table | — | FR-002, NFR-001 |
-| TASK-003 | DDL | Create `bronze.purchase_staging` table | TASK-001, TASK-002 | FR-001, FR-003 |
-| TASK-004 | DDL | Create `bronze.dq_rejections` table | TASK-001 | NFR-004, NFR-005, NFR-007, DQR-008 |
-| TASK-005 | DDL | Create `silver_fact.fact_purchase` table | TASK-001 | FR-007, NFR-001, NFR-012 |
-| TASK-006 | DDL | Create `silver_dim.supplier_current` view | — | FR-004 |
-| TASK-007 | DDL | Create `silver_dim.stock_item_current` view | — | FR-005 |
-| TASK-008 | DDL | Generate GRANT statements for Unity Catalog access | TASK-001, TASK-003, TASK-004, TASK-005 | NFR-008 |
-| TASK-009 | ETL | Write `src/common/constants.py` | TASK-001, TASK-003, TASK-005 | NFR-009, NFR-011 |
-| TASK-010 | ETL | Write `src/common/scd2_merge.py` | — | FR-004, FR-005 |
-| TASK-011 | ETL | Write `src/common/sk_resolver.py` | TASK-009 | FR-004, FR-005, CALC-002, CALC-003 |
-| TASK-012 | ETL | Write `src/common/fact_merge.py` | TASK-009 | FR-007, NFR-003 |
-| TASK-013 | ETL | Write `src/common/udfs.py` | TASK-009 | NFR-009, NFR-011 |
-| TASK-014 | ETL | Write `src/etl/nb_extract_watermark.py` | TASK-009, TASK-001, TASK-002 | FR-002, FR-003, NFR-009 |
-| TASK-015 | ETL | Write `src/etl/nb_extract_purchase.py` | TASK-009, TASK-003, TASK-014 | FR-001, FR-006, CALC-001, CALC-005, NFR-009 |
-| TASK-016 | ETL | Write `src/etl/migrate_staged_purchase_data.py` | TASK-011, TASK-012, TASK-014, TASK-015 | FR-007, FR-008, NFR-003 through NFR-007, NFR-009, DQR-001 through DQR-009 |
-| TASK-017 | ETL | Write `src/init/reseed_purchase_environment.py` | TASK-001, TASK-002, TASK-003, TASK-004, TASK-005 | FR-011, NFR-002 |
-| TASK-018 | config | Write `config/environment.yaml` | — | FR-008, FR-009, NFR-009 |
-| TASK-019 | config | Write Databricks Workflow JSON `config/workflows/nightly_etl_purchase.json` | TASK-014, TASK-015, TASK-016 | FR-002, FR-003, NFR-001 |
-| TASK-020 | test | Write `tests/common/test_sk_resolver.py` | TASK-011 | FR-004, FR-005, DQR-009 |
-| TASK-021 | test | Write `tests/common/test_udfs.py` | TASK-013 | NFR-009 |
-| TASK-022 | test | Write `tests/etl/test_migrate_staged_purchase_data.py` | TASK-016 | NFR-003, NFR-004, NFR-005, NFR-006, DQR-001 through DQR-007 |
-| TASK-023 | BI | Power BI report reconnection spec: `wwidw_purchase_and_sale_per_stockitem_dynamic` | TASK-005 | FR-010 |
-| TASK-024 | BI | Power BI report reconnection spec: `wwidw_ordered_by_supplier` | TASK-005 | FR-010 |
-| TASK-025 | docs | Write `docs/design.md` (ETL design document) | TASK-016 | NFR-011 |
-| TASK-026 | docs | Write `docs/data-dictionary.md` | TASK-005 | NFR-011 |
+| Task ID | Type | Title | Depends On | Requirements | Design Reference |
+|---|---|---|---|---|---|
+| TASK-001 | DDL | Create `bronze.lineage_run` table | — | FR-003, NFR-007 | §7 DDL Reference |
+| TASK-002 | DDL | Create `bronze.etl_cutoff` table | — | FR-002, NFR-001 | §7 DDL Reference |
+| TASK-003 | DDL | Create `bronze.purchase_staging` table | TASK-001, TASK-002 | FR-001, FR-003 | §7 DDL Reference |
+| TASK-004 | DDL | Create `bronze.dq_rejections` table | TASK-001 | NFR-004, NFR-005, NFR-007, DQR-008 | §7 DDL Reference |
+| TASK-005 | DDL | Create `silver_fact.fact_purchase` table | TASK-001 | FR-007, NFR-001, NFR-012 | §7 DDL Reference |
+| TASK-006 | DDL | Create `silver_dim.supplier_current` view | — | FR-004 | §7 DDL Reference |
+| TASK-007 | DDL | Create `silver_dim.stock_item_current` view | — | FR-005 | §7 DDL Reference |
+| TASK-008 | DDL | Generate GRANT statements for Unity Catalog access | TASK-001, TASK-003, TASK-004, TASK-005 | NFR-008 | §7 DDL Reference |
+| TASK-009 | ETL | Write `src/common/constants.py` | TASK-001, TASK-003, TASK-005 | NFR-009, NFR-011 | §9 Configuration Management |
+| TASK-010 | ETL | Write `src/common/scd2_merge.py` | — | FR-004, FR-005 | §3 SK Resolution Pattern |
+| TASK-011 | ETL | Write `src/common/sk_resolver.py` | TASK-009 | FR-004, FR-005, CALC-002, CALC-003 | §3 SK Resolution Pattern |
+| TASK-012 | ETL | Write `src/common/fact_merge.py` | TASK-009 | FR-007, NFR-003 | §4 MERGE INTO Pattern |
+| TASK-013 | ETL | Write `src/common/udfs.py` | TASK-009 | NFR-009, NFR-011 | §9 Configuration Management |
+| TASK-014 | ETL | Write `src/etl/nb_extract_watermark.py` | TASK-009, TASK-001, TASK-002 | FR-002, FR-003, NFR-009 | §2 Workflow Task Sequence, §6 Lineage Propagation |
+| TASK-015 | ETL | Write `src/etl/nb_extract_purchase.py` | TASK-009, TASK-003, TASK-014 | FR-001, FR-006, CALC-001, CALC-005, NFR-009 | §2 Workflow Task Sequence |
+| TASK-016 | ETL | Write `src/etl/migrate_staged_purchase_data.py` | TASK-011, TASK-012, TASK-014, TASK-015 | FR-007, FR-008, NFR-003 through NFR-007, NFR-009, DQR-001 through DQR-009 | §4 MERGE INTO Pattern, §5 QA Assertion Chain |
+| TASK-017 | ETL | Write `src/init/reseed_purchase_environment.py` | TASK-001, TASK-002, TASK-003, TASK-004, TASK-005 | FR-011, NFR-002 | §7 DDL Reference |
+| TASK-018 | config | Write `config/environment.yaml` | — | FR-008, FR-009, NFR-009 | §9 Configuration Management |
+| TASK-019 | config | Write Databricks Workflow JSON `config/workflows/nightly_etl_purchase.json` | TASK-014, TASK-015, TASK-016 | FR-002, FR-003, NFR-001 | §2 Workflow Task Sequence |
+| TASK-020 | test | Write `tests/common/test_sk_resolver.py` | TASK-011 | FR-004, FR-005, DQR-009 | §3 SK Resolution Pattern |
+| TASK-021 | test | Write `tests/common/test_udfs.py` | TASK-013 | NFR-009 | §9 Configuration Management |
+| TASK-022 | test | Write `tests/etl/test_migrate_staged_purchase_data.py` | TASK-016 | NFR-003, NFR-004, NFR-005, NFR-006, DQR-001 through DQR-007 | §4 MERGE INTO Pattern, §5 QA Assertion Chain |
+| TASK-023 | BI | Power BI report reconnection spec: `wwidw_purchase_and_sale_per_stockitem_dynamic` | TASK-005 | FR-010 | §8 Mart Layer |
+| TASK-024 | BI | Power BI report reconnection spec: `wwidw_ordered_by_supplier` | TASK-005 | FR-010 | §8 Mart Layer |
+| TASK-025 | docs | Write `docs/design.md` (ETL design document) | TASK-016 | NFR-011 | §1–§9 All sections |
+| TASK-026 | docs | Write `docs/data-dictionary.md` | TASK-005 | NFR-011 | §7 DDL Reference |
 
-| TASK-027 | MART | Create mart view `v_purchase_by_supplier` | TASK-005 | FR-010 |
-| TASK-028 | MART | Create mart view `v_purchase_per_stock_item` | TASK-005 | FR-010 |
-| TASK-029 | MART | Write `nb_refresh_v_purchase_by_supplier.py` | TASK-027 | FR-010, NFR-001 |
-| TASK-030 | MART | Write `nb_refresh_v_purchase_per_stock_item.py` | TASK-028 | FR-010, NFR-001 |
-| TASK-031 | MART | Write `nb_validate_mart_views.py` | TASK-029, TASK-030 | FR-010, NFR-001 |
-| TASK-032 | DQ | Write `src/etl/dq/dq_engine.py` | TASK-004, TASK-005 | NFR-004, NFR-005, DQR-001, DQR-002, DQR-003, DQR-006 |
-| TASK-033 | DQ | Write `src/etl/dq/nb_dq_purchase.py` | TASK-032 | DQR-001, DQR-005, DQR-006 |
-| TASK-034 | DQ | Write `src/etl/dq/nb_dq_rejection_report.py` | TASK-033 | NFR-007, DQR-004 |
+| TASK-027 | MART | Create mart view `v_purchase_by_supplier` | TASK-005 | FR-010 | §8 Mart Layer |
+| TASK-028 | MART | Create mart view `v_purchase_per_stock_item` | TASK-005 | FR-010 | §8 Mart Layer |
+| TASK-029 | MART | Write `nb_refresh_v_purchase_by_supplier.py` | TASK-027 | FR-010, NFR-001 | §8 Mart Layer |
+| TASK-030 | MART | Write `nb_refresh_v_purchase_per_stock_item.py` | TASK-028 | FR-010, NFR-001 | §8 Mart Layer |
+| TASK-031 | MART | Write `nb_validate_mart_views.py` | TASK-029, TASK-030 | FR-010, NFR-001 | §8 Mart Layer |
+| TASK-032 | DQ | Write `src/etl/dq/dq_engine.py` | TASK-004, TASK-005 | NFR-004, NFR-005, DQR-001, DQR-002, DQR-003, DQR-006 | §5 QA Assertion Chain |
+| TASK-033 | DQ | Write `src/etl/dq/nb_dq_purchase.py` | TASK-032 | DQR-001, DQR-005, DQR-006 | §5 QA Assertion Chain |
+| TASK-034 | DQ | Write `src/etl/dq/nb_dq_rejection_report.py` | TASK-033 | NFR-007, DQR-004 | §5 QA Assertion Chain |
 
 **Total: 34 tasks** | DDL: 8 | ETL: 9 | MART: 5 | DQ: 3 | Config: 2 | Test: 3 | BI: 2 | Docs: 2
 
@@ -58,6 +58,7 @@ _Derived from: `design.md` + `requirements.md`_
 **Type:** DDL  
 **Depends On:** —  
 **Requirements:** FR-003, NFR-007  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/db/ddl/bronze_lineage_run.sql`
 
 **Description:**
@@ -103,6 +104,7 @@ TBLPROPERTIES (
 **Type:** DDL  
 **Depends On:** —  
 **Requirements:** FR-002, NFR-001  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/db/ddl/bronze_etl_cutoff.sql`
 
 **Description:**
@@ -137,6 +139,7 @@ USING DELTA;
 **Type:** DDL  
 **Depends On:** TASK-001, TASK-002  
 **Requirements:** FR-001, FR-003  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/db/ddl/bronze_purchase_staging.sql`
 
 **Description:**
@@ -188,6 +191,7 @@ TBLPROPERTIES (
 **Type:** DDL  
 **Depends On:** TASK-001  
 **Requirements:** NFR-004, NFR-005, NFR-007, DQR-008  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/db/ddl/bronze_dq_rejections.sql`
 
 **Description:**
@@ -232,6 +236,7 @@ TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
 **Type:** DDL  
 **Depends On:** TASK-001  
 **Requirements:** FR-007, NFR-001, NFR-012  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/db/ddl/silver_fact_fact_purchase.sql`
 
 **Description:**
@@ -284,6 +289,7 @@ TBLPROPERTIES (
 **Type:** DDL  
 **Depends On:** —  
 **Requirements:** FR-004  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/db/ddl/silver_dim_supplier_current.sql`
 
 **Description:**
@@ -316,6 +322,7 @@ WHERE is_current_row = TRUE;
 **Type:** DDL  
 **Depends On:** —  
 **Requirements:** FR-005  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/db/ddl/silver_dim_stock_item_current.sql`
 
 **Description:**
@@ -348,6 +355,7 @@ WHERE is_current_row = TRUE;
 **Type:** DDL  
 **Depends On:** TASK-001, TASK-003, TASK-004, TASK-005  
 **Requirements:** NFR-008  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/db/grants/purchase_grants.sql`
 
 **Description:**
@@ -391,6 +399,7 @@ GRANT SELECT ON TABLE inventory_stock.bronze.dq_rejections TO `data_engineering`
 **Type:** ETL  
 **Depends On:** TASK-001, TASK-003, TASK-005  
 **Requirements:** NFR-009, NFR-011  
+**Design reference:** §9 Configuration Management  
 **Output File:** `src/common/constants.py`
 
 **Description:**
@@ -425,6 +434,7 @@ ETL_CUTOFF_TABLE_NAME = "fact_purchase"
 **Type:** ETL  
 **Depends On:** —  
 **Requirements:** FR-004, FR-005  
+**Design reference:** §3 SK Resolution Pattern  
 **Output File:** `src/common/scd2_merge.py`
 
 **Description:**
@@ -439,6 +449,7 @@ Write the SCD-2 merge helper module. This module provides the `apply_scd2_merge(
 **Type:** ETL  
 **Depends On:** TASK-009  
 **Requirements:** FR-004, FR-005, DQR-009  
+**Design reference:** §3 SK Resolution Pattern  
 **Output File:** `src/common/sk_resolver.py`
 
 **Description:**
@@ -463,6 +474,7 @@ The BROADCAST hint is applied to dimension DataFrames per PE-006.
 **Type:** ETL  
 **Depends On:** TASK-009  
 **Requirements:** FR-007, NFR-003  
+**Design reference:** §4 MERGE INTO Pattern  
 **Output File:** `src/common/fact_merge.py`
 
 **Description:**
@@ -486,6 +498,7 @@ Write the fact merge helper. Implements `merge_fact_purchase(spark, staging_tabl
 **Type:** ETL  
 **Depends On:** TASK-009  
 **Requirements:** NFR-009, NFR-011  
+**Design reference:** §9 Configuration Management  
 **Output File:** `src/common/udfs.py`
 
 **Description:**
@@ -508,6 +521,7 @@ Write the consolidated NULL-guarded Python UDF module. Contains UDFs consolidati
 **Type:** ETL  
 **Depends On:** TASK-009, TASK-001, TASK-002  
 **Requirements:** FR-002, FR-003, NFR-009  
+**Design reference:** §2 Workflow Task Sequence, §6 Lineage Propagation  
 **Output File:** `src/etl/nb_extract_watermark.py`
 
 **Description:**
@@ -530,6 +544,7 @@ Write the watermark extraction notebook. This is the first task in the Databrick
 **Type:** ETL  
 **Depends On:** TASK-009, TASK-003, TASK-014  
 **Requirements:** FR-001, FR-006, NFR-009  
+**Design reference:** §2 Workflow Task Sequence  
 **Output File:** `src/etl/nb_extract_purchase.py`
 
 **Description:**
@@ -552,6 +567,7 @@ Write the purchase extract notebook. Extracts incremental purchase order rows fr
 **Type:** ETL  
 **Depends On:** TASK-011, TASK-012, TASK-014, TASK-015  
 **Requirements:** FR-007, FR-008, NFR-003, NFR-004, NFR-005, NFR-006, NFR-007, NFR-009, DQR-001 through DQR-009  
+**Design reference:** §4 MERGE INTO Pattern, §5 QA Assertion Chain  
 **Output File:** `src/etl/migrate_staged_purchase_data.py`
 
 **Description:**
@@ -584,6 +600,7 @@ Write the main ETL orchestration notebook. This is the third and final task in t
 **Type:** ETL  
 **Depends On:** TASK-001, TASK-002, TASK-003, TASK-004, TASK-005  
 **Requirements:** FR-011, NFR-002  
+**Design reference:** §7 DDL Reference  
 **Output File:** `src/init/reseed_purchase_environment.py`
 
 **Description:**
@@ -612,6 +629,7 @@ WHERE NOT EXISTS (
 **Type:** config  
 **Depends On:** —  
 **Requirements:** FR-008, FR-009, NFR-009  
+**Design reference:** §9 Configuration Management  
 **Output File:** `config/environment.yaml`
 
 **Description:**
@@ -638,6 +656,7 @@ purchase:
 **Type:** config  
 **Depends On:** TASK-014, TASK-015, TASK-016  
 **Requirements:** FR-002, FR-003, NFR-001  
+**Design reference:** §2 Workflow Task Sequence  
 **Output File:** `config/workflows/nightly_etl_purchase.json`
 
 **Description:**
@@ -658,6 +677,7 @@ Write the Databricks Workflow JSON definition for the nightly purchase ETL job. 
 **Type:** test  
 **Depends On:** TASK-011  
 **Requirements:** FR-004, FR-005, DQR-009  
+**Design reference:** §3 SK Resolution Pattern  
 **Output File:** `tests/common/test_sk_resolver.py`
 
 **Description:**
@@ -679,6 +699,7 @@ Use `pyspark.sql.SparkSession` fixture with a local test schema; do not connect 
 **Type:** test  
 **Depends On:** TASK-013  
 **Requirements:** NFR-009  
+**Design reference:** §9 Configuration Management  
 **Output File:** `tests/common/test_udfs.py`
 
 **Description:**
@@ -697,6 +718,7 @@ Write unit tests for `src/common/udfs.py`. Each UDF must be tested for:
 **Type:** test  
 **Depends On:** TASK-016  
 **Requirements:** NFR-003, NFR-004, NFR-005, NFR-006, DQR-001 through DQR-007  
+**Design reference:** §4 MERGE INTO Pattern, §5 QA Assertion Chain  
 **Output File:** `tests/etl/test_migrate_staged_purchase_data.py`
 
 **Description:**
@@ -717,6 +739,7 @@ Write integration tests for the main ETL notebook. Tests use a local SparkSessio
 **Type:** BI  
 **Depends On:** TASK-005  
 **Requirements:** FR-010  
+**Design reference:** §8 Mart Layer  
 **Output File:** `docs/bi/wwidw_purchase_and_sale_per_stockitem_dynamic_reconnection.md`
 
 **Description:**
@@ -731,6 +754,7 @@ Produce a reconnection specification document for the `wwidw_purchase_and_sale_p
 **Type:** BI  
 **Depends On:** TASK-005  
 **Requirements:** FR-010  
+**Design reference:** §8 Mart Layer  
 **Output File:** `docs/bi/wwidw_ordered_by_supplier_reconnection.md`
 
 **Description:**
@@ -745,6 +769,7 @@ Produce a reconnection specification document for the `wwidw_ordered_by_supplier
 **Type:** docs  
 **Depends On:** TASK-016  
 **Requirements:** NFR-011  
+**Design reference:** §1–§9 All sections  
 **Output File:** `docs/design.md`
 
 **Description:**
@@ -759,6 +784,7 @@ Write the ETL design document for the Purchase product. Covers: (1) architecture
 **Type:** docs  
 **Depends On:** TASK-005  
 **Requirements:** NFR-011  
+**Design reference:** §7 DDL Reference  
 **Output File:** `docs/data-dictionary.md`
 
 **Description:**
@@ -775,6 +801,7 @@ Write the column-level data dictionary for `inventory_stock.silver_fact.fact_pur
 **Type:** MART (DDL)
 **Depends On:** TASK-005
 **Requirements:** FR-010, NFR-001
+**Design reference:** §8 Mart Layer
 **Output File:** `src/db/ddl/mart/v_purchase_by_supplier.sql`
 
 **Description:**
@@ -814,6 +841,7 @@ GROUP BY
 **Type:** MART (DDL)
 **Depends On:** TASK-005
 **Requirements:** FR-010, NFR-001
+**Design reference:** §8 Mart Layer
 **Output File:** `src/db/ddl/mart/v_purchase_per_stock_item.sql`
 
 **Description:**
@@ -856,6 +884,7 @@ JOIN inventory_stock.silver_dim.supplier s
 **Type:** MART (ETL)
 **Depends On:** TASK-027
 **Requirements:** FR-010, NFR-001
+**Design reference:** §8 Mart Layer
 **Output File:** `src/etl/mart/nb_refresh_v_purchase_by_supplier.py`
 
 **Description:**
@@ -870,6 +899,7 @@ Implement the materialized view refresh notebook. Execute `spark.sql("REFRESH MA
 **Type:** MART (ETL)
 **Depends On:** TASK-028
 **Requirements:** FR-010, NFR-001
+**Design reference:** §8 Mart Layer
 **Output File:** `src/etl/mart/nb_refresh_v_purchase_per_stock_item.py`
 
 **Description:**
@@ -884,6 +914,7 @@ Implement the view validation notebook. Since `v_purchase_per_stock_item` is a s
 **Type:** MART (ETL)
 **Depends On:** TASK-029, TASK-030
 **Requirements:** FR-010, NFR-001
+**Design reference:** §8 Mart Layer
 **Output File:** `src/etl/mart/nb_validate_mart_views.py`
 
 **Description:**
@@ -903,6 +934,7 @@ Log all assertion results. Raise if any assertion fails.
 **Type:** DQ
 **Depends On:** TASK-004, TASK-005
 **Requirements:** NFR-004, NFR-005, DQR-001, DQR-002, DQR-003, DQR-006
+**Design reference:** §5 QA Assertion Chain
 **Output File:** `src/etl/dq/dq_engine.py`
 
 **Description:**
@@ -922,6 +954,7 @@ For each violation, write one row to `bronze.dq_rejections`. Return `{rule_id: {
 **Type:** DQ
 **Depends On:** TASK-032
 **Requirements:** DQR-001, DQR-005, DQR-006
+**Design reference:** §5 QA Assertion Chain
 **Output File:** `src/etl/dq/nb_dq_purchase.py`
 
 **Description:**
@@ -936,6 +969,7 @@ Implement the DQ orchestrator notebook. Retrieves `lineage_key` from taskValues.
 **Type:** DQ
 **Depends On:** TASK-033
 **Requirements:** NFR-007, DQR-004
+**Design reference:** §5 QA Assertion Chain
 **Output File:** `src/etl/dq/nb_dq_rejection_report.py`
 
 **Description:**

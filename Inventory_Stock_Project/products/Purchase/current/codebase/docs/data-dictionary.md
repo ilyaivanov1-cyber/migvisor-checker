@@ -15,6 +15,9 @@ This document is the column-level data dictionary for all tables owned or manage
 | [`bronze.lineage_run`](#3-inventory_stockbronzelineage_run) | bronze | ETL run audit log — one row per pipeline execution |
 | [`bronze.etl_cutoff`](#4-inventory_stockbronzeetl_cutoff) | bronze | Incremental watermark control — one row per tracked table |
 | [`bronze.dq_rejections`](#5-inventory_stockbronzedq_rejections) | bronze | Centralised DQ rejection store — row-level quality violation records |
+| [`silver_dim.supplier`](#6-inventory_stocksilver_dimsupplier) | silver_dim | SCD-2 supplier dimension — attribute history tracking (external load) |
+| [`silver_dim.stock_item`](#7-inventory_stocksilver_dimstock_item) | silver_dim | SCD-2 stock item dimension — attribute history tracking (external load) |
+| [`silver_dim.date`](#8-inventory_stocksilver_dimdate) | silver_dim | Static calendar dimension — FK reference (externally owned; Purchase has FK dependency) |
 
 ---
 
@@ -218,6 +221,37 @@ This document is the column-level data dictionary for all tables owned or manage
 | 18 | `row_expiry_date` | DATE | No | Date this row was logically closed. `9999-12-31` = still active. | Physical closure audit date. | Set by `scd2_merge.apply_scd2_merge` during expire step. Rule: TY-P002. |
 | 19 | `is_current_row` | BOOLEAN | No | `TRUE` for the single active version per stock item. | Fast-filter flag for `silver_dim.stock_item_current` view. Exactly one `TRUE` row per `wwi_stock_item_id`. | Managed by `scd2_merge.apply_scd2_merge`. Default `TRUE`. Rule: TY-P002. |
 | 20 | `lineage_key` | BIGINT | No | FK to `inventory_stock.bronze.lineage_run.lineage_key`. | Traceability from dimension row back to the SCD-2 load run. | Propagated by the Dimensions team notebook at SCD-2 load time. Rules: LN-001, LN-P001. |
+
+---
+
+## 8. `inventory_stock.silver_dim.date`
+
+**Purpose:** Static date and calendar dimension table. Pre-populated for a multi-year date range. Provides calendar, fiscal, and ISO week attributes for time-based analytical queries. **Externally owned** — the Purchase Workflow does not own the load of this table (rule OB-011); it is managed as shared infrastructure. The Purchase ETL has a FK dependency via `fact_purchase.date_key → silver_dim.date.date`.
+
+**Grain:** One row per calendar day.
+
+**Load pattern:** Populated by a shared infrastructure notebook (`nb_populate_date_dim.py`). Read-only from the perspective of the Purchase product. Not included in `nightly_etl_purchase` task graph; the `nb_preflight_date_check` task verifies date coverage before extract proceeds.
+
+**Delta properties:** Standard Delta managed table. CDF: Disabled.
+
+**Rules:** OB-011, TY-010, TY-009, TY-003, NM-001, NM-002
+
+| # | Column Name | Data Type | Nullable | Description | Business Meaning | Derivation / Source |
+|---|---|---|---|---|---|---|
+| 1 | `date` | DATE | No | Calendar date. Surrogate primary key of the dimension (natural PK — the date itself). FK target for `silver_fact.fact_purchase.date_key`. | Uniquely identifies a single calendar day. `fact_purchase.date_key` is a FK to this column, enabling time-based drill-down in purchase analysis. | Source: `Dimension.Date.Date` (DATE). Pass-through. Rule: TY-010. |
+| 2 | `date_key` | INT | No | Integer representation of the date in YYYYMMDD format (e.g. `20260925`). | Alternate numeric key for `fact_purchase.date_key` FK joins. Also produced by the `format_date_key` UDF in `nb_extract_purchase`. | Derived: `CAST(DATE_FORMAT(date, 'yyyyMMdd') AS INT)`. Source: `Dimension.Date.[Date Key]` (INT). NM-002 rename. Rule: TY-003. |
+| 3 | `calendar_year` | INT | No | Four-digit calendar year (e.g. `2026`). | Year-level grouping and filtering of purchase activity in analytical queries. | Source: `Dimension.Date.[Calendar Year]` (INT). NM-002 rename. Rule: TY-003. |
+| 4 | `calendar_year_label` | STRING | No | Human-readable year label (e.g. `"CY2026"`). | Display label for year in BI reports and dashboard axes. | Source: `Dimension.Date.[Calendar Year Label]` (NVARCHAR → STRING, TY-009). NM-002 rename. |
+| 5 | `calendar_month_number` | INT | No | Month number within the calendar year (1 = January, 12 = December). | Month-level grouping and sequential ordering in purchase trend analysis. | Source: `Dimension.Date.[Calendar Month Number]` (INT). NM-002 rename. Rule: TY-003. |
+| 6 | `calendar_month_label` | STRING | No | Human-readable month label (e.g. `"September 2026"`). | Display label for month in BI reports. | Source: `Dimension.Date.[Calendar Month Label]` (NVARCHAR → STRING, TY-009). NM-002 rename. |
+| 7 | `fiscal_year` | INT | No | Fiscal year number. May differ from `calendar_year` depending on the organisation's fiscal calendar definition. | Fiscal-year-level analysis of procurement spend and budget tracking. | Source: `Dimension.Date.[Fiscal Year]` (INT). NM-002 rename. Rule: TY-003. |
+| 8 | `fiscal_year_label` | STRING | No | Human-readable fiscal year label (e.g. `"FY2026"`). | Display label for fiscal year in BI reports. | Source: `Dimension.Date.[Fiscal Year Label]` (NVARCHAR → STRING, TY-009). NM-002 rename. |
+| 9 | `iso_week_number` | INT | No | ISO 8601 week number within the year (1–53). | ISO-week-level analysis of purchase order volumes and supplier delivery cadence. | Source: `Dimension.Date.[ISO Week Number]` (INT). NM-002 rename. Rule: TY-003. |
+| 10 | `short_month` | STRING | No | Abbreviated month name (e.g. `"Sep"`). | Compact month label for chart axes and table headers in BI tools. | Source: `Dimension.Date.[Short Month]` (NVARCHAR → STRING, TY-009). NM-002 rename. |
+| 11 | `day` | STRING | No | Day-of-week name (e.g. `"Thursday"`). | Day-of-week analysis of purchase order placement patterns. | Source: `Dimension.Date.[Day]` (NVARCHAR → STRING, TY-009). NM-002 rename. |
+| 12 | `day_number` | INT | No | Day number within the month (1–31). | Day-of-month analysis and calendar layout in BI dashboards. | Source: `Dimension.Date.[Day Number]` (INT). NM-002 rename. Rule: TY-003. |
+
+> **Ownership note:** `silver_dim.date` is managed by the shared infrastructure team, not the Purchase product team. The Purchase Workflow includes `nb_preflight_date_check` to verify date coverage before extract proceeds. Rule: OB-011.
 
 ---
 

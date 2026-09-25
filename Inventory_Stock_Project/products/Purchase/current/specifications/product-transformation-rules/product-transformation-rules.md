@@ -88,36 +88,12 @@
 | NM-008 | Name PKs as `pk_<table>_<col>`, FKs as `fk_<table>_<ref_table>`; FK constraints are informational-only in Delta | |
 | NM-009 | Prefix in-notebook temporary DataFrames with `tmp_` or `df_`; no persistent temp tables in Delta | |
 
-### TY — Types (26 inherited + 4 product = 30 rules)
+### TY — Types (4 product customizations — 26 inherited rules in project-transformation-rules.md)
+
+> The 26 inherited TY rules (TY-001 through TY-026) are fully defined in the project-level file `project/current/project-transformation-rules/project-transformation-rules.md`. Only the 4 product-specific customizations are listed here.
 
 | ID | Intent | Tag |
 |---|---|---|
-| TY-001 | TINYINT → TINYINT (promote to SMALLINT if values exceed 255) | |
-| TY-002 | SMALLINT → SMALLINT | |
-| TY-003 | INT → INT (covers surrogate FK columns, order IDs, quantity columns) | |
-| TY-004 | BIGINT → BIGINT (covers PurchaseKey PK) | |
-| TY-005 | DECIMAL/NUMERIC(p,s) → DECIMAL(p,s) (preserve precision and scale exactly) | EXTENDED by TY-P003 |
-| TY-006 | FLOAT → DOUBLE | |
-| TY-007 | REAL / FLOAT(n≤24) → FLOAT | |
-| TY-008 | CHAR/NCHAR(n) → STRING (remove padding semantics) | |
-| TY-009 | VARCHAR/NVARCHAR(n) → STRING; NVARCHAR(MAX) → STRING | EXTENDED by TY-P004 |
-| TY-010 | DATE → DATE (covers Date Key FK column) | |
-| TY-011 | DATETIME → TIMESTAMP | |
-| TY-012 | DATETIME2 → TIMESTAMP_NTZ (SCD-2 Valid From / Valid To columns) | OVERRIDDEN by TY-P001; EXTENDED by TY-P002 |
-| TY-013 | DATETIMEOFFSET → TIMESTAMP with optional companion offset INT column | |
-| TY-014 | BINARY/VARBINARY → BINARY (covers Photo column in dimension.stock item) | |
-| TY-015 | BIT → BOOLEAN (covers Is Order Finalized, Is Current, Was Successful, Is Chiller Stock) | |
-| TY-016 | Preserve NOT NULL / NULL constraints in Delta DDL | |
-| TY-017 | BIGINT IDENTITY → `GENERATED ALWAYS AS IDENTITY` (PurchaseKey, PurchaseStagingKey) | |
-| TY-018 | SQL Server SEQUENCE (`sequences.lineagekey`) → retired; replaced by IDENTITY column or Python UUID counter | |
-| TY-019 | Remove SQL Server collation attributes; Delta defaults to UTF-8 case-sensitive; note ETL TableName comparisons | |
-| TY-020 | Translate DEFAULT constraint values to Spark SQL DDL DEFAULT (verify Delta Runtime support) | |
-| TY-021 | Computed columns → persisted literal columns or Gold-layer view expressions | |
-| TY-022 | `integration.etl cutoff` type map: NVARCHAR(50) table_name, DATETIMEOFFSET(7) cutoff_time → STRING, TIMESTAMP | |
-| TY-023 | `integration.lineage` type map: INT/BIGINT keys, NVARCHAR labels, DATETIME timestamps → INT/BIGINT, STRING, TIMESTAMP | |
-| TY-024 | SCD-2 Valid From / Valid To → TIMESTAMP_NTZ; staging probe column must match to ensure correct surrogate key resolution in MERGE | |
-| TY-025 | Dimension DECIMAL columns (unit price, tax rate) → DECIMAL(18,2) or as specified in source DDL | |
-| TY-026 | dimension.date: DATE → DATE, NVARCHAR month/day labels → STRING, INT fiscal keys → INT | |
 | TY-P001 | SCD-2 validity columns (valid_from, valid_to) on Purchase SCD-2 dimension tables → DATE (not TIMESTAMP_NTZ) | OVERRIDE |
 | TY-P002 | Define the full 5-column SCD-2 control block pattern for Purchase dimension tables (valid_from, valid_to, row_effective_date, row_expiry_date, is_current_row) | EXTENSION |
 | TY-P003 | Map SQL Server MONEY → DECIMAL(18,2) and SMALLMONEY → DECIMAL(10,2) — not covered by project TY rules | EXTENSION |

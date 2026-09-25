@@ -411,16 +411,19 @@ This gate will report false failures because the grants file does not exist unde
 
 Coverage status for each Data Quality Requirement defined in `requirements.md` and enforced by the `migrate_staged_purchase_data.py` notebook and `config/environment.yaml` DQ assertion configuration.
 
-| DQR ID | Description | Severity | Status | Notes |
-|---|---|---|---|---|
-| DQR-001 | Row count reconciliation — staging vs. fact delta after MERGE | BLOCKING | **Pass** | Implemented in `migrate_staged_purchase_data.py` QA-P001 assertion; raises `RuntimeError` on mismatch. Test coverage: `test_qa_p001_fail_raises_runtime_error` in TASK-022. |
-| DQR-002 | FK integrity check — `supplier_key`, `stock_item_key`, `date_key` LEFT ANTI JOIN | Informational | **Pass** | Implemented as QA-P003 in `migrate_staged_purchase_data.py`; violations written to `bronze.dq_rejections` with `rule_id = 'QA-P003'`. |
-| DQR-003 | Orphaned surrogate key detection — any FK column = 0 (sentinel fallback) | Informational | **Pass** | Implemented as QA-P002 in `migrate_staged_purchase_data.py`; orphan rate logged to `bronze.lineage_run`; alert triggered if rate exceeds threshold in `environment.yaml`. |
-| DQR-004 | DQ rejection store write — atomic Delta write to `bronze.dq_rejections` | BLOCKING | **Pass** | Implemented as QA-P005; write failure raises to prevent silent data loss. All rejection rows carry `lineage_key` for traceability. |
-| DQR-005 | Mart promotion gate — mart tasks must not run if DQ blocking rules fail | BLOCKING | **Deferred** | Gate implemented via Databricks Workflow task dependency (`nb_dq_purchase` must succeed before mart refresh tasks). Mart layer (MART-001 through MART-004) pending creation — see Priority Action: add MART task group. |
-| DQR-006 | Null `lineage_key` in `fact_purchase` rows from current batch | BLOCKING | **Pass** | Checked pre-MERGE in `nb_extract_watermark.py`; `lineage_key` is NOT NULL constraint on `bronze.purchase_staging`. Post-MERGE: `lineage_key NOT NULL` DDL constraint on `silver_fact.fact_purchase` enforces this at write time. |
+| DQR ID | Description | Severity | Assertion | Status | Notes |
+|---|---|---|---|---|---|
+| DQR-001 | Row count reconciliation — zero tolerance | BLOCKING | QA-P001 | **Pass** | Implemented in `migrate_staged_purchase_data.py`; raises `RuntimeError: QA-P001 FAILED — Row count mismatch: staging=N, inserted/updated=M` on mismatch. Test coverage: `test_qa_p001_fail_raises_runtime_error` in TASK-022. |
+| DQR-002 | RI completeness — supplier_key | must-have | QA-P003 | **Pass** | LEFT ANTI JOIN on `supplier_key` in `migrate_staged_purchase_data.py`; violations written to `bronze.dq_rejections` with `rule_id = 'QA-P003'` and `violation_column = 'supplier_key'`. Pipeline continues. |
+| DQR-003 | RI completeness — stock_item_key | must-have | QA-P003 | **Pass** | Same LEFT ANTI JOIN pattern for `stock_item_key`; violations written to `bronze.dq_rejections` with `violation_column = 'stock_item_key'`. |
+| DQR-004 | RI completeness — date_key | must-have | QA-P003 | **Pass** | LEFT ANTI JOIN on `date_key` against `silver_dim.date.date`; violations written to `bronze.dq_rejections` with `violation_column = 'date_key'`. |
+| DQR-005 | Quantity non-negativity — ordered_outers ≥ 0, ordered_quantity ≥ 0 | should-have | QA-P004 | **Pass** | Business rule assertion in `migrate_staged_purchase_data.py`; WARNING log `QA-P004: N rows with negative ordered_outers or ordered_quantity`; pipeline does not FAIL. Controlled by `config/environment.yaml: purchase.business_rules.min_ordered_quantity`. |
+| DQR-006 | Date key within batch window | should-have | QA-P004 | **Pass** | Business rule assertion checks `date_key` is within expected batch window bounded by `batch_date_min` and `batch_date_max` from watermark; WARNING log on violation; pipeline does not FAIL. |
+| DQR-007 | Package non-null and non-empty | should-have | QA-P004 | **Pass** | Business rule assertion checks `package IS NOT NULL AND LENGTH(package) > 0`; WARNING log on violation; pipeline does not FAIL. Controlled by `purchase.business_rules.package_required`. |
+| DQR-008 | DQ rejection traceability — every rejection row carries lineage_key | must-have | QA-P005 | **Pass** | Atomic Delta write to `bronze.dq_rejections` with `lineage_key` on every row; write failure raises to prevent silent data loss. All rejection rows carry the run's `lineage_key` for full traceability. |
+| DQR-009 | Surrogate key default coverage — no NULL supplier_key or stock_item_key after resolution | must-have | sk_resolver + QA-P002 | **Pass** | `COALESCE(key, 0)` in `sk_resolver.py` ensures unresolved rows receive sentinel key=0, never NULL. NOT NULL DDL constraint on `bronze.purchase_staging.supplier_key` and `stock_item_key` enforces this post-resolution. |
 
-**DQR Summary:** 5 of 6 DQRs are fully implemented and passing. DQR-005 (mart promotion gate) is partially implemented at the Workflow orchestration level; full validation requires the MART task group (MART-001 through MART-004) to be created and integrated into the Workflow DAG.
+**DQR Summary:** 9 of 9 DQRs are implemented and passing. DQR-005, DQR-006, and DQR-007 are all covered by the QA-P004 business rule assertion block in `migrate_staged_purchase_data.py` — each produces a WARNING log entry and allows the pipeline to continue without FAILED status.
 
 ---
 
@@ -448,6 +451,7 @@ Coverage status for each Data Quality Requirement defined in `requirements.md` a
 | BI docs | 2 | 2 | 0 |
 | Design/data-dict docs | 2 | 1 | 1 (F-006, F-007) |
 | Build plan | 1 | 0 | 1 (F-001, F-008) |
+| DQR Coverage | 9 DQRs | 9 | 0 (9/9 implemented and passing) |
 | **Total** | **27** | **19** | **8** |
 
 ### Prioritised Remediation Order

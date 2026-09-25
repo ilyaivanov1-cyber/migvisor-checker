@@ -410,6 +410,69 @@ TBLPROPERTIES (
 -- Post-DDL: OPTIMIZE inventory_stock.silver_fact.fact_purchase ZORDER BY (supplier_key, stock_item_key)
 ```
 
+### bronze.etl_cutoff
+
+```sql
+-- ============================================================
+-- PROJECT  : Inventory_Stock_Project
+-- PRODUCT  : Purchase
+-- FILE     : bronze_etl_cutoff.sql
+-- PURPOSE  : Watermark control table; one row per tracked table
+-- SOURCE   : (no source object — new table)
+-- TARGET   : inventory_stock.bronze.etl_cutoff (Databricks Delta Lake)
+-- RULES    : LN-005, OB-004, NM-001, CX-P006
+-- GENERATED: 2026-09-07
+-- ============================================================
+CREATE TABLE IF NOT EXISTS inventory_stock.bronze.etl_cutoff (
+    table_name       STRING     NOT NULL
+        COMMENT 'Name of the tracked target table (e.g. fact_purchase)',
+    cutoff_time      TIMESTAMP  NOT NULL
+        COMMENT 'High-watermark timestamp; upper boundary of the last successful extract window',
+    last_updated_utc TIMESTAMP  NOT NULL
+        COMMENT 'UTC timestamp when this watermark row was last written'
+)
+USING DELTA;
+```
+
+### bronze.dq_rejections
+
+```sql
+-- ============================================================
+-- PROJECT  : Inventory_Stock_Project
+-- PRODUCT  : Purchase
+-- FILE     : bronze_dq_rejections.sql
+-- PURPOSE  : Centralised DQ rejection store with lineage traceability
+-- SOURCE   : (new table — no source equivalent)
+-- TARGET   : inventory_stock.bronze.dq_rejections (Databricks Delta Lake)
+-- RULES    : QA-P005, TY-017, NM-001, CX-P006
+-- GENERATED: 2026-09-07
+-- ============================================================
+CREATE TABLE IF NOT EXISTS inventory_stock.bronze.dq_rejections (
+    rejection_id     BIGINT     GENERATED ALWAYS AS IDENTITY  NOT NULL
+        COMMENT 'Surrogate PK; auto-incremented',
+    lineage_key      BIGINT     NOT NULL
+        COMMENT 'FK to lineage_run; identifies the ETL run that produced this rejection',
+    rule_id          STRING     NOT NULL
+        COMMENT 'QA rule ID that detected this violation (e.g., QA-P003)',
+    source_table     STRING     NOT NULL
+        COMMENT 'Source table where the violation was detected',
+    pk_column        STRING     NOT NULL
+        COMMENT 'Name of the primary key column of the source row',
+    pk_value         STRING     NOT NULL
+        COMMENT 'Value of the primary key for the rejected row',
+    violation_column STRING     NOT NULL
+        COMMENT 'Column whose value caused the rejection',
+    violation_value  STRING     NULL
+        COMMENT 'Actual value in violation_column (cast to STRING); NULL if not applicable',
+    rejection_reason STRING     NOT NULL
+        COMMENT 'Human-readable rejection code (e.g., RI_VIOLATION, NEG_QUANTITY)',
+    detected_at      TIMESTAMP  NOT NULL DEFAULT current_timestamp()
+        COMMENT 'UTC timestamp when rejection was recorded'
+)
+USING DELTA
+TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');
+```
+
 ---
 
 ## 8. Mart Layer
