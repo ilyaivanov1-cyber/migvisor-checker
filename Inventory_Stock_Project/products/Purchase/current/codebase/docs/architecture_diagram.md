@@ -81,12 +81,12 @@ Source System (transactional database)
 |---|---|---|---|
 | `bronze.purchase_staging` | Disabled | None | 90 days |
 | `bronze.etl_cutoff` | Disabled | None | 2555 days |
-| `bronze.lineage_run` | Disabled | None | 2555 days |
+| `bronze.lineage_run` | **Enabled** | None | 2555 days |
 | `bronze.dq_rejections` | Disabled | None | 90 days |
 | `silver_dim.supplier` | **Enabled** | None | 2555 days |
 | `silver_dim.stock_item` | **Enabled** | None | 2555 days |
 | `silver_dim.date` | Disabled | None | 2555 days |
-| `silver_fact.fact_purchase` | Disabled | `(date_key, supplier_key, stock_item_key)` | 2555 days |
+| `silver_fact.fact_purchase` | Disabled | `(date_key, supplier_key)` | 2555 days |
 
 ---
 

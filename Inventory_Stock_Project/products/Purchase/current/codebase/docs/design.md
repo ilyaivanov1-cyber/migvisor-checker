@@ -165,7 +165,10 @@ The resolved and QA-passed rows are upserted into `silver_fact.fact_purchase` us
 ```sql
 MERGE INTO inventory_stock.silver_fact.fact_purchase AS target
 USING resolved_purchase_cte AS source
-ON target.wwi_purchase_order_id = source.wwi_purchase_order_id
+ON  target.wwi_purchase_order_id = source.wwi_purchase_order_id
+AND target.date_key               = source.date_key
+AND target.supplier_key           = source.supplier_key
+AND target.stock_item_key         = source.stock_item_key
 
 WHEN MATCHED THEN
     UPDATE SET
@@ -423,10 +426,10 @@ COMMENT 'Aggregated purchase volume by supplier and stock item — refreshed nig
 AS
 SELECT
     s.wwi_supplier_id,
-    s.supplier_name,
-    s.supplier_category_name,
+    s.supplier,
+    s.category,
     si.wwi_stock_item_id,
-    si.stock_item_name,
+    si.stock_item,
     si.color,
     si.unit_package_name,
     SUM(f.ordered_quantity)        AS total_quantity_ordered,
@@ -437,8 +440,8 @@ JOIN inventory_stock.silver_dim.supplier s
 JOIN inventory_stock.silver_dim.stock_item si
     ON f.stock_item_key = si.stock_item_key AND si.is_current_row = TRUE
 GROUP BY
-    s.wwi_supplier_id, s.supplier_name, s.supplier_category_name,
-    si.wwi_stock_item_id, si.stock_item_name, si.color, si.unit_package_name;
+    s.wwi_supplier_id, s.supplier, s.category,
+    si.wwi_stock_item_id, si.stock_item, si.color, si.unit_package_name;
 ```
 
 **Refresh:** `REFRESH MATERIALIZED VIEW inventory_stock.mart.v_purchase_by_supplier` — executed by `nb_refresh_v_purchase_by_supplier.py` after DQ gate.
@@ -462,11 +465,11 @@ SELECT
     f.is_order_finalized,
     f.lineage_key,
     si.wwi_stock_item_id,
-    si.stock_item_name,
+    si.stock_item,
     si.color,
     si.unit_package_name,
     s.wwi_supplier_id,
-    s.supplier_name
+    s.supplier
 FROM inventory_stock.silver_fact.fact_purchase f
 JOIN inventory_stock.silver_dim.stock_item si
     ON f.stock_item_key = si.stock_item_key AND si.is_current_row = TRUE

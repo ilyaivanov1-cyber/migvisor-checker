@@ -133,10 +133,10 @@ To recover, identify the failed task in the Runs tab and follow the section belo
 **Steps:**
 1. Check `bronze.dq_rejections` for rows from the current `lineage_key`:
    ```sql
-   SELECT assertion_name, COUNT(*) AS rejected_rows
+   SELECT rule_id, COUNT(*) AS rejected_rows
    FROM inventory_stock.bronze.dq_rejections
    WHERE lineage_key = <current_lineage_key>
-   GROUP BY assertion_name;
+   GROUP BY rule_id;
    ```
 2. If QA-P003 (referential integrity) violations are present, check whether `silver_dim.supplier` and `silver_dim.stock_item` have been refreshed by the Dimensions team.
 3. After investigating, re-trigger from the failed task using **Repair run** in the Databricks UI, or **Run now** for a full restart.
@@ -242,10 +242,10 @@ LIMIT 10;
 SELECT * FROM inventory_stock.bronze.etl_cutoff;
 
 -- DQ rejection summary (last run)
-SELECT assertion_name, violation_type, COUNT(*) AS cnt
+SELECT rule_id, rejection_reason, COUNT(*) AS cnt
 FROM inventory_stock.bronze.dq_rejections
 WHERE lineage_key = (SELECT MAX(lineage_key) FROM inventory_stock.bronze.lineage_run)
-GROUP BY assertion_name, violation_type
+GROUP BY rule_id, rejection_reason
 ORDER BY cnt DESC;
 
 -- Fact table row count
